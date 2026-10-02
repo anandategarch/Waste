@@ -1,0 +1,46 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual env
+venv/
+.env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Output generated
+output/*.xlsx
+output/*.csv
+output/*.json
+output/*.log
+
+# Sample data (jangan commit data asli)
+data/*.xlsx
+data/*.xlsm
+data/*.xls
+!data/README.md
+!data/sample_template.xlsx
+
+# Logs
+*.log
+server.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config user (boleh di-commit untuk default, uncomment baris bawah kalau mau lokal)
+# config.local.json

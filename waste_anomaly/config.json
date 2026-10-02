@@ -1,0 +1,70 @@
+{
+  "version": "1.0.0",
+  "_comment": "Threshold & defaults untuk Waste Anomaly Detection. Ubah nilai di sini, tidak perlu edit kode Python.",
+
+  "thresholds": {
+    "TH_SPIKE": 3,
+    "TH_MAX_AVG_AKTIF": 2.5,
+    "TH_MAX_MEDIAN": 3,
+    "TH_MAX_SECOND": 3,
+    "TH_MAX_SHARE_WARN": 0.50,
+    "TH_MAX_SHARE_HIGH": 0.70,
+    "TH_MAX_BOM_WARN": 0.25,
+    "TH_MAX_BOM_HIGH": 0.50,
+    "TH_TOTAL_BOM_WARN": 0.50,
+    "TH_TOTAL_BOM_HIGH": 1.00,
+    "TH_PEER_MIN": 3,
+    "TH_PEER_WARN": 2,
+    "TH_PEER_HIGH": 3,
+    "TH_LAST_SHARE": 0.70
+  },
+
+  "non_handling_list": [
+    "Alat/ Mesin",
+    "Cancel Nota",
+    "Eksternal",
+    "Internal",
+    "Over Stock"
+  ],
+
+  "default_key_akhir": 31,
+
+  "input_sheets": {
+    "rekap_mentah": ["REKAP_MENTAH", "Rekap Mentah", "REKAP", "Sheet1"],
+    "bom": ["BOM", "2  22 05", "MASTER BOM", "Master BOM"],
+    "database_satuan": ["DATABASE_SATUAN", "Database Satuan", "SATUAN"]
+  },
+
+  "bom_columns": {
+    "outlet": ["Nomor #", "NAMA RESTO", "Nomor"],
+    "item": ["Nama Barang", "NAMA BARANG"],
+    "total_bom": ["TOTAL BOM", "Total BOM"]
+  },
+
+  "satuan_columns": {
+    "item_key": ["NAMA ITEM", "NAMA BARANG"],
+    "category_map": {
+      "SUSUT": "SUSUT",
+      "TRIAL": "TRIAL",
+      "Alat/ Mesin": "ALAT MESIN",
+      "Cancel Nota": "CANCEL NOTA",
+      "Eksternal": "EKSTERNAL",
+      "Internal": "INTERNAL",
+      "Handling": "HANDLING",
+      "Kualitas Eksternal": "KUALITAS EKSTERNAL",
+      "Kualitas Internal": "KUALITAS INTERNAL",
+      "Over Stock": "OVERSTOCK",
+      "Kualitas": "KUALITAS"
+    }
+  },
+
+  "output": {
+    "default_filename": "Waste_Anomaly_Report.xlsx",
+    "detail_sheet": "Detail",
+    "anomali_sheet": "Anomali Prioritas",
+    "per_cabang_sheet": "Per Cabang",
+    "top_items_sheet": "Top Items",
+    "pareto_sheet": "Pareto Alasan",
+    "log_sheet": "Log Run"
+  }
+}
