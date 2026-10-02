@@ -138,6 +138,14 @@ def run_pipeline(
     # ---- STAGE 12: EXPAND (no-op) ----
     df = stages.stage_12_expand(df, key_akhir, config)
 
+    # ---- STAGE 12.5: WASTE FINGERPRINT + SISTEMATIK FLAG (NEW v2.3.0) ----
+    _log("Stage 12.5 — Waste Fingerprint + Sistematik Flag ...", 86)
+    df = stages.stage_12_5_fingerprint(df, key_akhir, config)
+
+    # ---- STAGE 12.6: QUADRANT CLASSIFICATION (NEW v2.3.0) ----
+    _log("Stage 12.6 — Quadrant Classification ...", 87)
+    df = stages.stage_12_6_quadrant(df, key_akhir, config)
+
     # ---- STAGE 13: CLEANUP ----
     _log("Stage 13 — Cleanup temporary ...", 80)
     df = stages.stage_13_cleanup(df, key_akhir, config)

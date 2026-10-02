@@ -540,3 +540,233 @@ def chart_compare_score(
     fig.tight_layout()
     return fig
 
+
+# ============================================================
+# QUADRANT CHART (NEW v2.3.0) — Sistemik vs Insiden scatter
+# ============================================================
+
+def chart_quadrant_scatter(
+    df: pd.DataFrame,
+    threshold: float = 0.5,
+) -> Figure:
+    """Scatter plot: X = prevalence (cabangActive/total), Y = persistence (daysActive/KeyAkhir).
+    4 quadrant: SISTEMIK, MUSIMAN, LOKAL-KRONIS, INSIDEN.
+    Bubble size = totalWaste.
+    """
+    fig = Figure(figsize=(7, 5), dpi=100)
+    ax = _styled_axes(fig)
+
+    if "cabangActive" not in df.columns or "daysActive" not in df.columns:
+        ax.text(0.5, 0.5, "Stage 12.5 belum jalan — run pipeline dulu",
+                ha="center", va="center", color=PALETTE_NEUTRAL)
+        ax.set_axis_off()
+        return fig
+
+    if "NAMA RESTO" not in df.columns:
+        ax.text(0.5, 0.5, "Tidak ada data NAMA RESTO", ha="center", va="center", color=PALETTE_NEUTRAL)
+        ax.set_axis_off()
+        return fig
+
+    # Aggregate per item (1 row per NAMA BARANG)
+    item_df = df.drop_duplicates(subset=["NAMA BARANG"]).copy() if "NAMA BARANG" in df.columns else df.copy()
+    total_cabang = df["NAMA RESTO"].nunique()
+    if total_cabang == 0:
+        ax.text(0.5, 0.5, "Tidak ada cabang", ha="center", va="center", color=PALETTE_NEUTRAL)
+        ax.set_axis_off()
+        return fig
+
+    # Compute prevalence & persistence (kalau belum ada dari stage 12.6)
+    if "_prevalence" not in item_df.columns:
+        item_df["_prevalence"] = item_df["cabangActive"] / total_cabang
+    if "_persistence" not in item_df.columns:
+        # daysActive / KeyAkhir — pakai 31 sebagai default
+        item_df["_persistence"] = item_df["daysActive"].fillna(0) / 31
+
+    # Colors per quadrant
+    quadrant_colors = {
+        "SISTEMIK": "#dc2626",      # red
+        "MUSIMAN": "#ea580c",       # orange
+        "LOKAL-KRONIS": "#9333ea",  # purple
+        "INSIDEN": "#16a34a",       # green
+    }
+    quadrant_labels = {
+        "SISTEMIK": "Sistemik (recipe problem)",
+        "MUSIMAN": "Musiman (seasonal)",
+        "LOKAL-KRONIS": "Lokal-Kronis (1 outlet recurring)",
+        "INSIDEN": "Insiden (one-off)",
+    }
+
+    # Determine quadrant per item
+    def _get_quadrant(row):
+        p = row["_prevalence"]
+        s = row["_persistence"]
+        if "QUADRANT" in row and pd.notna(row.get("QUADRANT")):
+            return row["QUADRANT"]
+        if p >= threshold and s >= threshold:
+            return "SISTEMIK"
+        if p >= threshold and s < threshold:
+            return "MUSIMAN"
+        if p < threshold and s >= threshold:
+            return "LOKAL-KRONIS"
+        return "INSIDEN"
+    item_df["_quadrant"] = item_df.apply(_get_quadrant, axis=1)
+
+    # Bubble sizes (normalize totalWaste ke 20-200 range)
+    if "totalWaste" in item_df.columns:
+        tw = item_df["totalWaste"].fillna(0)
+        if tw.max() > 0:
+            item_df["_size"] = 20 + (tw / tw.max() * 180)
+        else:
+            item_df["_size"] = 50
+    else:
+        item_df["_size"] = 50
+
+    # Plot each quadrant
+    for quad, color in quadrant_colors.items():
+        sub = item_df[item_df["_quadrant"] == quad]
+        if sub.empty:
+            continue
+        ax.scatter(
+            sub["_prevalence"] * 100, sub["_persistence"] * 100,
+            s=sub["_size"], c=color, alpha=0.65,
+            edgecolors="white", linewidth=1.5,
+            label=quadrant_labels[quad],
+        )
+
+    # Threshold reference lines
+    ax.axvline(threshold * 100, color="#94a3b8", linestyle="--", linewidth=1, alpha=0.6)
+    ax.axhline(threshold * 100, color="#94a3b8", linestyle="--", linewidth=1, alpha=0.6)
+
+    # Annotate top 5 items by totalWaste
+    if "NAMA BARANG" in item_df.columns and "totalWaste" in item_df.columns:
+        top_items = item_df.nlargest(5, "totalWaste")
+        for _, row in top_items.iterrows():
+            name = str(row["NAMA BARANG"])[:15]
+            ax.annotate(
+                name,
+                (row["_prevalence"] * 100, row["_persistence"] * 100),
+                xytext=(5, 5), textcoords="offset points",
+                fontsize=7, color="#0f172a", fontweight="bold",
+            )
+
+    ax.set_xlabel("Prevalence (% cabang yang punya waste)", fontsize=9)
+    ax.set_ylabel("Persistence (% hari aktif)", fontsize=9)
+    ax.set_title("Quadrant: Sistemik vs Insiden — klik untuk detail", pad=10)
+    ax.set_xlim(-5, 105)
+    ax.set_ylim(-5, 105)
+    ax.legend(fontsize=8, loc="upper right", framealpha=0.9)
+    fig.tight_layout()
+    return fig
+
+
+# ============================================================
+# RATE LEAGUE CHART (NEW v2.3.0) — Ranking waste/BOM per bahan
+# ============================================================
+
+def chart_rate_league(
+    df: pd.DataFrame,
+    top_n: int = 15,
+) -> Figure:
+    """Horizontal bar: ranking waste_qty/BOM per item.
+    Items with waste rate >= 5% dianggap 'blatant'.
+    """
+    fig = Figure(figsize=(7, 5), dpi=100)
+    ax = _styled_axes(fig)
+
+    if "NAMA BARANG" not in df.columns or "TOTAL BOM" not in df.columns or "TOTAL" not in df.columns:
+        ax.text(0.5, 0.5, "Butuh kolom TOTAL BOM + TOTAL", ha="center", va="center", color=PALETTE_NEUTRAL)
+        ax.set_axis_off()
+        return fig
+
+    # Aggregate per item: total waste, total BOM
+    item_agg = df.groupby("NAMA BARANG", dropna=False).agg(
+        total_waste=("TOTAL", "sum"),
+        total_bom=("TOTAL BOM", "sum"),
+        cabang_count=("NAMA RESTO", "nunique"),
+    ).reset_index()
+
+    # Filter: BOM > 0 (otherwise rate undefined)
+    item_agg = item_agg[item_agg["total_bom"] > 0]
+    if item_agg.empty:
+        ax.text(0.5, 0.5, "Tidak ada item dengan BOM > 0", ha="center", va="center", color=PALETTE_NEUTRAL)
+        ax.set_axis_off()
+        return fig
+
+    # Compute waste rate
+    item_agg["waste_rate"] = item_agg["total_waste"] / item_agg["total_bom"] * 100  # %
+
+    # Sort by waste rate, take top N
+    item_agg = item_agg.sort_values("waste_rate", ascending=True).tail(top_n)
+
+    # Color: >= 5% red (blatant), >= 1% orange (warning), < 1% green
+    colors = []
+    for rate in item_agg["waste_rate"]:
+        if rate >= 5:
+            colors.append("#dc2626")
+        elif rate >= 1:
+            colors.append("#ea580c")
+        else:
+            colors.append("#16a34a")
+
+    bars = ax.barh(
+        item_agg["NAMA BARANG"].astype(str),
+        item_agg["waste_rate"],
+        color=colors, edgecolor="white", linewidth=1.5,
+    )
+    for bar, val, bom, wst in zip(bars, item_agg["waste_rate"], item_agg["total_bom"], item_agg["total_waste"]):
+        ax.text(bar.get_width(), bar.get_y() + bar.get_height()/2,
+                f" {val:.1f}% (waste {wst:.0f} / bom {bom:.0f})",
+                ha="left", va="center", fontsize=7, fontweight="bold", color="#0f172a")
+
+    # Reference line at 5%
+    ax.axvline(5, color="#dc2626", linestyle="--", linewidth=1, alpha=0.6, label="5% threshold (blatant)")
+    ax.axvline(1, color="#ea580c", linestyle="--", linewidth=0.8, alpha=0.5, label="1% threshold (warning)")
+
+    ax.set_xlabel("Waste Rate (%) = Waste Qty / BOM Qty × 100", fontsize=9)
+    ax.set_title(f"Top {top_n} Waste Rate League — per bahan", pad=10)
+    ax.legend(fontsize=8, loc="lower right")
+    fig.tight_layout()
+    return fig
+
+
+# ============================================================
+# FINGERPRINT CHART (NEW v2.3.0) — W/S/T distribution per item class
+# ============================================================
+
+def chart_fingerprint_distribution(
+    df: pd.DataFrame,
+) -> Figure:
+    """Bar chart: distribusi item per FINGERPRINT CLASS (W/S/T-DOMINANT)."""
+    fig = Figure(figsize=(6, 3.5), dpi=100)
+    ax = _styled_axes(fig)
+
+    if "FINGERPRINT CLASS" not in df.columns:
+        ax.text(0.5, 0.5, "Stage 12.5 belum jalan — run pipeline dulu",
+                ha="center", va="center", color=PALETTE_NEUTRAL)
+        ax.set_axis_off()
+        return fig
+
+    counts = df.drop_duplicates(subset=["NAMA BARANG"])["FINGERPRINT CLASS"].value_counts(dropna=False)
+    # Order: W-DOMINANT, S-DOMINANT, T-DOMINANT, None
+    order = ["W-DOMINANT", "S-DOMINANT", "T-DOMINANT", None]
+    labels = ["W-DOMINANT\n(waste/prep)", "S-DOMINANT\n(susut/cold-chain)", "T-DOMINANT\n(trial/R&D)", "TANPA\nEXPLAINED"]
+    counts = counts.reindex([c for c in order if c in counts.index or c is None])
+    # Handle None → TANPA EXPLAINED
+    if None in counts.index:
+        counts = counts.rename(index={None: "TANPA EXPLAINED"})
+
+    colors = ["#dc2626", "#0f766e", "#9333ea", "#94a3b8"]
+    bars = ax.bar(range(len(counts)), counts.values, color=colors[:len(counts)],
+                   edgecolor="white", linewidth=1.5)
+    for bar, val in zip(bars, counts.values):
+        if val > 0:
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+                    f"{int(val)}", ha="center", va="bottom", fontsize=10,
+                    fontweight="bold", color="#0f172a")
+    ax.set_xticks(range(len(counts)))
+    ax.set_xticklabels(labels[:len(counts)], fontsize=8)
+    ax.set_ylabel("Jumlah Item", fontsize=9)
+    ax.set_title("Waste Fingerprint — Distribusi per Class", pad=10)
+    fig.tight_layout()
+    return fig
+

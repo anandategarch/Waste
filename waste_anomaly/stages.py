@@ -56,11 +56,13 @@ def stage_01_source(
     # M code asli hanya drop TOTAL, tapi kalau user load file OUTPUT M code,
     # kolom-kolom hasil pipeline sudah ada → collision saat recompute.
     # Solusi: drop semua derived columns (akan dihitung ulang oleh stages berikutnya).
+    # PENTING (v2.3.0): TOTAL BOM TIDAK di-drop — user pakai kolom ini sebagai BOM source
+    # (sama dengan sheet BOM terpisah). Jadi keep TOTAL BOM dari input data.
     derived_cols_to_drop = [
         # Stage 1 original drops
         "PIC", "KATEGORI", "STATUS", "PENYEBAB TERJADINYA WASTE", "TOTAL",
         # Stage 2 outputs
-        "MAX", "AVG", "MAX TOTAL", "AVG TOTAL", "TOTAL BOM", "% to BOM",
+        "MAX", "AVG", "MAX TOTAL", "AVG TOTAL", "% to BOM",
         "Status2", "Count Hari",
         "AVG AKTIF", "MEDIAN AKTIF", "SECOND MAX", "HARI MAX",
         "MAX - AVG", "MAX - AVG AKTIF",
@@ -86,6 +88,7 @@ def stage_01_source(
         "CANCEL NOTA", "SUSUT", "TRIAL", "HANDLING",
         "KUALITAS EKSTERNAL", "KUALITAS", "KUALITAS INTERNAL",
         "EKSTERNAL", "INTERNAL", "ALAT MESIN", "OVERSTOCK",
+        # NOTE: TOTAL BOM sengaja TIDAK di-drop — dipakai sebagai BOM source inline
     ]
     cols_to_drop = [c for c in derived_cols_to_drop if c in out.columns]
     if cols_to_drop:
@@ -470,9 +473,27 @@ def stage_05_bom(
 ) -> pd.DataFrame:
     """
     Setara BOMLookup + WithBOMJoin + WithBOM + AddRillBOM.
+    v2.3.0: TOTAL BOM bisa dari 2 sumber:
+      1. Kolom TOTAL BOM yang sudah ada di DATA_WASTE.xlsx (prioritas — user pakai ini)
+      2. Sheet BOM terpisah (fallback kalau kolom TOTAL BOM tidak ada di data)
     Left-join df dengan BOM pada (NAMA RESTO == Nomor #) AND (NAMA BARANG == Nama Barang).
     Hasil: TOTAL BOM + Rill % to BOM = TOTAL / TOTAL BOM.
     """
+    # v2.3.0: Kalau TOTAL BOM sudah ada di df (dari kolom input data), pakai itu langsung
+    # dan skip merge dengan sheet BOM terpisah
+    if "TOTAL BOM" in df.columns:
+        # Coerce TOTAL BOM ke numeric (kalau ada string kosong)
+        df = df.copy()
+        df["TOTAL BOM"] = pd.to_numeric(df["TOTAL BOM"], errors="coerce")
+        # Compute Rill % to BOM = TOTAL / TOTAL BOM (guarded)
+        df["Rill % to BOM"] = np.where(
+            (df["TOTAL"].notna()) & (df["TOTAL BOM"].notna()) & (df["TOTAL BOM"] > 0),
+            df["TOTAL"] / df["TOTAL BOM"],
+            0.0,
+        )
+        return df
+
+    # Fallback: pakai sheet BOM terpisah (kalau ada)
     if bom_df is None or bom_df.empty:
         df["TOTAL BOM"] = np.nan
         df["Rill % to BOM"] = 0.0
@@ -807,6 +828,172 @@ def stage_12_expand(
     key_akhir: int,
     config: dict,
 ) -> pd.DataFrame:
+    return df
+
+
+# ============================================================
+# STAGE 12.5 — WASTE FINGERPRINT per item (NEW v2.3.0)
+# ============================================================
+# Setara W11 fingerprint dari Inventory-Control: untuk setiap item (NAMA BARANG),
+# klasifikasikan komposisi loss-nya:
+#   W = Σ TOTAL untuk JENIS=WASTE
+#   S = Σ TOTAL untuk JENIS=SUSUT
+#   T = Σ TOTAL untuk JENIS=TRIAL
+#   explained = W + S + T
+#   shareW = W / explained, shareS = S / explained, shareT = T / explained
+#   class = max-share → W-DOMINANT / S-DOMINANT / T-DOMINANT (atau null kalau explained=0)
+# Tambahan: SISTEMATIK FLAG per item
+#   isSistematik = daysActive >= ceil(KeyAkhir/2) AND cabangActive >= 2
+# ============================================================
+
+def stage_12_5_fingerprint(
+    df: pd.DataFrame,
+    key_akhir: int,
+    config: dict,
+) -> pd.DataFrame:
+    """Compute Waste Fingerprint + Sistematik Flag per item (NAMA BARANG).
+    Adaptasi dari Inventory-Control W11 fingerprint.ts + sistematik.ts.
+    """
+    if "NAMA BARANG" not in df.columns or "JENIS" not in df.columns or "TOTAL" not in df.columns:
+        # Tidak bisa compute, return apa adanya
+        return df
+
+    # Aggregate per item: W, S, T sums
+    item_pivot = df.pivot_table(
+        index="NAMA BARANG",
+        columns="JENIS",
+        values="TOTAL",
+        aggfunc="sum",
+        fill_value=0,
+    )
+    # Ensure kolom W/S/T ada
+    for col in ["WASTE", "SUSUT", "TRIAL"]:
+        if col not in item_pivot.columns:
+            item_pivot[col] = 0
+    item_pivot = item_pivot[["WASTE", "SUSUT", "TRIAL"]].copy()
+    item_pivot.columns = ["W", "S", "T"]
+    item_pivot["explained"] = item_pivot["W"] + item_pivot["S"] + item_pivot["T"]
+    item_pivot["shareW"] = np.where(item_pivot["explained"] > 0, item_pivot["W"] / item_pivot["explained"], 0)
+    item_pivot["shareS"] = np.where(item_pivot["explained"] > 0, item_pivot["S"] / item_pivot["explained"], 0)
+    item_pivot["shareT"] = np.where(item_pivot["explained"] > 0, item_pivot["T"] / item_pivot["explained"], 0)
+
+    # Class: max-share wins, ties break W > S > T (deterministic per spec Inventory-Control)
+    def _classify(row):
+        if row["explained"] <= 0:
+            return None
+        w, s, t = row["shareW"], row["shareS"], row["shareT"]
+        if w >= s and w >= t:
+            return "W-DOMINANT"
+        if s >= t:
+            return "S-DOMINANT"
+        return "T-DOMINANT"
+    item_pivot["FINGERPRINT CLASS"] = item_pivot.apply(_classify, axis=1)
+
+    # Reset index supaya NAMA BARANG jadi kolom
+    item_pivot = item_pivot.reset_index()
+
+    # Compute SISTEMATIK FLAG per item
+    # daysActive = max Count Hari per item (kira-kira seberapa sering item ini waste)
+    # cabangActive = distinct NAMA RESTO yang punya waste untuk item ini
+    if "Count Hari" in df.columns and "NAMA RESTO" in df.columns:
+        sistematik_df = df.groupby("NAMA BARANG", dropna=False).agg(
+            daysActive=("Count Hari", "max"),  # ambil max dari semua row per item
+            cabangActive=("NAMA RESTO", "nunique"),
+            totalWaste=("TOTAL", "sum"),
+        ).reset_index()
+    else:
+        sistematik_df = item_pivot[["NAMA BARANG"]].copy()
+        sistematik_df["daysActive"] = 0
+        sistematik_df["cabangActive"] = 0
+        sistematik_df["totalWaste"] = 0
+
+    # Sistematik threshold: daysActive >= ceil(KeyAkhir/2) AND cabangActive >= 2
+    sistematik_threshold_days = max(1, (int(key_akhir) + 1) // 2)  # ceil(KeyAkhir/2)
+    sistematik_df["SISTEMATIK"] = np.where(
+        (sistematik_df["daysActive"] >= sistematik_threshold_days) & (sistematik_df["cabangActive"] >= 2),
+        "YES", "NO"
+    )
+    sistematik_df["SISTEMATIK DAYS THRESHOLD"] = sistematik_threshold_days
+
+    # Merge fingerprint + sistematik ke df utama (left join on NAMA BARANG)
+    # Pertama, drop kolom yang akan di-merge dari df kalau sudah ada (idempotent)
+    cols_to_merge = ["W", "S", "T", "explained", "shareW", "shareS", "shareT", "FINGERPRINT CLASS",
+                    "daysActive", "cabangActive", "totalWaste", "SISTEMATIK", "SISTEMATIK DAYS THRESHOLD"]
+    df_clean = df.copy()
+    for c in cols_to_merge:
+        if c in df_clean.columns:
+            df_clean = df_clean.drop(columns=[c])
+    out = df_clean.merge(item_pivot, on="NAMA BARANG", how="left")
+    out = out.merge(sistematik_df, on="NAMA BARANG", how="left")
+    # Defensive: pastikan tidak ada duplicate columns
+    if out.columns.duplicated().any():
+        out = out.loc[:, ~out.columns.duplicated()]
+    return out
+
+
+# ============================================================
+# STAGE 12.6 — QUADRANT CLASSIFICATION per item (NEW v2.3.0)
+# ============================================================
+# Setara W3 Quadrant dari Inventory-Control: scatter plot
+#   X = prevalence (% cabang yang punya waste item itu)
+#   Y = persistence (% hari item itu aktif dari KeyAkhir)
+# 4 quadrant:
+#   SISTEMIK     = high prevalence × high persistence (recipe/process problem)
+#   MUSIMAN      = high prevalence × low persistence (seasonal spike)
+#   LOKAL-KRONIS = low prevalence × high persistence (one outlet recurring)
+#   INSIDEN      = low prevalence × low persistence (one-off)
+# Threshold: 50% (configurable via QUADRANT_THRESHOLD di config)
+# ============================================================
+
+def stage_12_6_quadrant(
+    df: pd.DataFrame,
+    key_akhir: int,
+    config: dict,
+) -> pd.DataFrame:
+    """Compute Quadrant Classification per item.
+    Adaptasi dari Inventory-Control W3 quadrant-card.tsx.
+    """
+    if "NAMA BARANG" not in df.columns:
+        return df
+
+    # Reuse aggregates dari stage 12.5 kalau ada
+    if "cabangActive" not in df.columns or "daysActive" not in df.columns:
+        return df  # stage 12.5 belum jalan
+
+    # Total cabang unik di seluruh dataset (untuk prevalence %)
+    if "NAMA RESTO" not in df.columns:
+        return df
+    total_cabang = df["NAMA RESTO"].nunique()
+    if total_cabang == 0:
+        return df
+
+    # Threshold (50% by default, configurable)
+    quadrant_threshold = config.get("thresholds", {}).get("QUADRANT_THRESHOLD", 0.5)
+
+    # Hitung per row (karena cabangActive & daysActive sudah broadcast dari stage 12.5)
+    df = df.copy()
+    df["_prevalence"] = df["cabangActive"] / total_cabang  # 0..1
+    df["_persistence"] = np.where(
+        key_akhir > 0,
+        df["daysActive"] / key_akhir,
+        0
+    )
+
+    # Quadrant logic
+    def _quadrant(row):
+        p = row["_prevalence"]
+        s = row["_persistence"]
+        if p >= quadrant_threshold and s >= quadrant_threshold:
+            return "SISTEMIK"
+        if p >= quadrant_threshold and s < quadrant_threshold:
+            return "MUSIMAN"
+        if p < quadrant_threshold and s >= quadrant_threshold:
+            return "LOKAL-KRONIS"
+        return "INSIDEN"
+    df["QUADRANT"] = df.apply(_quadrant, axis=1)
+
+    # Cleanup helper cols
+    df = df.drop(columns=["_prevalence", "_persistence"], errors="ignore")
     return df
 
 

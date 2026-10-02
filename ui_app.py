@@ -196,8 +196,10 @@ class WasteAnomalyApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"{APP_TITLE} v{APP_VERSION}")
-        self.geometry("1400x880")
-        self.minsize(1100, 700)
+        # Start fullscreen-ish, tapi resizable supaya user bisa maximize/resize
+        self.geometry("1500x900")
+        self.minsize(1024, 700)
+        self.resizable(True, True)  # biar user bisa resize sesuai monitor
         self.configure(bg=C_BG)
 
         # State
@@ -257,6 +259,67 @@ class WasteAnomalyApp(tk.Tk):
         style.map("Treeview", background=[("selected", "#dbeafe")], foreground=[("selected", C_HEADER)])
 
     # --------------------------------------------------------
+    # SCROLLABLE CONTAINER HELPER (v2.3.0)
+    # --------------------------------------------------------
+    @staticmethod
+    def _make_scrollable(parent, bg=C_BG):
+        """Bungkus parent dengan scrollable Canvas (vertical + horizontal).
+        Return: inner_frame (tempat user menaruh widget).
+        Canvas otomatis resize dengan parent, scroll-by-wheel + scrollbar.
+        """
+        # Container untuk Canvas + scrollbars
+        container = tk.Frame(parent, bg=bg)
+        container.pack(fill="both", expand=True)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(container, bg=bg, highlightthickness=0, relief="flat")
+        sb_y = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        sb_x = ttk.Scrollbar(container, orient="horizontal", command=canvas.xview)
+        canvas.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+
+        canvas.grid(row=0, column=0, sticky="nsew")
+        sb_y.grid(row=0, column=1, sticky="ns")
+        sb_x.grid(row=1, column=0, sticky="ew")
+
+        inner = tk.Frame(canvas, bg=bg)
+        canvas_window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        # Auto-scroll-region on inner resize
+        def _on_inner_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        inner.bind("<Configure>", _on_inner_configure)
+
+        # Auto-resize inner width to match canvas (so charts stretch horizontally)
+        def _on_canvas_configure(event):
+            w = event.width
+            canvas.itemconfig(canvas_window_id, width=w)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        # Mouse wheel scroll (cross-platform)
+        def _on_wheel(e):
+            if hasattr(e, "num") and e.num:
+                direction = -1 if e.num == 4 else 1
+                canvas.yview_scroll(direction, "units")
+            else:
+                canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        # Bind wheel saat mouse masuk canvas
+        canvas.bind_all("<MouseWheel>", _on_wheel)
+        canvas.bind_all("<Button-4>", _on_wheel)
+        canvas.bind_all("<Button-5>", _on_wheel)
+        # Bind wheel juga saat hover over inner & its children
+        def _bind_wheel_recursive(widget):
+            widget.bind("<MouseWheel>", _on_wheel)
+            widget.bind("<Button-4>", _on_wheel)
+            widget.bind("<Button-5>", _on_wheel)
+            for child in widget.winfo_children():
+                _bind_wheel_recursive(child)
+        # Defer recursive bind (children belum ada saat init)
+        inner.after(100, lambda: _bind_wheel_recursive(inner))
+
+        return inner
+
+    # --------------------------------------------------------
     # HEADER (with global refresh button)
     # --------------------------------------------------------
     def _build_header(self):
@@ -285,7 +348,7 @@ class WasteAnomalyApp(tk.Tk):
                  font=F_HINT, fg="#94a3b8", bg=C_HEADER).pack(side="right", padx=4)
 
     def _global_refresh(self):
-        """Refresh semua tab yang punya chart: Dashboard, Visualisasi, Compare."""
+        """Refresh semua tab yang punya chart: Dashboard, Visualisasi, Compare, Quadrant, Rate League."""
         df = self._preview_dfs.get("Detail")
         if df is None or df.empty:
             messagebox.showinfo("Refresh", "Belum ada data. Run pipeline dulu di tab 'Run Pipeline'.")
@@ -306,6 +369,18 @@ class WasteAnomalyApp(tk.Tk):
                 self._render_compare_charts()
         except Exception as e:
             print(f"[refresh compare] {e}", file=sys.stderr)
+        # Re-render Quadrant (NEW v2.3)
+        try:
+            if hasattr(self, "_quadrant_chart_frame"):
+                self._render_quadrant_charts()
+        except Exception as e:
+            print(f"[refresh quadrant] {e}", file=sys.stderr)
+        # Re-render Rate League (NEW v2.3)
+        try:
+            if hasattr(self, "_rate_league_chart_frame"):
+                self._render_rate_league()
+        except Exception as e:
+            print(f"[refresh rate league] {e}", file=sys.stderr)
         # Update status
         self._set_status(f"✓ Refreshed all charts • {len(df)} rows loaded", "done")
 
@@ -326,35 +401,45 @@ class WasteAnomalyApp(tk.Tk):
         nb.add(tab2, text="⚖ Compare Cabang")
         self._build_compare_tab(tab2)
 
-        # Tab 3: Hasil
+        # Tab 3: Quadrant Analysis (NEW v2.3)
         tab3 = ttk.Frame(nb)
-        nb.add(tab3, text="📋 Hasil")
-        self._build_result_tab(tab3)
+        nb.add(tab3, text="🎯 Quadrant")
+        self._build_quadrant_tab(tab3)
 
-        # Tab 4: Visualisasi (12 chart gallery)
+        # Tab 4: Rate League (NEW v2.3)
         tab4 = ttk.Frame(nb)
-        nb.add(tab4, text="📈 Visualisasi")
-        self._build_viz_tab(tab4)
+        nb.add(tab4, text="🏆 Rate League")
+        self._build_rate_league_tab(tab4)
 
-        # Tab 5: Ringkasan
+        # Tab 5: Hasil
         tab5 = ttk.Frame(nb)
-        nb.add(tab5, text="🗂 Ringkasan")
-        self._build_summary_tab(tab5)
+        nb.add(tab5, text="📋 Hasil")
+        self._build_result_tab(tab5)
 
-        # Tab 6: Run Pipeline
+        # Tab 6: Visualisasi (12 chart gallery)
         tab6 = ttk.Frame(nb)
-        nb.add(tab6, text="▶ Run Pipeline")
-        self._build_run_tab(tab6)
+        nb.add(tab6, text="📈 Visualisasi")
+        self._build_viz_tab(tab6)
 
-        # Tab 7: Konfigurasi
+        # Tab 7: Ringkasan
         tab7 = ttk.Frame(nb)
-        nb.add(tab7, text="⚙ Konfigurasi")
-        self._build_config_tab(tab7)
+        nb.add(tab7, text="🗂 Ringkasan")
+        self._build_summary_tab(tab7)
 
-        # Tab 8: Bantuan
+        # Tab 8: Run Pipeline
         tab8 = ttk.Frame(nb)
-        nb.add(tab8, text="❓ Bantuan")
-        self._build_help_tab(tab8)
+        nb.add(tab8, text="▶ Run Pipeline")
+        self._build_run_tab(tab8)
+
+        # Tab 9: Konfigurasi
+        tab9 = ttk.Frame(nb)
+        nb.add(tab9, text="⚙ Konfigurasi")
+        self._build_config_tab(tab9)
+
+        # Tab 10: Bantuan
+        tab10 = ttk.Frame(nb)
+        nb.add(tab10, text="❓ Bantuan")
+        self._build_help_tab(tab10)
 
         # Load saved filter profiles
         self._filter_profiles = wa_filters.load_profiles()
@@ -363,12 +448,18 @@ class WasteAnomalyApp(tk.Tk):
     # TAB 1: DASHBOARD (PRO — drill-down)
     # --------------------------------------------------------
     def _build_dashboard_tab(self, parent):
-        """Dashboard layout: KPI cards row + filter bar + interactive charts + drill-down table."""
+        """Dashboard layout: KPI cards row + filter bar + interactive charts + drill-down table.
+        Wrapped in scrollable container (v2.3.0) — no more cut-off charts."""
+        # Wrap seluruh tab content di scrollable Canvas
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(3, weight=1)
+        parent.rowconfigure(0, weight=1)
+        inner = self._make_scrollable(parent, bg=C_BG)
+        inner.columnconfigure(0, weight=1)
+        # Row 3 (table) takes remaining space; rows 0-2 fixed
+        inner.rowconfigure(3, weight=1)
 
         # ===== Row 0: KPI cards =====
-        kpi_frame = tk.Frame(parent, bg=C_BG)
+        kpi_frame = tk.Frame(inner, bg=C_BG)
         kpi_frame.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
         kpi_frame.columnconfigure(0, weight=1, uniform="kpi")
         kpi_frame.columnconfigure(1, weight=1, uniform="kpi")
@@ -391,7 +482,7 @@ class WasteAnomalyApp(tk.Tk):
         self.kpi_cabang.grid(row=0, column=5, sticky="ew", padx=2)
 
         # ===== Row 1: Filter bar (extended v2.1) =====
-        filter_frame = tk.Frame(parent, bg=C_CARD, relief="flat",
+        filter_frame = tk.Frame(inner, bg=C_CARD, relief="flat",
                                highlightbackground=C_BORDER, highlightthickness=1)
         filter_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=4)
         filter_frame.columnconfigure(13, weight=1)
@@ -464,7 +555,7 @@ class WasteAnomalyApp(tk.Tk):
         self.chips_frame.columnconfigure(0, weight=1)
 
         # ===== Row 2: Interactive charts (3 charts) =====
-        charts_frame = tk.Frame(parent, bg=C_BG)
+        charts_frame = tk.Frame(inner, bg=C_BG)
         charts_frame.grid(row=2, column=0, sticky="ew", padx=8, pady=4)
         charts_frame.columnconfigure(0, weight=1, uniform="chart")
         charts_frame.columnconfigure(1, weight=1, uniform="chart")
@@ -480,7 +571,7 @@ class WasteAnomalyApp(tk.Tk):
             self._dash_chart_frames.append(f)
 
         # ===== Row 3: Drill-down detail table =====
-        detail_frame = tk.Frame(parent, bg=C_CARD, relief="flat",
+        detail_frame = tk.Frame(inner, bg=C_CARD, relief="flat",
                                 highlightbackground=C_BORDER, highlightthickness=1)
         detail_frame.grid(row=3, column=0, sticky="nsew", padx=8, pady=4)
         detail_frame.columnconfigure(0, weight=1)
@@ -989,12 +1080,16 @@ class WasteAnomalyApp(tk.Tk):
     # TAB 2: COMPARE CABANG (NEW v2.1)
     # --------------------------------------------------------
     def _build_compare_tab(self, parent):
-        """Side-by-side comparison of 2 cabang with 4 charts."""
+        """Side-by-side comparison of 2 cabang with 4 charts.
+        Wrapped in scrollable container (v2.3.0)."""
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(1, weight=1)
+        parent.rowconfigure(0, weight=1)
+        inner = self._make_scrollable(parent, bg=C_BG)
+        inner.columnconfigure(0, weight=1)
+        inner.rowconfigure(1, weight=1)
 
         # Card 1: selector
-        c1 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1,
+        c1 = tk.Frame(inner, bg=C_CARD, relief="flat", borderwidth=1,
                       highlightbackground=C_BORDER, highlightthickness=1)
         c1.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
         tk.Label(c1, text="⚖ Compare Cabang — Side-by-Side Analysis",
@@ -1021,7 +1116,7 @@ class WasteAnomalyApp(tk.Tk):
         ttk.Button(selector, text="Export PNG…", command=self._export_compare_charts).pack(side="left", padx=4)
 
         # Card 2: charts grid 2x2
-        c2 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1,
+        c2 = tk.Frame(inner, bg=C_CARD, relief="flat", borderwidth=1,
                       highlightbackground=C_BORDER, highlightthickness=1)
         c2.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
         c2.columnconfigure(0, weight=1, uniform="cmp")
@@ -1040,7 +1135,7 @@ class WasteAnomalyApp(tk.Tk):
             self._compare_chart_frames.append(f)
 
         # Card 3: metrics summary
-        c3 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1,
+        c3 = tk.Frame(inner, bg=C_CARD, relief="flat", borderwidth=1,
                       highlightbackground=C_BORDER, highlightthickness=1)
         c3.grid(row=2, column=0, sticky="ew", padx=8, pady=8)
         tk.Label(c3, text="📋 Metrics Summary", font=F_CARD, fg=C_HEADER,
@@ -1161,7 +1256,281 @@ class WasteAnomalyApp(tk.Tk):
         messagebox.showinfo("Export", f"{saved} chart comparison disimpan ke:\n{folder}")
 
     # --------------------------------------------------------
-    # TAB 3: HASIL (preview all sheets)
+    # TAB 3: QUADRANT ANALYSIS (NEW v2.3.0)
+    # --------------------------------------------------------
+    def _build_quadrant_tab(self, parent):
+        """Tab Quadrant: scatter Sistemik vs Insiden + fingerprint distribution."""
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+        inner = self._make_scrollable(parent, bg=C_BG)
+        inner.columnconfigure(0, weight=1)
+        inner.rowconfigure(1, weight=1)
+
+        # Header
+        hdr = tk.Frame(inner, bg=C_CARD, relief="flat", highlightbackground=C_BORDER, highlightthickness=1)
+        hdr.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
+        tk.Label(hdr, text="🎯 Quadrant Analysis — Sistemik vs Insiden",
+                 font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(anchor="w", padx=16, pady=(12, 4))
+        tk.Label(hdr, text="Scatter plot prevalence (cabang%) × persistence (hari%). 4 quadrant: SISTEMIK, MUSIMAN, LOKAL-KRONIS, INSIDEN. Adaptasi dari Inventory-Control W3.",
+                 font=F_HINT, fg="#6B7280", bg=C_CARD).pack(anchor="w", padx=16, pady=(0, 8))
+        # Refresh + export
+        btn_frame = tk.Frame(hdr, bg=C_CARD)
+        btn_frame.pack(fill="x", padx=16, pady=(0, 12))
+        ttk.Button(btn_frame, text="⟳ Refresh", command=self._render_quadrant_charts).pack(side="left", padx=4)
+        ttk.Button(btn_frame, text="Export PNG…", command=self._export_quadrant_charts).pack(side="left", padx=4)
+
+        # Charts container: 2 charts side-by-side (scatter + fingerprint)
+        charts_frame = tk.Frame(inner, bg=C_BG)
+        charts_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
+        charts_frame.columnconfigure(0, weight=2, uniform="q")  # scatter wider
+        charts_frame.columnconfigure(1, weight=1, uniform="q")
+
+        self._quadrant_chart_frame = tk.Frame(charts_frame, bg=C_CARD, relief="flat",
+                                              highlightbackground=C_BORDER, highlightthickness=1)
+        self._quadrant_chart_frame.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        self._quadrant_chart_frame.columnconfigure(0, weight=1)
+        self._quadrant_chart_frame.rowconfigure(1, weight=1)
+
+        self._fingerprint_chart_frame = tk.Frame(charts_frame, bg=C_CARD, relief="flat",
+                                                  highlightbackground=C_BORDER, highlightthickness=1)
+        self._fingerprint_chart_frame.grid(row=0, column=1, sticky="nsew", padx=4, pady=4)
+        self._fingerprint_chart_frame.columnconfigure(0, weight=1)
+        self._fingerprint_chart_frame.rowconfigure(1, weight=1)
+
+        # Placeholder
+        tk.Label(self._quadrant_chart_frame, text="🎯\n\nRun pipeline untuk\nlihat Quadrant chart",
+                 font=F_BODY, fg="#6B7280", bg=C_CARD, justify="center").grid(
+            row=0, column=0, sticky="nsew", padx=20, pady=20)
+        tk.Label(self._fingerprint_chart_frame, text="🧬\n\nFingerprint chart",
+                 font=F_BODY, fg="#6B7280", bg=C_CARD, justify="center").grid(
+            row=0, column=0, sticky="nsew", padx=20, pady=20)
+
+        # Summary table
+        table_frame = tk.Frame(inner, bg=C_CARD, relief="flat", highlightbackground=C_BORDER, highlightthickness=1)
+        table_frame.grid(row=2, column=0, sticky="ew", padx=8, pady=8)
+        table_frame.columnconfigure(0, weight=1)
+        tk.Label(table_frame, text="📋 Items per Quadrant (sortable by click header)",
+                 font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(anchor="w", padx=16, pady=(12, 4))
+        self.lbl_quadrant_count = tk.Label(table_frame, text="(belum ada data)", font=F_HINT, fg="#6B7280", bg=C_CARD)
+        self.lbl_quadrant_count.pack(anchor="w", padx=16)
+
+        tree_wrap = tk.Frame(table_frame, bg=C_CARD)
+        tree_wrap.pack(fill="both", expand=True, padx=4, pady=(0, 8))
+        tree_wrap.columnconfigure(0, weight=1)
+        tree_wrap.rowconfigure(0, weight=1)
+        self.tree_quadrant = ttk.Treeview(tree_wrap, show="headings", height=10)
+        sb_y = ttk.Scrollbar(tree_wrap, orient="vertical", command=self.tree_quadrant.yview)
+        sb_x = ttk.Scrollbar(tree_wrap, orient="horizontal", command=self.tree_quadrant.xview)
+        self.tree_quadrant.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+        self.tree_quadrant.grid(row=0, column=0, sticky="nsew")
+        sb_y.grid(row=0, column=1, sticky="ns")
+        sb_x.grid(row=1, column=0, sticky="ew")
+
+        self._quadrant_canvases = []
+
+    def _render_quadrant_charts(self):
+        """Render scatter + fingerprint charts di tab Quadrant."""
+        df = self._preview_dfs.get("Detail")
+        # Clear existing
+        for f in [self._quadrant_chart_frame, self._fingerprint_chart_frame]:
+            for c in f.winfo_children():
+                c.destroy()
+        self._quadrant_canvases = []
+
+        if df is None or df.empty:
+            tk.Label(self._quadrant_chart_frame, text="(belum ada data — run pipeline dulu)",
+                     font=F_BODY, fg="#6B7280", bg=C_CARD, justify="center").grid(
+                row=0, column=0, sticky="nsew", padx=20, pady=20)
+            tk.Label(self._fingerprint_chart_frame, text="(belum ada data)",
+                     font=F_BODY, fg="#6B7280", bg=C_CARD, justify="center").grid(
+                row=0, column=0, sticky="nsew", padx=20, pady=20)
+            return
+
+        # Chart 1: Quadrant scatter
+        try:
+            fig1 = wa_dash.chart_quadrant_scatter(df)
+            c1 = wa_charts.embed_figure(self._quadrant_chart_frame, fig1)
+            c1.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+            self._quadrant_canvases.append(("quadrant_scatter", fig1))
+        except Exception as e:
+            tk.Label(self._quadrant_chart_frame, text=f"Error: {e}",
+                     font=F_BODY, fg="#dc2626", bg=C_CARD, justify="left").grid(
+                row=0, column=0, sticky="nsew", padx=8, pady=8)
+
+        # Chart 2: Fingerprint distribution
+        try:
+            fig2 = wa_dash.chart_fingerprint_distribution(df)
+            c2 = wa_charts.embed_figure(self._fingerprint_chart_frame, fig2)
+            c2.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+            self._quadrant_canvases.append(("fingerprint", fig2))
+        except Exception as e:
+            tk.Label(self._fingerprint_chart_frame, text=f"Error: {e}",
+                     font=F_BODY, fg="#dc2626", bg=C_CARD, justify="left").grid(
+                row=0, column=0, sticky="nsew", padx=8, pady=8)
+
+        # Update table with items per quadrant
+        self._render_quadrant_table(df)
+
+    def _render_quadrant_table(self, df: pd.DataFrame):
+        """Treeview: items per quadrant."""
+        self.tree_quadrant.delete(*self.tree_quadrant.get_children())
+        if df is None or df.empty or "NAMA BARANG" not in df.columns:
+            self.lbl_quadrant_count.configure(text="(tidak ada data)")
+            return
+
+        # Aggregate per item
+        item_df = df.drop_duplicates(subset=["NAMA BARANG"]).copy()
+        display_cols = ["NAMA BARANG", "QUADRANT", "FINGERPRINT CLASS", "SISTEMATIK",
+                       "cabangActive", "daysActive", "totalWaste", "explained"]
+        cols = [c for c in display_cols if c in item_df.columns]
+        self.tree_quadrant["columns"] = cols
+        for c in cols:
+            self.tree_quadrant.heading(c, text=c, command=lambda col=c: self._sort_quadrant_tree(col))
+            self.tree_quadrant.column(c, width=110, stretch=False)
+
+        # Sort by totalWaste desc
+        if "totalWaste" in item_df.columns:
+            item_df = item_df.sort_values("totalWaste", ascending=False)
+
+        for row in item_df[cols].head(200).itertuples(index=False, name=None):
+            vals = []
+            for v in row:
+                if v is None or (isinstance(v, float) and pd.isna(v)):
+                    vals.append("")
+                elif isinstance(v, float):
+                    vals.append(round(v, 3))
+                else:
+                    vals.append(v)
+            # Color tag by quadrant
+            tag = ""
+            if "QUADRANT" in cols:
+                idx = cols.index("QUADRANT")
+                q = vals[idx] if idx < len(vals) else ""
+                if q:
+                    tag = q.lower().replace("-", "_")
+            self.tree_quadrant.insert("", "end", values=vals, tags=(tag,) if tag else ())
+
+        # Tag colors
+        self.tree_quadrant.tag_configure("sistemik", background="#fee2e2")
+        self.tree_quadrant.tag_configure("musiman", background="#ffedd5")
+        self.tree_quadrant.tag_configure("lokal_kronis", background="#ede9fe")
+        self.tree_quadrant.tag_configure("insiden", background="#dcfce7")
+
+        count = len(item_df)
+        self.lbl_quadrant_count.configure(text=f"{count} item (showing first {min(200, count)})")
+
+    def _sort_quadrant_tree(self, col: str):
+        items = [(self.tree_quadrant.set(k, col), k) for k in self.tree_quadrant.get_children("")]
+        try:
+            items.sort(key=lambda t: float(t[0]) if t[0] not in ("", None) else 0.0,
+                       reverse=getattr(self, "_qsort_desc", False))
+        except (ValueError, TypeError):
+            items.sort(key=lambda t: str(t[0]), reverse=getattr(self, "_qsort_desc", False))
+        for i, (_, k) in enumerate(items):
+            self.tree_quadrant.move(k, "", i)
+        self._qsort_desc = not getattr(self, "_qsort_desc", False)
+
+    def _export_quadrant_charts(self):
+        if not self._quadrant_canvases:
+            messagebox.showinfo("Export", "Belum ada chart. Refresh dulu.")
+            return
+        folder = filedialog.askdirectory(title="Pilih folder untuk simpan PNG")
+        if not folder:
+            return
+        saved = 0
+        for name, fig in self._quadrant_canvases:
+            path = Path(folder) / f"quadrant_{name}.png"
+            try:
+                fig.savefig(path, dpi=150, bbox_inches="tight", facecolor="white")
+                saved += 1
+            except Exception as e:
+                print(f"Failed save {name}: {e}", file=sys.stderr)
+        messagebox.showinfo("Export", f"{saved} chart disimpan ke:\n{folder}")
+
+    # --------------------------------------------------------
+    # TAB 4: RATE LEAGUE (NEW v2.3.0)
+    # --------------------------------------------------------
+    def _build_rate_league_tab(self, parent):
+        """Tab Rate League: ranking waste_qty / BOM per bahan."""
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+        inner = self._make_scrollable(parent, bg=C_BG)
+        inner.columnconfigure(0, weight=1)
+        inner.rowconfigure(1, weight=1)
+
+        # Header
+        hdr = tk.Frame(inner, bg=C_CARD, relief="flat", highlightbackground=C_BORDER, highlightthickness=1)
+        hdr.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
+        tk.Label(hdr, text="🏆 Rate League — Ranking Waste Rate per Bahan",
+                 font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(anchor="w", padx=16, pady=(12, 4))
+        tk.Label(hdr, text="Waste Rate (%) = Waste Qty / BOM Qty × 100. Adaptasi dari Inventory-Control WasteRateLeagueCard.",
+                 font=F_HINT, fg="#6B7280", bg=C_CARD).pack(anchor="w", padx=16, pady=(0, 8))
+        btn_frame = tk.Frame(hdr, bg=C_CARD)
+        btn_frame.pack(fill="x", padx=16, pady=(0, 12))
+        ttk.Button(btn_frame, text="⟳ Refresh", command=self._render_rate_league).pack(side="left", padx=4)
+        ttk.Button(btn_frame, text="Export PNG…", command=self._export_rate_league).pack(side="left", padx=4)
+        # Top N selector
+        tk.Label(btn_frame, text="Top N:", font=F_BODY, bg=C_CARD).pack(side="left", padx=(20, 4))
+        self.var_rate_league_top = tk.IntVar(value=15)
+        ttk.Spinbox(btn_frame, from_=5, to=50, textvariable=self.var_rate_league_top, width=5,
+                    command=self._render_rate_league).pack(side="left", padx=4)
+
+        # Chart frame
+        self._rate_league_chart_frame = tk.Frame(inner, bg=C_CARD, relief="flat",
+                                                 highlightbackground=C_BORDER, highlightthickness=1)
+        self._rate_league_chart_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
+        self._rate_league_chart_frame.columnconfigure(0, weight=1)
+        self._rate_league_chart_frame.rowconfigure(0, weight=1)
+
+        # Placeholder
+        tk.Label(self._rate_league_chart_frame, text="🏆\n\nRun pipeline untuk\nlihat Rate League",
+                 font=F_BODY, fg="#6B7280", bg=C_CARD, justify="center").grid(
+            row=0, column=0, sticky="nsew", padx=40, pady=40)
+
+        self._rate_league_canvases = []
+
+    def _render_rate_league(self):
+        df = self._preview_dfs.get("Detail")
+        for c in self._rate_league_chart_frame.winfo_children():
+            c.destroy()
+        self._rate_league_canvases = []
+
+        if df is None or df.empty:
+            tk.Label(self._rate_league_chart_frame, text="(belum ada data — run pipeline dulu)",
+                     font=F_BODY, fg="#6B7280", bg=C_CARD, justify="center").grid(
+                row=0, column=0, sticky="nsew", padx=40, pady=40)
+            return
+
+        top_n = int(self.var_rate_league_top.get())
+        try:
+            fig = wa_dash.chart_rate_league(df, top_n=top_n)
+            canvas = wa_charts.embed_figure(self._rate_league_chart_frame, fig)
+            canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+            self._rate_league_canvases.append(("rate_league", fig))
+        except Exception as e:
+            tk.Label(self._rate_league_chart_frame, text=f"Error: {e}",
+                     font=F_BODY, fg="#dc2626", bg=C_CARD, justify="left").grid(
+                row=0, column=0, sticky="nsew", padx=8, pady=8)
+
+    def _export_rate_league(self):
+        if not self._rate_league_canvases:
+            messagebox.showinfo("Export", "Belum ada chart. Refresh dulu.")
+            return
+        folder = filedialog.askdirectory(title="Pilih folder untuk simpan PNG")
+        if not folder:
+            return
+        saved = 0
+        for name, fig in self._rate_league_canvases:
+            path = Path(folder) / f"rate_league_{name}.png"
+            try:
+                fig.savefig(path, dpi=150, bbox_inches="tight", facecolor="white")
+                saved += 1
+            except Exception as e:
+                print(f"Failed save {name}: {e}", file=sys.stderr)
+        messagebox.showinfo("Export", f"{saved} chart disimpan ke:\n{folder}")
+
+    # --------------------------------------------------------
+    # TAB 5: HASIL (preview all sheets)
     # --------------------------------------------------------
     def _build_result_tab(self, parent):
         parent.columnconfigure(0, weight=1)
@@ -1846,6 +2215,18 @@ Pattern referensi: https://github.com/anandategarch/Inventory-Adjusment
             self._refresh_viz()
         except Exception as e:
             print(f"[viz auto-refresh] {e}", file=sys.stderr)
+        # Re-render Quadrant tab (NEW v2.3)
+        try:
+            if hasattr(self, "_quadrant_chart_frame"):
+                self._render_quadrant_charts()
+        except Exception as e:
+            print(f"[quadrant auto-refresh] {e}", file=sys.stderr)
+        # Re-render Rate League tab (NEW v2.3)
+        try:
+            if hasattr(self, "_rate_league_chart_frame"):
+                self._render_rate_league()
+        except Exception as e:
+            print(f"[rate league auto-refresh] {e}", file=sys.stderr)
         messagebox.showinfo(
             "Pipeline Selesai",
             f"Pipeline selesai!\n\n"
