@@ -45,8 +45,9 @@ from waste_anomaly.pipeline import run_pipeline
 from waste_anomaly.utils import load_config, CONFIG_PATH
 from waste_anomaly import charts as wa_charts
 from waste_anomaly import dashboard as wa_dash
+from waste_anomaly import filters as wa_filters
 
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 APP_TITLE = "Waste Anomaly Detection — Pro Dashboard"
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_OUTPUT = APP_DIR / "output" / "Waste_Anomaly_Report.xlsx"
@@ -207,10 +208,16 @@ class WasteAnomalyApp(tk.Tk):
         self._preview_dfs: dict[str, "pd.DataFrame"] = {}
 
         # Drill-down state: dict filter_key -> value (None artinya no filter)
-        self.active_filters: dict[str, str | None] = {
-            "cabang": None, "item": None, "jenis": None,
+        # jenis: list[str] (multi-select), day_min/day_max: int 1-31
+        self.active_filters: dict[str, str | list[str] | None] = {
+            "cabang": None, "item": None, "jenis": [],
             "keterangan": None, "status": None,
         }
+        self.day_min: int | None = None  # filter HARI MAX dalam range
+        self.day_max: int | None = None
+
+        # Filter profile state
+        self._filter_profiles: dict[str, dict] = {}
 
         self._build_styles()
         self._build_header()
@@ -272,35 +279,43 @@ class WasteAnomalyApp(tk.Tk):
         nb.add(tab1, text="📊 Dashboard")
         self._build_dashboard_tab(tab1)
 
-        # Tab 2: Hasil
+        # Tab 2: Compare Cabang (NEW v2.1)
         tab2 = ttk.Frame(nb)
-        nb.add(tab2, text="📋 Hasil")
-        self._build_result_tab(tab2)
+        nb.add(tab2, text="⚖ Compare Cabang")
+        self._build_compare_tab(tab2)
 
-        # Tab 3: Visualisasi (12 chart gallery)
+        # Tab 3: Hasil
         tab3 = ttk.Frame(nb)
-        nb.add(tab3, text="📈 Visualisasi")
-        self._build_viz_tab(tab3)
+        nb.add(tab3, text="📋 Hasil")
+        self._build_result_tab(tab3)
 
-        # Tab 4: Ringkasan
+        # Tab 4: Visualisasi (12 chart gallery)
         tab4 = ttk.Frame(nb)
-        nb.add(tab4, text="🗂 Ringkasan")
-        self._build_summary_tab(tab4)
+        nb.add(tab4, text="📈 Visualisasi")
+        self._build_viz_tab(tab4)
 
-        # Tab 5: Run Pipeline
+        # Tab 5: Ringkasan
         tab5 = ttk.Frame(nb)
-        nb.add(tab5, text="▶ Run Pipeline")
-        self._build_run_tab(tab5)
+        nb.add(tab5, text="🗂 Ringkasan")
+        self._build_summary_tab(tab5)
 
-        # Tab 6: Konfigurasi
+        # Tab 6: Run Pipeline
         tab6 = ttk.Frame(nb)
-        nb.add(tab6, text="⚙ Konfigurasi")
-        self._build_config_tab(tab6)
+        nb.add(tab6, text="▶ Run Pipeline")
+        self._build_run_tab(tab6)
 
-        # Tab 7: Bantuan
+        # Tab 7: Konfigurasi
         tab7 = ttk.Frame(nb)
-        nb.add(tab7, text="❓ Bantuan")
-        self._build_help_tab(tab7)
+        nb.add(tab7, text="⚙ Konfigurasi")
+        self._build_config_tab(tab7)
+
+        # Tab 8: Bantuan
+        tab8 = ttk.Frame(nb)
+        nb.add(tab8, text="❓ Bantuan")
+        self._build_help_tab(tab8)
+
+        # Load saved filter profiles
+        self._filter_profiles = wa_filters.load_profiles()
 
     # --------------------------------------------------------
     # TAB 1: DASHBOARD (PRO — drill-down)
@@ -333,29 +348,27 @@ class WasteAnomalyApp(tk.Tk):
         self.kpi_cabang = KPICard(kpi_frame, "CABANG", "0", "#9333ea")
         self.kpi_cabang.grid(row=0, column=5, sticky="ew", padx=2)
 
-        # ===== Row 1: Filter bar =====
+        # ===== Row 1: Filter bar (extended v2.1) =====
         filter_frame = tk.Frame(parent, bg=C_CARD, relief="flat",
                                highlightbackground=C_BORDER, highlightthickness=1)
         filter_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=4)
-        filter_frame.columnconfigure(7, weight=1)
+        filter_frame.columnconfigure(13, weight=1)
 
+        # --- Row 0 of filter: search + cabang + status + clear ---
         tk.Label(filter_frame, text="🔍 Filter Drill-Down:", font=F_CARD, fg=C_HEADER,
-                 bg=C_CARD).grid(row=0, column=0, padx=(10, 6), pady=6)
+                 bg=C_CARD).grid(row=0, column=0, padx=(10, 6), pady=6, sticky="w")
 
-        # Search box
         tk.Label(filter_frame, text="Cari:", font=F_BODY, bg=C_CARD).grid(row=0, column=1, padx=2)
         self.var_search = tk.StringVar()
         self.var_search.trace_add("write", lambda *_: self._apply_dashboard_filter())
         ttk.Entry(filter_frame, textvariable=self.var_search, width=20).grid(row=0, column=2, padx=2)
 
-        # Dropdown Cabang
         tk.Label(filter_frame, text="Cabang:", font=F_BODY, bg=C_CARD).grid(row=0, column=3, padx=(8, 2))
         self.var_filter_cabang = tk.StringVar(value="(Semua)")
         self._cb_cabang = ttk.Combobox(filter_frame, textvariable=self.var_filter_cabang, width=15, state="readonly")
         self._cb_cabang.grid(row=0, column=4, padx=2)
         self._cb_cabang.bind("<<ComboboxSelected>>", lambda e: self._on_filter_dropdown_change("cabang", self.var_filter_cabang.get()))
 
-        # Dropdown Status
         tk.Label(filter_frame, text="Status:", font=F_BODY, bg=C_CARD).grid(row=0, column=5, padx=(8, 2))
         self.var_filter_status = tk.StringVar(value="(Semua)")
         self._cb_status = ttk.Combobox(filter_frame, textvariable=self.var_filter_status, width=14, state="readonly")
@@ -363,13 +376,49 @@ class WasteAnomalyApp(tk.Tk):
         self._cb_status.grid(row=0, column=6, padx=2)
         self._cb_status.bind("<<ComboboxSelected>>", lambda e: self._on_filter_dropdown_change("status", self.var_filter_status.get()))
 
-        # Clear button
         self.btn_clear_filter = ttk.Button(filter_frame, text="✕ Clear Filter", command=self._clear_all_filters)
-        self.btn_clear_filter.grid(row=0, column=8, sticky="e", padx=10)
+        self.btn_clear_filter.grid(row=0, column=14, sticky="e", padx=10)
 
-        # Active filter chips container
+        # --- Row 1 of filter: JENIS checkboxes + Day range + profile save/load (NEW v2.1) ---
+        tk.Label(filter_frame, text="JENIS:", font=F_BODY, bg=C_CARD).grid(row=1, column=0, padx=(10, 6), pady=4, sticky="w")
+
+        # JENIS multi-select checkboxes
+        jenis_frame = tk.Frame(filter_frame, bg=C_CARD)
+        jenis_frame.grid(row=1, column=1, columnspan=2, sticky="w", padx=2, pady=4)
+        self._jenis_vars: dict[str, tk.BooleanVar] = {}
+        for j in ["WASTE", "SUSUT", "TRIAL"]:
+            v = tk.BooleanVar(value=False)
+            cb = tk.Checkbutton(jenis_frame, text=j, variable=v, bg=C_CARD, font=F_BODY,
+                              command=self._on_jenis_changed)
+            cb.pack(side="left", padx=2)
+            self._jenis_vars[j] = v
+
+        # Day range filter (HARI MAX in range)
+        tk.Label(filter_frame, text="Hari MAX:", font=F_BODY, bg=C_CARD).grid(row=1, column=3, padx=(8, 2))
+        self.var_day_min = tk.IntVar(value=1)
+        self.var_day_max = tk.IntVar(value=31)
+        day_frame = tk.Frame(filter_frame, bg=C_CARD)
+        day_frame.grid(row=1, column=4, columnspan=2, sticky="w", padx=2, pady=4)
+        ttk.Spinbox(day_frame, from_=1, to=31, textvariable=self.var_day_min, width=4,
+                     command=self._on_day_range_changed).pack(side="left")
+        tk.Label(day_frame, text=" – ", bg=C_CARD, font=F_BODY).pack(side="left")
+        ttk.Spinbox(day_frame, from_=1, to=31, textvariable=self.var_day_max, width=4,
+                     command=self._on_day_range_changed).pack(side="left")
+        tk.Label(day_frame, text="(filter HARI MAX di range)", bg=C_CARD, font=F_HINT, fg="#94a3b8").pack(side="left", padx=4)
+
+        # Profile save/load
+        tk.Label(filter_frame, text="Profil:", font=F_BODY, bg=C_CARD).grid(row=1, column=7, padx=(8, 2))
+        self.var_profile_name = tk.StringVar()
+        self._cb_profiles = ttk.Combobox(filter_frame, textvariable=self.var_profile_name, width=18, state="readonly")
+        self._cb_profiles.grid(row=1, column=8, padx=2)
+        self._refresh_profile_dropdown()
+        ttk.Button(filter_frame, text="💾 Load", command=self._load_selected_profile).grid(row=1, column=9, padx=2)
+        ttk.Button(filter_frame, text="💾 Save As…", command=self._save_profile_dialog).grid(row=1, column=10, padx=2)
+        ttk.Button(filter_frame, text="🗑", width=3, command=self._delete_selected_profile).grid(row=1, column=11, padx=2)
+
+        # Active filter chips container (row 2)
         self.chips_frame = tk.Frame(filter_frame, bg=C_CARD)
-        self.chips_frame.grid(row=1, column=0, columnspan=9, sticky="ew", padx=10, pady=(0, 6))
+        self.chips_frame.grid(row=2, column=0, columnspan=15, sticky="ew", padx=10, pady=(0, 6))
         self.chips_frame.columnconfigure(0, weight=1)
 
         # ===== Row 2: Interactive charts (3 charts) =====
@@ -449,6 +498,27 @@ class WasteAnomalyApp(tk.Tk):
             self.active_filters[key] = value
         self._apply_dashboard_filter()
 
+    def _on_jenis_changed(self):
+        """Update active_filters['jenis'] dari checkboxes (multi-select)."""
+        selected = [j for j, v in self._jenis_vars.items() if v.get()]
+        self.active_filters["jenis"] = selected if selected else []
+        self._apply_dashboard_filter()
+
+    def _on_day_range_changed(self):
+        """Update day_min/day_max dari spinboxes."""
+        try:
+            dmin = int(self.var_day_min.get())
+            dmax = int(self.var_day_max.get())
+            if dmin < 1: dmin = 1
+            if dmax > 31: dmax = 31
+            if dmin > dmax: dmin, dmax = dmax, dmin
+            self.day_min = dmin if (dmin != 1 or dmax != 31) else None
+            self.day_max = dmax if (dmin != 1 or dmax != 31) else None
+        except (ValueError, TypeError):
+            self.day_min = None
+            self.day_max = None
+        self._apply_dashboard_filter()
+
     def _on_chart_click(self, key: str, value: str | None):
         """Handler untuk klik chart. value=None artinya clear filter ini."""
         self.active_filters[key] = value
@@ -461,10 +531,19 @@ class WasteAnomalyApp(tk.Tk):
 
     def _clear_all_filters(self):
         for k in self.active_filters:
-            self.active_filters[k] = None
+            if k == "jenis":
+                self.active_filters[k] = []
+            else:
+                self.active_filters[k] = None
+        self.day_min = None
+        self.day_max = None
         self.var_search.set("")
         self.var_filter_cabang.set("(Semua)")
         self.var_filter_status.set("(Semua)")
+        self.var_day_min.set(1)
+        self.var_day_max.set(31)
+        for v in self._jenis_vars.values():
+            v.set(False)
         self._apply_dashboard_filter()
 
     def _apply_dashboard_filter(self):
@@ -475,18 +554,27 @@ class WasteAnomalyApp(tk.Tk):
 
         filtered = df.copy()
         for key, val in self.active_filters.items():
-            if val is None:
+            if val is None or (isinstance(val, list) and not val):
                 continue
             if key == "cabang" and "NAMA RESTO" in filtered.columns:
                 filtered = filtered[filtered["NAMA RESTO"] == val]
             elif key == "item" and "NAMA BARANG" in filtered.columns:
                 filtered = filtered[filtered["NAMA BARANG"] == val]
-            elif key == "jenis" and "JENIS" in filtered.columns:
-                filtered = filtered[filtered["JENIS"] == val]
+            elif key == "jenis" and "JENIS" in filtered.columns and isinstance(val, list):
+                filtered = filtered[filtered["JENIS"].isin(val)]
             elif key == "keterangan" and "KETERANGAN" in filtered.columns:
                 filtered = filtered[filtered["KETERANGAN"] == val]
             elif key == "status" and "ANOMALY STATUS" in filtered.columns:
                 filtered = filtered[filtered["ANOMALY STATUS"] == val]
+
+        # Apply day range filter (HARI MAX in [day_min, day_max])
+        if (self.day_min is not None and self.day_max is not None
+                and "HARI MAX" in filtered.columns):
+            hari_max = pd.to_numeric(filtered["HARI MAX"], errors="coerce")
+            filtered = filtered[
+                hari_max.between(self.day_min, self.day_max, inclusive="both")
+                | hari_max.isna()  # keep rows where HARI MAX is null
+            ]
 
         # Apply search
         search = self.var_search.get().strip().lower()
@@ -506,7 +594,22 @@ class WasteAnomalyApp(tk.Tk):
     def _update_filter_chips(self):
         for c in self.chips_frame.winfo_children():
             c.destroy()
-        active_items = [(k, v) for k, v in self.active_filters.items() if v]
+        active_items = []
+        for k, v in self.active_filters.items():
+            if v is None or (isinstance(v, list) and not v):
+                continue
+            if isinstance(v, list):
+                active_items.append((k, ", ".join(v)))
+            else:
+                active_items.append((k, v))
+        # Add day range chip
+        if self.day_min is not None and self.day_max is not None:
+            active_items.append(("Hari MAX", f"{self.day_min}-{self.day_max}"))
+        # Add search chip
+        search = self.var_search.get().strip()
+        if search:
+            active_items.append(("search", f'"{search}"'))
+
         if not active_items:
             tk.Label(self.chips_frame, text="Tidak ada filter aktif. Klik bar chart di atas untuk drill-down.",
                      font=F_HINT, fg="#94a3b8", bg=C_CARD).grid(row=0, column=0, sticky="w")
@@ -519,12 +622,109 @@ class WasteAnomalyApp(tk.Tk):
             col += 1
 
     def _remove_filter(self, key: str):
-        self.active_filters[key] = None
-        if key == "cabang":
-            self.var_filter_cabang.set("(Semua)")
-        elif key == "status":
-            self.var_filter_status.set("(Semua)")
+        if key == "jenis":
+            self.active_filters[key] = []
+            for v in self._jenis_vars.values():
+                v.set(False)
+        elif key == "Hari MAX":
+            self.day_min = None
+            self.day_max = None
+            self.var_day_min.set(1)
+            self.var_day_max.set(31)
+        elif key == "search":
+            self.var_search.set("")
+            return  # already triggers apply via trace
+        else:
+            self.active_filters[key] = None
+            if key == "cabang":
+                self.var_filter_cabang.set("(Semua)")
+            elif key == "status":
+                self.var_filter_status.set("(Semua)")
         self._apply_dashboard_filter()
+
+    # --------------------------------------------------------
+    # FILTER PROFILE MANAGEMENT (NEW v2.1)
+    # --------------------------------------------------------
+    def _refresh_profile_dropdown(self):
+        names = wa_filters.list_profile_names()
+        self._cb_profiles["values"] = names
+        if names and not self.var_profile_name.get():
+            self.var_profile_name.set(names[0])
+
+    def _save_profile_dialog(self):
+        """Prompt user for profile name, save current filter state."""
+        from tkinter import simpledialog
+        name = simpledialog.askstring("Save Profile", "Nama profil filter:",
+                                       parent=self,
+                                       initialvalue=self.var_profile_name.get() or "Profil Baru")
+        if not name:
+            return
+        profile = wa_filters.snapshot_filters(
+            search=self.var_search.get().strip(),
+            cabang=self.active_filters.get("cabang"),
+            item=self.active_filters.get("item"),
+            jenis=self.active_filters.get("jenis") or [],
+            keterangan=self.active_filters.get("keterangan"),
+            status=self.active_filters.get("status"),
+            day_min=self.day_min,
+            day_max=self.day_max,
+        )
+        if wa_filters.save_profile(name, profile):
+            self._filter_profiles = wa_filters.load_profiles()
+            self._refresh_profile_dropdown()
+            self.var_profile_name.set(name)
+            messagebox.showinfo("Profile", f"Profil '{name}' disimpan.")
+        else:
+            messagebox.showerror("Profile Error", f"Gagal simpan profil '{name}'.")
+
+    def _load_selected_profile(self):
+        """Load selected profile from dropdown."""
+        name = self.var_profile_name.get()
+        if not name:
+            messagebox.showwarning("Profile", "Pilih profil dulu.")
+            return
+        profile = wa_filters.get_profile(name)
+        if not profile:
+            messagebox.showerror("Profile", f"Profil '{name}' tidak ditemukan.")
+            return
+        # Restore state
+        self.var_search.set(profile.get("search", ""))
+        cabang = profile.get("cabang")
+        self.var_filter_cabang.set(cabang if cabang else "(Semua)")
+        status = profile.get("status")
+        self.var_filter_status.set(status if status else "(Semua)")
+        jenis = profile.get("jenis", [])
+        for j, v in self._jenis_vars.items():
+            v.set(j in jenis)
+        self.active_filters = {
+            "cabang": cabang,
+            "item": profile.get("item"),
+            "jenis": jenis,
+            "keterangan": profile.get("keterangan"),
+            "status": status,
+        }
+        self.day_min = profile.get("day_min")
+        self.day_max = profile.get("day_max")
+        if self.day_min and self.day_max:
+            self.var_day_min.set(self.day_min)
+            self.var_day_max.set(self.day_max)
+        else:
+            self.var_day_min.set(1)
+            self.var_day_max.set(31)
+        self._apply_dashboard_filter()
+        messagebox.showinfo("Profile", f"Profil '{name}' di-load.")
+
+    def _delete_selected_profile(self):
+        """Delete selected profile from dropdown."""
+        name = self.var_profile_name.get()
+        if not name:
+            return
+        if not messagebox.askyesno("Hapus Profil", f"Hapus profil '{name}'?"):
+            return
+        if wa_filters.delete_profile(name):
+            self._filter_profiles = wa_filters.load_profiles()
+            self._refresh_profile_dropdown()
+            messagebox.showinfo("Profile", f"Profil '{name}' dihapus.")
 
     # --------------------------------------------------------
     # RENDER DASHBOARD CHARTS (interactive)
@@ -729,9 +929,188 @@ class WasteAnomalyApp(tk.Tk):
             # Quick fix: store on init
             if hasattr(self, "_cb_cabang"):
                 self._cb_cabang["values"] = ["(Semua)"] + cabangs
+            # Update Compare tab dropdowns too
+            if hasattr(self, "_cb_compare_a"):
+                self._cb_compare_a["values"] = cabangs
+                self._cb_compare_b["values"] = cabangs
 
     # --------------------------------------------------------
-    # TAB 2: HASIL (preview all sheets)
+    # TAB 2: COMPARE CABANG (NEW v2.1)
+    # --------------------------------------------------------
+    def _build_compare_tab(self, parent):
+        """Side-by-side comparison of 2 cabang with 4 charts."""
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(1, weight=1)
+
+        # Card 1: selector
+        c1 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1,
+                      highlightbackground=C_BORDER, highlightthickness=1)
+        c1.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
+        tk.Label(c1, text="⚖ Compare Cabang — Side-by-Side Analysis",
+                 font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(anchor="w", padx=16, pady=(12, 4))
+        tk.Label(c1, text="Pilih 2 cabang untuk dibandingkan. Lihat chart + metrics di bawah.",
+                 font=F_HINT, fg="#6B7280", bg=C_CARD).pack(anchor="w", padx=16, pady=(0, 8))
+
+        selector = tk.Frame(c1, bg=C_CARD)
+        selector.pack(fill="x", padx=16, pady=(0, 12))
+        tk.Label(selector, text="Cabang A:", font=F_BODY, bg=C_CARD).pack(side="left", padx=2)
+        self.var_compare_a = tk.StringVar()
+        self._cb_compare_a = ttk.Combobox(selector, textvariable=self.var_compare_a, width=22, state="readonly")
+        self._cb_compare_a.pack(side="left", padx=4)
+        self._cb_compare_a.bind("<<ComboboxSelected>>", lambda e: self._render_compare_charts())
+
+        tk.Label(selector, text="vs", font=F_BODY, bg=C_CARD, fg="#6B7280").pack(side="left", padx=8)
+        tk.Label(selector, text="Cabang B:", font=F_BODY, bg=C_CARD).pack(side="left", padx=2)
+        self.var_compare_b = tk.StringVar()
+        self._cb_compare_b = ttk.Combobox(selector, textvariable=self.var_compare_b, width=22, state="readonly")
+        self._cb_compare_b.pack(side="left", padx=4)
+        self._cb_compare_b.bind("<<ComboboxSelected>>", lambda e: self._render_compare_charts())
+
+        ttk.Button(selector, text="⟳ Refresh", command=self._render_compare_charts).pack(side="left", padx=8)
+        ttk.Button(selector, text="Export PNG…", command=self._export_compare_charts).pack(side="left", padx=4)
+
+        # Card 2: charts grid 2x2
+        c2 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1,
+                      highlightbackground=C_BORDER, highlightthickness=1)
+        c2.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
+        c2.columnconfigure(0, weight=1, uniform="cmp")
+        c2.columnconfigure(1, weight=1, uniform="cmp")
+        c2.rowconfigure(0, weight=1, uniform="cmpr")
+        c2.rowconfigure(1, weight=1, uniform="cmpr")
+
+        self._compare_chart_frames = []
+        for i in range(4):
+            r, col = i // 2, i % 2
+            f = tk.Frame(c2, bg=C_CARD, relief="flat",
+                         highlightbackground=C_BORDER, highlightthickness=1)
+            f.grid(row=r, column=col, sticky="nsew", padx=4, pady=4)
+            f.columnconfigure(0, weight=1)
+            f.rowconfigure(1, weight=1)
+            self._compare_chart_frames.append(f)
+
+        # Card 3: metrics summary
+        c3 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1,
+                      highlightbackground=C_BORDER, highlightthickness=1)
+        c3.grid(row=2, column=0, sticky="ew", padx=8, pady=8)
+        tk.Label(c3, text="📋 Metrics Summary", font=F_CARD, fg=C_HEADER,
+                 bg=C_CARD).pack(anchor="w", padx=16, pady=(12, 4))
+        self.lbl_compare_metrics = tk.Label(c3, text="(pilih 2 cabang dulu)",
+                                            bg=C_CARD, fg="#475569", font=F_BODY,
+                                            anchor="w", justify="left")
+        self.lbl_compare_metrics.pack(fill="x", padx=16, pady=(0, 12))
+
+        # Placeholder
+        self._compare_canvases = []
+        for f in self._compare_chart_frames:
+            tk.Label(f, text="⚖\n\nPilih Cabang A & B\nuntuk lihat comparison.",
+                     font=F_BODY, fg="#6B7280", bg=C_CARD, justify="center").grid(
+                row=0, column=0, sticky="nsew", padx=20, pady=20)
+
+    def _render_compare_charts(self):
+        """Render 4 comparison charts for selected cabangs."""
+        a = self.var_compare_a.get()
+        b = self.var_compare_b.get()
+        df = self._preview_dfs.get("Detail")
+
+        # Destroy existing
+        for f in self._compare_chart_frames:
+            for c in f.winfo_children():
+                c.destroy()
+        self._compare_canvases = []
+
+        if not a or not b or a == b:
+            for f in self._compare_chart_frames:
+                tk.Label(f, text="⚖\n\nPilih 2 cabang\nberbeda.",
+                         font=F_BODY, fg="#6B7280", bg=C_CARD, justify="center").grid(
+                    row=0, column=0, sticky="nsew", padx=20, pady=20)
+            self.lbl_compare_metrics.configure(text="(pilih 2 cabang berbeda)")
+            return
+        if df is None or df.empty:
+            for f in self._compare_chart_frames:
+                tk.Label(f, text="(belum ada data)",
+                         font=F_BODY, fg="#6B7280", bg=C_CARD).grid(
+                    row=0, column=0, sticky="nsew", padx=20, pady=20)
+            return
+
+        # Chart 1: Total waste per JENIS
+        f0 = self._compare_chart_frames[0]
+        fig0 = wa_dash.chart_compare_total_waste(df, a, b)
+        c0 = wa_charts.embed_figure(f0, fig0)
+        c0.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+        self._compare_canvases.append(("total_waste", fig0))
+
+        # Chart 2: Status comparison
+        f1 = self._compare_chart_frames[1]
+        fig1 = wa_dash.chart_compare_status(df, a, b)
+        c1 = wa_charts.embed_figure(f1, fig1)
+        c1.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+        self._compare_canvases.append(("status", fig1))
+
+        # Chart 3: Top items comparison
+        f2 = self._compare_chart_frames[2]
+        fig2 = wa_dash.chart_compare_top_items(df, a, b)
+        c2 = wa_charts.embed_figure(f2, fig2)
+        c2.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+        self._compare_canvases.append(("top_items", fig2))
+
+        # Chart 4: Metrics comparison
+        f3 = self._compare_chart_frames[3]
+        fig3 = wa_dash.chart_compare_score(df, a, b)
+        c3 = wa_charts.embed_figure(f3, fig3)
+        c3.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+        self._compare_canvases.append(("metrics", fig3))
+
+        # Update metrics summary text
+        a_sub = df[df["NAMA RESTO"] == a]
+        b_sub = df[df["NAMA RESTO"] == b]
+        def _fmt(label, val_a, val_b, fmt="{:.1f}"):
+            try:
+                diff = float(val_a) - float(val_b)
+                pct = (diff / float(val_b) * 100) if float(val_b) != 0 else 0
+                sign = "↑" if diff > 0 else ("↓" if diff < 0 else "=")
+                return f"{label}: A={fmt.format(float(val_a))} | B={fmt.format(float(val_b))} | {sign} {abs(diff):.1f} ({pct:+.1f}%)"
+            except (ValueError, TypeError, ZeroDivisionError):
+                return f"{label}: A={val_a} | B={val_b}"
+        lines = [
+            f"Cabang A: {a}  •  Cabang B: {b}",
+            "",
+            _fmt("Total Waste", a_sub["TOTAL"].sum() if "TOTAL" in a_sub.columns else 0,
+                  b_sub["TOTAL"].sum() if "TOTAL" in b_sub.columns else 0, fmt="{:.0f}"),
+            _fmt("Avg Waste/Barang", a_sub["TOTAL"].mean() if "TOTAL" in a_sub.columns else 0,
+                  b_sub["TOTAL"].mean() if "TOTAL" in b_sub.columns else 0, fmt="{:.2f}"),
+            _fmt("Max Single Day", a_sub["MAX"].max() if "MAX" in a_sub.columns else 0,
+                  b_sub["MAX"].max() if "MAX" in b_sub.columns else 0, fmt="{:.1f}"),
+            _fmt("Avg Anomali Score", a_sub["ANOMALY SCORE"].mean() if "ANOMALY SCORE" in a_sub.columns else 0,
+                  b_sub["ANOMALY SCORE"].mean() if "ANOMALY SCORE" in b_sub.columns else 0),
+            _fmt("Max Anomali Score", a_sub["ANOMALY SCORE"].max() if "ANOMALY SCORE" in a_sub.columns else 0,
+                  b_sub["ANOMALY SCORE"].max() if "ANOMALY SCORE" in b_sub.columns else 0),
+            f"Jumlah Prioritas: A={int((a_sub['ANOMALY STATUS'] == 'Prioritas Tinggi').sum()) if 'ANOMALY STATUS' in a_sub.columns else 0} | B={int((b_sub['ANOMALY STATUS'] == 'Prioritas Tinggi').sum()) if 'ANOMALY STATUS' in b_sub.columns else 0}",
+            f"Jumlah Item: A={a_sub['NAMA BARANG'].nunique() if 'NAMA BARANG' in a_sub.columns else 0} | B={b_sub['NAMA BARANG'].nunique() if 'NAMA BARANG' in b_sub.columns else 0}",
+        ]
+        self.lbl_compare_metrics.configure(text="\n".join(lines))
+
+    def _export_compare_charts(self):
+        if not self._compare_canvases:
+            messagebox.showinfo("Export", "Belum ada chart. Pilih 2 cabang dulu.")
+            return
+        folder = filedialog.askdirectory(title="Pilih folder untuk simpan PNG")
+        if not folder:
+            return
+        saved = 0
+        a = self.var_compare_a.get() or "A"
+        b = self.var_compare_b.get() or "B"
+        for name, fig in self._compare_canvases:
+            safe = f"compare_{a}_vs_{b}_{name}".replace(" ", "_").replace("/", "-")
+            path = Path(folder) / f"{safe}.png"
+            try:
+                fig.savefig(path, dpi=150, bbox_inches="tight", facecolor="white")
+                saved += 1
+            except Exception as e:
+                print(f"Failed save {name}: {e}", file=sys.stderr)
+        messagebox.showinfo("Export", f"{saved} chart comparison disimpan ke:\n{folder}")
+
+    # --------------------------------------------------------
+    # TAB 3: HASIL (preview all sheets)
     # --------------------------------------------------------
     def _build_result_tab(self, parent):
         parent.columnconfigure(0, weight=1)

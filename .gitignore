@@ -27,6 +27,9 @@ output/*.csv
 output/*.json
 output/*.log
 
+# Filter profiles (user-specific, auto-generated)
+filters.json
+
 # Sample data (jangan commit data asli)
 data/*.xlsx
 data/*.xlsm

@@ -1,6 +1,6 @@
 # Waste Anomaly Detection
 
-Python + Tkinter **professional dashboard** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif**, dan **18 grafik** matplotlib embedded.
+Python + Tkinter **professional dashboard** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif**, **filter profile persistence**, **comparison mode 2 cabang**, dan **22 grafik** matplotlib embedded.
 
 ## Cara Pakai
 
@@ -22,11 +22,12 @@ Satu file Excel `.xlsx` berisi **3 sheet** (atau named range):
 > Sheet BOM & DATABASE_SATUAN opsional — kalau tidak ada, sinyal BOM dan STATUS akan di-skip tapi pipeline tetap jalan.
 
 ### 3. Jalankan (setiap kali)
-Jalankan `MULAI.bat`. UI terbuka dengan **7 tab**:
+Jalankan `MULAI.bat`. UI terbuka dengan **8 tab**:
 
 | Tab | Fungsi |
 |-----|--------|
 | 📊 Dashboard | **PRO** — KPI cards + filter bar + 3 interactive charts + drill-down table |
+| ⚖ Compare Cabang | **NEW v2.1** — Side-by-side analysis 2 cabang dengan 4 chart + metrics |
 | 📋 Hasil | Preview tabel hasil (Detail/Anomali/Cabang/Top/Pareto) |
 | 📈 Visualisasi | 12 grafik matplotlib gallery + export PNG |
 | 🗂 Ringkasan | Summary run terakhir (total, cabang, item, count per status) |
@@ -59,12 +60,15 @@ Tab Dashboard adalah **pusat analisa** dengan layout profesional:
 | TOTAL WASTE | teal | Sum TOTAL waste (qty) |
 | CABANG | purple | Jumlah cabang unik |
 
-### Filter Bar (5 cara drill-down)
+### Filter Bar (8 cara drill-down — extended v2.1)
 1. **Search box** — free-text search di semua kolom
 2. **Dropdown Cabang** — pilih cabang spesifik
 3. **Dropdown Status** — pilih status anomali
-4. **Klik bar chart interaktif** — bar yang di-klik jadi filter aktif
-5. **Double-click baris table** — drill-down ke cabang+item baris itu
+4. **JENIS checkboxes (NEW v2.1)** — multi-select WASTE/SUSUT/TRIAL
+5. **Day Range (NEW v2.1)** — filter HARI MAX dalam range 1-31 (mis. "anomali yang peak di hari 5-15")
+6. **Klik bar chart interaktif** — bar yang di-klik jadi filter aktif
+7. **Double-click baris table** — drill-down ke cabang+item baris itu
+8. **Filter Profile Save/Load (NEW v2.1)** — simpan state filter ke `filters.json`, load lagi kapan saja
 
 ### Active Filter Chips
 Filter aktif muncul sebagai chip kuning di atas table. Klik `×` di chip untuk remove filter individual, atau klik `✕ Clear Filter` untuk clear semua.
@@ -95,6 +99,38 @@ Bar aktif highlight dengan warna penuh, bar lain jadi abu-abu (visual feedback).
 6. Search "Cancel Nota" → tambah filter keterangan
 7. Export hasil filter ke Excel untuk laporan
 ```
+
+## Tab Compare Cabang — Side-by-Side Analysis (NEW v2.1)
+
+Tab ini untuk membandingkan 2 cabang secara langsung dengan 4 chart + metrics summary.
+
+### Cara Pakai
+1. Pilih **Cabang A** dan **Cabang B** dari dropdown (otomatis terisi dari data ter-load)
+2. Lihat 4 chart comparison otomatis:
+   - **Total Waste per JENIS** — grouped bar (WASTE/SUSUT/TRIAL)
+   - **Status Anomali** — grouped bar (Prioritas Tinggi/Potensi/Review/Normal)
+   - **Top Items** — horizontal grouped bar (top 8 items, A vs B)
+   - **Metrics Comparison** — grouped bar (Avg/Max Score, Avg/Max Waste, Jml Prioritas)
+3. Baca **Metrics Summary** di bawah chart dengan diff & % delta
+
+### Metrics Summary (delta analysis)
+Format: `Metric: A=value | B=value | ↑/↓ diff (pct%)`
+
+Contoh output:
+```
+Cabang A: RESTO.PWKTAM  •  Cabang B: RESTO.KWGGAL
+
+Total Waste: A=290 | B=327 | ↓ 37 (-12.8%)
+Avg Waste/Barang: A=48.40 | B=54.40 | ↓ 6.00 (-11.0%)
+Max Single Day: A=38.7 | B=30.4 | ↑ 8.3 (+27.3%)
+Avg Anomali Score: A=8.3 | B=8.8 | ↓ 0.5 (-5.7%)
+Max Anomali Score: A=12.0 | B=11.0 | ↑ 1.0 (+9.1%)
+Jumlah Prioritas: A=4 | B=5
+Jumlah Item: A=6 | B=6
+```
+
+### Export
+Tombol "Export PNG…" simpan 4 chart comparison ke folder dengan nama `compare_<A>_vs_<B>_<chart>.png`.
 
 ## Tab Visualisasi — 12 Grafik (Static Gallery)
 
@@ -149,11 +185,11 @@ Setelah run pipeline, tab "Visualisasi" auto-load 12 grafik matplotlib embedded:
 
 ```
 Waste/
-├── MULAI.bat                       ← ENTRY POINT (buka UI 7 tab)
+├── MULAI.bat                       ← ENTRY POINT (buka UI 8 tab)
 ├── SETUP.bat                       ← One-time install (pandas, numpy, openpyxl, matplotlib)
 ├── README.md                       ← File ini
 ├── .gitignore
-├── ui_app.py                       ← UI Tkinter professional dashboard (v2.0)
+├── ui_app.py                       ← UI Tkinter professional dashboard (v2.1)
 ├── make_sample.py                  ← Generate sample workbook untuk testing
 ├── waste_anomaly/
 │   ├── __init__.py
@@ -163,13 +199,15 @@ Waste/
 │   ├── stages.py                   ← 14 stage replika M code (audited v2.0)
 │   ├── signals.py                  ← 12 sinyal anomali + composite score (max 19)
 │   ├── charts.py                   ← 12 static chart matplotlib
-│   ├── dashboard.py                ← 6 interactive chart untuk drill-down (NEW v2.0)
+│   ├── dashboard.py                ← 6 interactive chart + 4 comparison chart (NEW v2.1)
+│   ├── filters.py                  ← Filter profile persistence (NEW v2.1)
 │   ├── exporter.py                 ← Multi-sheet xlsx writer + formatting
 │   └── utils.py                    ← Helper (Number.From, List.Sum, dll)
 ├── data/                           ← Letakkan workbook input di sini
 │   └── README.md
-└── output/                         ← Output Excel tersimpan di sini
-    └── .gitkeep
+├── output/                         ← Output Excel tersimpan di sini
+│   └── .gitkeep
+└── filters.json                    ← (auto-generated) saved filter profiles
 ```
 
 ## Stage Pipeline (14 Stage, replika M code)

@@ -367,3 +367,176 @@ def chart_score_per_cabang_interactive(
                     return
         fig.canvas.mpl_connect("button_press_event", _on_pick)
     return fig
+
+
+# ============================================================
+# COMPARISON CHARTS — 2 cabang side-by-side
+# ============================================================
+
+def chart_compare_total_waste(
+    df: pd.DataFrame,
+    cabang_a: str,
+    cabang_b: str,
+) -> Figure:
+    """Side-by-side bar: total waste per JENIS for 2 cabang."""
+    fig = Figure(figsize=(6, 3.5), dpi=100)
+    ax = _styled_axes(fig)
+
+    if "NAMA RESTO" not in df.columns or "TOTAL" not in df.columns or "JENIS" not in df.columns:
+        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
+        ax.set_axis_off()
+        return fig
+
+    # Filter each cabang, group by JENIS
+    jenis_list = ["WASTE", "SUSUT", "TRIAL"]
+    a_vals = []
+    b_vals = []
+    for j in jenis_list:
+        a_vals.append(float(df[(df["NAMA RESTO"] == cabang_a) & (df["JENIS"] == j)]["TOTAL"].sum()))
+        b_vals.append(float(df[(df["NAMA RESTO"] == cabang_b) & (df["JENIS"] == j)]["TOTAL"].sum()))
+
+    x = np.arange(len(jenis_list))
+    w = 0.38
+    b1 = ax.bar(x - w/2, a_vals, w, label=cabang_a, color=PALETTE_ACCENT, edgecolor="white", linewidth=1.5)
+    b2 = ax.bar(x + w/2, b_vals, w, label=cabang_b, color=PALETTE_SECONDARY, edgecolor="white", linewidth=1.5)
+    for bar, val in zip(b1, a_vals):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+                f"{val:.0f}", ha="center", va="bottom", fontsize=8, fontweight="bold", color=PALETTE_ACCENT)
+    for bar, val in zip(b2, b_vals):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+                f"{val:.0f}", ha="center", va="bottom", fontsize=8, fontweight="bold", color=PALETTE_SECONDARY)
+    ax.set_xticks(x)
+    ax.set_xticklabels(jenis_list)
+    ax.set_title(f"Total Waste per JENIS — {cabang_a} vs {cabang_b}", pad=10)
+    ax.set_ylabel("Total Waste")
+    ax.legend(fontsize=9, loc="upper right")
+    fig.tight_layout()
+    return fig
+
+
+def chart_compare_status(
+    df: pd.DataFrame,
+    cabang_a: str,
+    cabang_b: str,
+) -> Figure:
+    """Grouped bar: status anomali count for 2 cabang."""
+    fig = Figure(figsize=(6, 3.5), dpi=100)
+    ax = _styled_axes(fig)
+
+    if "NAMA RESTO" not in df.columns or "ANOMALY STATUS" not in df.columns:
+        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
+        ax.set_axis_off()
+        return fig
+
+    statuses = ["Prioritas Tinggi", "Potensi Anomali", "Perlu Review", "Normal"]
+    a_sub = df[df["NAMA RESTO"] == cabang_a]
+    b_sub = df[df["NAMA RESTO"] == cabang_b]
+    a_vals = [int((a_sub["ANOMALY STATUS"] == s).sum()) for s in statuses]
+    b_vals = [int((b_sub["ANOMALY STATUS"] == s).sum()) for s in statuses]
+
+    x = np.arange(len(statuses))
+    w = 0.38
+    b1 = ax.bar(x - w/2, a_vals, w, label=cabang_a, color=PALETTE_ACCENT, edgecolor="white", linewidth=1.5)
+    b2 = ax.bar(x + w/2, b_vals, w, label=cabang_b, color=PALETTE_SECONDARY, edgecolor="white", linewidth=1.5)
+    for bar, val in zip(b1, a_vals):
+        if val > 0:
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+                    f"{val}", ha="center", va="bottom", fontsize=8, fontweight="bold", color=PALETTE_ACCENT)
+    for bar, val in zip(b2, b_vals):
+        if val > 0:
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+                    f"{val}", ha="center", va="bottom", fontsize=8, fontweight="bold", color=PALETTE_SECONDARY)
+    ax.set_xticks(x)
+    ax.set_xticklabels(statuses, fontsize=8, rotation=15)
+    ax.set_title(f"Status Anomali — {cabang_a} vs {cabang_b}", pad=10)
+    ax.set_ylabel("Jumlah Baris")
+    ax.legend(fontsize=9, loc="upper right")
+    fig.tight_layout()
+    return fig
+
+
+def chart_compare_top_items(
+    df: pd.DataFrame,
+    cabang_a: str,
+    cabang_b: str,
+    top_n: int = 8,
+) -> Figure:
+    """Horizontal grouped bar: top items by total waste, A vs B side-by-side."""
+    fig = Figure(figsize=(7, 4.5), dpi=100)
+    ax = _styled_axes(fig)
+
+    if "NAMA RESTO" not in df.columns or "NAMA BARANG" not in df.columns or "TOTAL" not in df.columns:
+        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
+        ax.set_axis_off()
+        return fig
+
+    # Get all unique items from both cabangs
+    items_a = df[df["NAMA RESTO"] == cabang_a].groupby("NAMA BARANG", dropna=False)["TOTAL"].sum()
+    items_b = df[df["NAMA RESTO"] == cabang_b].groupby("NAMA BARANG", dropna=False)["TOTAL"].sum()
+    all_items = items_a.add(items_b, fill_value=0).sort_values(ascending=True).tail(top_n)
+    a_vals = [float(items_a.get(i, 0)) for i in all_items.index]
+    b_vals = [float(items_b.get(i, 0)) for i in all_items.index]
+
+    y = np.arange(len(all_items))
+    h = 0.38
+    b1 = ax.barh(y - h/2, a_vals, h, label=cabang_a, color=PALETTE_ACCENT, edgecolor="white", linewidth=1.5)
+    b2 = ax.barh(y + h/2, b_vals, h, label=cabang_b, color=PALETTE_SECONDARY, edgecolor="white", linewidth=1.5)
+    ax.set_yticks(y)
+    ax.set_yticklabels(all_items.index.astype(str), fontsize=8)
+    ax.set_title(f"Top {top_n} Item — {cabang_a} vs {cabang_b}", pad=10)
+    ax.set_xlabel("Total Waste")
+    ax.legend(fontsize=9, loc="lower right")
+    fig.tight_layout()
+    return fig
+
+
+def chart_compare_score(
+    df: pd.DataFrame,
+    cabang_a: str,
+    cabang_b: str,
+) -> Figure:
+    """Radar-like comparison: avg/max score, avg waste, count prioritas."""
+    fig = Figure(figsize=(5.5, 3.5), dpi=100)
+    ax = _styled_axes(fig)
+
+    if "NAMA RESTO" not in df.columns:
+        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
+        ax.set_axis_off()
+        return fig
+
+    a_sub = df[df["NAMA RESTO"] == cabang_a]
+    b_sub = df[df["NAMA RESTO"] == cabang_b]
+
+    metrics = ["Avg Score", "Max Score", "Avg Waste", "Max Waste", "Jml Prioritas"]
+    a_vals = [
+        float(a_sub["ANOMALY SCORE"].mean() if "ANOMALY SCORE" in a_sub.columns else 0),
+        float(a_sub["ANOMALY SCORE"].max() if "ANOMALY SCORE" in a_sub.columns else 0),
+        float(a_sub["TOTAL"].mean() if "TOTAL" in a_sub.columns else 0),
+        float(a_sub["MAX"].max() if "MAX" in a_sub.columns else 0),
+        int((a_sub["ANOMALY STATUS"] == "Prioritas Tinggi").sum() if "ANOMALY STATUS" in a_sub.columns else 0),
+    ]
+    b_vals = [
+        float(b_sub["ANOMALY SCORE"].mean() if "ANOMALY SCORE" in b_sub.columns else 0),
+        float(b_sub["ANOMALY SCORE"].max() if "ANOMALY SCORE" in b_sub.columns else 0),
+        float(b_sub["TOTAL"].mean() if "TOTAL" in b_sub.columns else 0),
+        float(b_sub["MAX"].max() if "MAX" in b_sub.columns else 0),
+        int((b_sub["ANOMALY STATUS"] == "Prioritas Tinggi").sum() if "ANOMALY STATUS" in b_sub.columns else 0),
+    ]
+
+    x = np.arange(len(metrics))
+    w = 0.38
+    b1 = ax.bar(x - w/2, a_vals, w, label=cabang_a, color=PALETTE_ACCENT, edgecolor="white", linewidth=1.5)
+    b2 = ax.bar(x + w/2, b_vals, w, label=cabang_b, color=PALETTE_SECONDARY, edgecolor="white", linewidth=1.5)
+    for bar, val in zip(b1, a_vals):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+                f"{val:.1f}", ha="center", va="bottom", fontsize=7, fontweight="bold", color=PALETTE_ACCENT)
+    for bar, val in zip(b2, b_vals):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+                f"{val:.1f}", ha="center", va="bottom", fontsize=7, fontweight="bold", color=PALETTE_SECONDARY)
+    ax.set_xticks(x)
+    ax.set_xticklabels(metrics, fontsize=8, rotation=10)
+    ax.set_title(f"Metrics Comparison — {cabang_a} vs {cabang_b}", pad=10)
+    ax.legend(fontsize=9, loc="upper right")
+    fig.tight_layout()
+    return fig
+
