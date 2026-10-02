@@ -21,7 +21,6 @@ from pathlib import Path
 import pandas as pd
 
 from . import stages
-from .exporter import export_to_excel
 from .loader import load_bom, load_database_satuan, load_rekap_mentah
 from .utils import clamp, load_config
 
@@ -147,23 +146,44 @@ def run_pipeline(
     _log("Stage 14 — Final column order ...", 85)
     df = stages.stage_14_final(df, key_akhir, config)
 
-    # ---- EXPORT ----
-    _log(f"Export ke Excel: {output_path}", 88)
-    summary = export_to_excel(
-        df=df,
-        output_path=output_path,
-        config=config,
-        key_akhir=key_akhir,
-        log_lines=log_lines,
-    )
+    # ---- BUILD SUMMARY (NO Excel export — display directly in UI) ----
+    _log("Build summary statistics ...", 88)
+    summary = _build_summary(df, key_akhir, log_lines)
 
     _log("=== Pipeline DONE ===", 100)
 
     summary.update({
         "success": True,
-        "output_path": str(output_path),
+        "df": df,  # return DataFrame langsung untuk display di UI (no Excel file)
         "rows_processed": len(df),
         "key_akhir": key_akhir,
         "log": "\n".join(log_lines),
     })
     return summary
+
+
+def _build_summary(df, key_akhir, log_lines):
+    """Build summary dict in-memory (no Excel export)."""
+    import numpy as np
+    total_rows = len(df)
+    status_col = "ANOMALY STATUS"
+    if status_col in df.columns:
+        prioritas_count = int((df[status_col] == "Prioritas Tinggi").sum())
+        potensi_count = int((df[status_col] == "Potensi Anomali").sum())
+        review_count = int((df[status_col] == "Perlu Review").sum())
+        normal_count = int((df[status_col] == "Normal").sum())
+        anomali_count = prioritas_count + potensi_count
+    else:
+        prioritas_count = potensi_count = review_count = normal_count = anomali_count = 0
+    cabang_count = int(df["NAMA RESTO"].nunique()) if "NAMA RESTO" in df.columns else 0
+    item_count = int(df["NAMA BARANG"].nunique()) if "NAMA BARANG" in df.columns else 0
+    return {
+        "total_rows": total_rows,
+        "anomali_count": anomali_count,
+        "prioritas_count": prioritas_count,
+        "potensi_count": potensi_count,
+        "review_count": review_count,
+        "normal_count": normal_count,
+        "cabang_count": cabang_count,
+        "item_count": item_count,
+    }

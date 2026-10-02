@@ -7,6 +7,8 @@ Setara dengan Excel.CurrentWorkbook() + query referensi M code:
   - DATABASE_SATUAN (master expected helper per kategori)
 
 Strategi: coba multiple nama sheet / named range. Bila gagal, raise dengan pesan jelas.
+
+Performance: pakai engine=calamine (Rust-based, 7-10x lebih cepat dari openpyxl).
 """
 
 from __future__ import annotations
@@ -16,9 +18,25 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+# Pilih engine Excel read: calamine (cepat) → fallback openpyxl (default pandas)
+try:
+    import python_calamine  # noqa: F401
+    _EXCEL_ENGINE = "calamine"
+except ImportError:
+    _EXCEL_ENGINE = None  # pandas pakai default (openpyxl)
+
+# openpyxl hanya untuk list_sheets/list_named_ranges (metadata, bukan bulk read)
 from openpyxl import load_workbook
 
 from .utils import load_config
+
+
+def _read_excel_fast(path, sheet_name, **kwargs):
+    """Wrapper untuk pd.read_excel dengan engine optimal (calamine jika ada)."""
+    if _EXCEL_ENGINE:
+        return pd.read_excel(path, sheet_name=sheet_name, engine=_EXCEL_ENGINE, **kwargs)
+    return pd.read_excel(path, sheet_name=sheet_name, **kwargs)
 
 
 # ============================================================
@@ -26,7 +44,7 @@ from .utils import load_config
 # ============================================================
 
 def list_sheets(workbook_path: str | os.PathLike) -> list[str]:
-    """List semua sheet di workbook (openpyxl, read-only)."""
+    """List semua sheet di workbook (openpyxl, read-only — cepat)."""
     wb = load_workbook(workbook_path, read_only=True, data_only=True)
     sheets = list(wb.sheetnames)
     wb.close()
@@ -34,15 +52,14 @@ def list_sheets(workbook_path: str | os.PathLike) -> list[str]:
 
 
 def list_named_ranges(workbook_path: str | os.PathLike) -> dict[str, str]:
-    """Return dict {name: "SheetName!A1:Z100"} untuk semua defined name."""
+    """Return dict {name: "SheetName!A1:Z100"} untuk semua defined name.
+    WARNING: lambat untuk file besar (load_workbook non-readonly). Pakai hanya kalau perlu."""
     wb = load_workbook(workbook_path, data_only=True)
     names: dict[str, str] = {}
     try:
         for name, defn in wb.defined_names.items():
-            # defn.value berbentuk "Sheet1!$A$1:$Z$100"
             names[name] = str(defn.value)
     except Exception:
-        # Kompatibilitas openpyxl lama (wb.defined_names adalah NamedRangeList)
         try:
             for defn in wb.defined_names.definedName:
                 names[defn.name] = defn.value
@@ -50,6 +67,36 @@ def list_named_ranges(workbook_path: str | os.PathLike) -> dict[str, str]:
             pass
     wb.close()
     return names
+
+
+def _resolve_workbook_meta(workbook_path, config):
+    """Cache metadata sheet + named range. Pakai list_sheets cepat dulu.
+    list_named_ranges cuma dipanggil kalau sheet candidates tidak match (lazy)."""
+    if not hasattr(_resolve_workbook_meta, "_cache"):
+        _resolve_workbook_meta._cache = {}
+    key = str(workbook_path)
+    if key not in _resolve_workbook_meta._cache:
+        # Coba resolve pakai list_sheets cepat dulu (skip list_named_ranges yang lambat)
+        sheets = list_sheets(workbook_path)
+        # Cek apakah ada sheet candidate yang match — kalau ada, skip list_named_ranges
+        # (untuk file user 5.2MB tanpa named ranges, hemat ~12 detik!)
+        all_candidates = []
+        for purpose_cfg in config.get("input_sheets", {}).values():
+            all_candidates.extend(purpose_cfg)
+        any_sheet_matches = any(
+            find_sheet(all_candidates, sheets) is not None
+            for _ in [0]
+        )
+        if any_sheet_matches:
+            named = {}  # skip list_named_ranges yang lambat
+        else:
+            # Fallback: kalau tidak match, coba pakai named ranges
+            named = list_named_ranges(workbook_path)
+        _resolve_workbook_meta._cache[key] = {
+            "sheets": sheets,
+            "named": named,
+        }
+    return _resolve_workbook_meta._cache[key]
 
 
 def find_sheet(names_candidates: list[str], available: list[str]) -> str | None:
@@ -122,17 +169,19 @@ def load_rekap_mentah(
     logger=None,
 ) -> pd.DataFrame:
     """Load DATA_WASTE (input utama pipeline). Setara Source = Excel.CurrentWorkbook(){[Name="DATA_WASTE"]}[Content]."""
-    sheets = list_sheets(workbook_path)
-    named = list_named_ranges(workbook_path)
+    meta = _resolve_workbook_meta(workbook_path, config)
+    sheets = meta["sheets"]
+    named = meta["named"]
     sheet, ref = resolve_sheet_for("rekap_mentah", config, sheets, named)
     if logger:
         logger(f"[loader] DATA_WASTE: sheet='{sheet}', named_range={ref!r}")
 
-    # Baca sheet penuh (header baris pertama)
-    df = pd.read_excel(workbook_path, sheet_name=sheet, header=0)
+    # Baca sheet penuh (header baris pertama) pakai engine calamine (cepat)
+    df = _read_excel_fast(workbook_path, sheet_name=sheet, header=0)
     df = _normalize_columns(df)
     if logger:
-        logger(f"[loader] DATA_WASTE loaded: {len(df)} rows, {len(df.columns)} cols")
+        engine_info = f"engine={_EXCEL_ENGINE or 'default'}"
+        logger(f"[loader] DATA_WASTE loaded: {len(df)} rows, {len(df.columns)} cols ({engine_info})")
     return df
 
 
@@ -149,8 +198,9 @@ def load_bom(
     Load BOM lookup. Setara BOMLookup di M code (Table.Distinct dari query "2  22 05").
     Kolom yang diharapkan: outlet (Nomor #), item (Nama Barang), total_bom (TOTAL BOM).
     """
-    sheets = list_sheets(workbook_path)
-    named = list_named_ranges(workbook_path)
+    meta = _resolve_workbook_meta(workbook_path, config)
+    sheets = meta["sheets"]
+    named = meta["named"]
     try:
         sheet, ref = resolve_sheet_for("bom", config, sheets, named)
     except ValueError:
@@ -161,7 +211,7 @@ def load_bom(
     if logger:
         logger(f"[loader] BOM: sheet='{sheet}', named_range={ref!r}")
 
-    df = pd.read_excel(workbook_path, sheet_name=sheet, header=0)
+    df = _read_excel_fast(workbook_path, sheet_name=sheet, header=0)
     df = _normalize_columns(df)
 
     # Resolve nama kolom sesuai konfigurasi (kemungkinan beberapa alias)
@@ -208,8 +258,9 @@ def load_database_satuan(
     Load DATABASE_SATUAN. Setara SatuanLookup di M code.
     Mapping NAMA ITEM -> expected helper value per kategori.
     """
-    sheets = list_sheets(workbook_path)
-    named = list_named_ranges(workbook_path)
+    meta = _resolve_workbook_meta(workbook_path, config)
+    sheets = meta["sheets"]
+    named = meta["named"]
     try:
         sheet, ref = resolve_sheet_for("database_satuan", config, sheets, named)
     except ValueError:
@@ -220,7 +271,7 @@ def load_database_satuan(
     if logger:
         logger(f"[loader] DATABASE_SATUAN: sheet='{sheet}', named_range={ref!r}")
 
-    df = pd.read_excel(workbook_path, sheet_name=sheet, header=0)
+    df = _read_excel_fast(workbook_path, sheet_name=sheet, header=0)
     df = _normalize_columns(df)
 
     # Resolve kolom item

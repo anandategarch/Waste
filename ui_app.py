@@ -41,6 +41,8 @@ matplotlib.use("TkAgg")
 # Pastikan module lokal ke-import
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import pandas as pd  # untuk pd.isna() di table render + ExcelFile di preview
+
 from waste_anomaly.pipeline import run_pipeline
 from waste_anomaly.utils import load_config, CONFIG_PATH
 from waste_anomaly import charts as wa_charts
@@ -491,7 +493,7 @@ class WasteAnomalyApp(tk.Tk):
                  bg=C_CARD).pack(side="left")
         self.lbl_detail_count = tk.Label(hdr, text="(belum ada data)", font=F_HINT, fg="#6B7280", bg=C_CARD)
         self.lbl_detail_count.pack(side="left", padx=8)
-        ttk.Button(hdr, text="Export Excel", command=self._export_filtered_excel).pack(side="right", padx=4)
+        ttk.Button(hdr, text="Export CSV", command=self._export_filtered_csv).pack(side="right", padx=4)
 
         # Treeview with scrollbars
         tree_wrap = tk.Frame(detail_frame, bg=C_CARD)
@@ -900,8 +902,8 @@ class WasteAnomalyApp(tk.Tk):
             self.active_filters["item"] = item_name
         self._apply_dashboard_filter()
 
-    def _export_filtered_excel(self):
-        """Export current filtered rows to Excel."""
+    def _export_filtered_csv(self):
+        """Export current filtered rows to CSV (lightweight, no Excel dependency)."""
         df = self._preview_dfs.get("Detail")
         if df is None or df.empty:
             messagebox.showinfo("Export", "Belum ada data. Run pipeline dulu.")
@@ -909,28 +911,37 @@ class WasteAnomalyApp(tk.Tk):
         # Apply current filters
         filtered = df.copy()
         for key, val in self.active_filters.items():
-            if val is None:
+            if val is None or (isinstance(val, list) and not val):
                 continue
             col_map = {"cabang": "NAMA RESTO", "item": "NAMA BARANG", "jenis": "JENIS",
                        "keterangan": "KETERANGAN", "status": "ANOMALY STATUS"}
             col_name = col_map.get(key)
             if col_name and col_name in filtered.columns:
-                filtered = filtered[filtered[col_name] == val]
+                if isinstance(val, list):
+                    filtered = filtered[filtered[col_name].isin(val)]
+                else:
+                    filtered = filtered[filtered[col_name] == val]
+        # Apply day range
+        if (self.day_min is not None and self.day_max is not None
+                and "HARI MAX" in filtered.columns):
+            hari_max = pd.to_numeric(filtered["HARI MAX"], errors="coerce")
+            filtered = filtered[hari_max.between(self.day_min, self.day_max, inclusive="both") | hari_max.isna()]
+        # Apply search
         search = self.var_search.get().strip().lower()
         if search:
             mask = filtered.apply(lambda row: any(search in str(v).lower() for v in row.values), axis=1)
             filtered = filtered[mask]
 
         path = filedialog.asksaveasfilename(
-            title="Export Filtered Excel",
-            defaultextension=".xlsx",
-            filetypes=[("Excel files", "*.xlsx")],
-            initialfile=f"filtered_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            title="Export Filtered CSV",
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            initialfile=f"filtered_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         )
         if not path:
             return
         try:
-            filtered.to_excel(path, index=False, engine="openpyxl")
+            filtered.to_csv(path, index=False, encoding="utf-8-sig")
             messagebox.showinfo("Export", f"{len(filtered)} baris diekspor ke:\n{path}")
         except Exception as e:
             messagebox.showerror("Export Error", str(e))
@@ -1420,9 +1431,9 @@ class WasteAnomalyApp(tk.Tk):
         self.btn_run.pack(side="left", padx=4)
         self.btn_log = ttk.Button(frm3, text="Log Proses", command=self._show_log_popup)
         self.btn_log.pack(side="left", padx=4)
-        self.btn_open_out = ttk.Button(frm3, text="Buka Output", command=self._open_output)
+        self.btn_open_out = ttk.Button(frm3, text="Buka Folder Output", command=self._open_output_folder)
         self.btn_open_out.pack(side="left", padx=4)
-        self.btn_open_out_dir = ttk.Button(frm3, text="Buka Folder Output", command=self._open_output_folder)
+        self.btn_open_out_dir = ttk.Button(frm3, text="Buka Downloads", command=self._open_output)
         self.btn_open_out_dir.pack(side="left", padx=4)
         self.progress = ttk.Progressbar(c3, mode="determinate")
         self.progress.grid(row=2, column=0, sticky="ew", padx=16, pady=8)
@@ -1657,10 +1668,9 @@ Pattern referensi: https://github.com/anandategarch/Inventory-Adjusment
         self._open_path_in_explorer(out_dir)
 
     def _open_output(self):
-        if not self.last_output_path:
-            messagebox.showinfo("Output", "Belum ada output. Jalankan pipeline dulu.")
-            return
-        self._open_path_in_explorer(Path(self.last_output_path))
+        """Open folder where CSV exports go (default: Downloads)."""
+        default_dir = Path.home() / "Downloads"
+        self._open_path_in_explorer(default_dir)
 
     @staticmethod
     def _open_path_in_explorer(path: Path):
@@ -1758,23 +1768,76 @@ Pattern referensi: https://github.com/anandategarch/Inventory-Adjusment
             self._on_pipeline_error(summary.get("error", "Unknown error"))
             return
         self.progress["value"] = 100
-        self.last_output_path = summary.get("output_path")
+        # In-memory DataFrame (NO Excel file output)
+        df = summary.get("df")
         self.last_summary = summary
+        rows = summary.get("total_rows", 0)
+        anomali = summary.get("anomali_count", 0)
         self._set_status(
-            f"Done. {summary.get('total_rows', 0)} baris, "
-            f"{summary.get('anomali_count', 0)} anomali prioritas, "
-            f"output: {self.last_output_path}", "done"
+            f"Done. {rows} baris, {anomali} anomali prioritas (in-memory)", "done"
         )
         if self.log_popup:
             self.log_popup.append(f"=== DONE ===")
-            self.log_popup.append(f"Total baris: {summary.get('total_rows', 0)}")
+            self.log_popup.append(f"Total baris: {rows}")
             self.log_popup.append(f"Anomali prioritas: {summary.get('prioritas_count', 0)}")
-            self.log_popup.append(f"Output: {self.last_output_path}")
-        # Load preview + update dashboard
-        self._load_preview_data(self.last_output_path)
+            self.log_popup.append(f"Data ready in-memory (no Excel export)")
+
+        # Build preview_dfs dari DataFrame summary (no Excel read)
+        if df is not None and not df.empty:
+            self._preview_dfs["Detail"] = df
+            # Build derived sheets in-memory
+            self._preview_dfs["Anomali Prioritas"] = df[df["ANOMALY STATUS"].isin(
+                ["Prioritas Tinggi", "Potensi Anomali"]
+            )].sort_values("ANOMALY SCORE", ascending=False) if "ANOMALY STATUS" in df.columns else df.iloc[0:0]
+            # Per Cabang summary (in-memory)
+            if "NAMA RESTO" in df.columns:
+                self._preview_dfs["Per Cabang"] = (
+                    df.groupby("NAMA RESTO", dropna=False).agg(
+                        Jumlah_Barang=("NAMA BARANG", "size"),
+                        Total_Waste=("TOTAL", "sum"),
+                        Max_Waste_Harian=("MAX", "max"),
+                        Anomali_Prioritas=("ANOMALY STATUS", lambda x: int((x == "Prioritas Tinggi").sum())),
+                        Anomali_Potensi=("ANOMALY STATUS", lambda x: int((x == "Potensi Anomali").sum())),
+                        Anomali_Review=("ANOMALY STATUS", lambda x: int((x == "Perlu Review").sum())),
+                    ).reset_index().rename(columns={"NAMA RESTO": "Cabang"})
+                    .sort_values("Anomali_Prioritas", ascending=False)
+                )
+            else:
+                self._preview_dfs["Per Cabang"] = df.iloc[0:0]
+            # Top Items
+            if "NAMA BARANG" in df.columns:
+                self._preview_dfs["Top Items"] = (
+                    df.groupby(["NAMA BARANG", "JENIS"], dropna=False).agg(
+                        Total_Waste=("TOTAL", "sum"),
+                        Max_Waste=("MAX", "max"),
+                        Cabang_Terpengaruh=("NAMA RESTO", "nunique"),
+                        Anomali_Prioritas=("ANOMALY STATUS", lambda x: int((x == "Prioritas Tinggi").sum())),
+                    ).reset_index().sort_values("Total_Waste", ascending=False).head(20)
+                )
+                self._preview_dfs["Top Items"].insert(0, "Rank", range(1, len(self._preview_dfs["Top Items"]) + 1))
+            else:
+                self._preview_dfs["Top Items"] = df.iloc[0:0]
+            # Pareto
+            if "KETERANGAN" in df.columns:
+                pareto_df = (
+                    df.groupby("KETERANGAN", dropna=False).agg(
+                        Total_Waste=("TOTAL", "sum"),
+                        Jumlah_Barang=("NAMA BARANG", "size"),
+                    ).reset_index().sort_values("Total_Waste", ascending=False)
+                )
+                grand = pareto_df["Total_Waste"].sum()
+                if grand and grand > 0:
+                    pareto_df["Persentase"] = (pareto_df["Total_Waste"] / grand) * 100
+                    pareto_df["Cumulative"] = pareto_df["Persentase"].cumsum()
+                else:
+                    pareto_df["Persentase"] = 0
+                    pareto_df["Cumulative"] = 0
+                self._preview_dfs["Pareto Alasan"] = pareto_df
+            else:
+                self._preview_dfs["Pareto Alasan"] = df.iloc[0:0]
+
         self._update_summary_tab(summary)
         # Update dashboard (KPI + charts + table)
-        df = self._preview_dfs.get("Detail")
         if df is not None and not df.empty:
             self._update_kpi_cards(df, summary)
             # Reset filters
@@ -1790,7 +1853,7 @@ Pattern referensi: https://github.com/anandategarch/Inventory-Adjusment
             f"Anomali prioritas: {summary.get('prioritas_count', 0)}\n"
             f"Potensi anomali: {summary.get('potensi_count', 0)}\n"
             f"Perlu review: {summary.get('review_count', 0)}\n\n"
-            f"Output: {self.last_output_path}\n\n"
+            f"Data siap ditampilkan in-memory (no Excel export).\n"
             f"Buka tab 'Dashboard' untuk analisa drill-down.",
         )
 
@@ -1808,20 +1871,8 @@ Pattern referensi: https://github.com/anandategarch/Inventory-Adjusment
         self.lbl_footer.configure(text=f"{msg[:80]}  •  v{APP_VERSION}")
 
     # --------------------------------------------------------
-    # LOAD PREVIEW DATA
-    # --------------------------------------------------------
-    def _load_preview_data(self, xlsx_path: str):
-        try:
-            import pandas as pd
-            sheets = ["Detail", "Anomali Prioritas", "Per Cabang", "Top Items", "Pareto Alasan"]
-            self._preview_dfs = {}
-            xls = pd.ExcelFile(xlsx_path)
-            for s in sheets:
-                if s in xls.sheet_names:
-                    self._preview_dfs[s] = pd.read_excel(xls, sheet_name=s)
-            self._refresh_preview()
-        except Exception as e:
-            messagebox.showwarning("Preview", f"Gagal load preview: {e}")
+    # LOAD PREVIEW DATA — REMOVED in v2.2.0 (data flow in-memory dari pipeline summary)
+    # ============================================================
 
 
 # ============================================================
