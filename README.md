@@ -1,6 +1,6 @@
 # Waste Anomaly Detection
 
-Python + Tkinter program untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali** dan composite scoring.
+Python + Tkinter program untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, dan **12 grafik visualisasi** matplotlib embedded.
 
 ## Cara Pakai
 
@@ -8,6 +8,7 @@ Python + Tkinter program untuk deteksi anomali waste di cabang resto. Replika 1:
 Jalankan `SETUP.bat` di root folder. Install dependencies:
 - pandas, numpy (data processing)
 - openpyxl (Excel I/O)
+- matplotlib (visualisasi grafik)
 
 ### 2. Siapkan Workbook Input
 Satu file Excel `.xlsx` berisi **3 sheet** (atau named range):
@@ -21,15 +22,16 @@ Satu file Excel `.xlsx` berisi **3 sheet** (atau named range):
 > Sheet BOM & DATABASE_SATUAN opsional — kalau tidak ada, sinyal BOM dan STATUS akan di-skip tapi pipeline tetap jalan.
 
 ### 3. Jalankan (setiap kali)
-Jalankan `MULAI.bat`. UI terbuka dengan 5 tab:
+Jalankan `MULAI.bat`. UI terbuka dengan 6 tab:
 
 | Tab | Fungsi |
 |-----|--------|
 | 1. Run Pipeline | Browse workbook → isi Key Akhir (1-31) → Mulai Pipeline |
 | 2. Hasil | Preview tabel hasil (Detail/Anomali Prioritas/Per Cabang/Top Items/Pareto) |
-| 3. Ringkasan | Summary run terakhir (total baris, cabang, item, count per status) |
-| 4. Konfigurasi | Editor threshold (simpan ke `waste_anomaly/config.json`) |
-| 5. Bantuan | Instruksi pakai + 12 sinyal anomali + troubleshooting |
+| 3. Visualisasi | **12 grafik matplotlib** — pie/bar/pareto/heatmap/scatter/box/donut + export PNG |
+| 4. Ringkasan | Summary run terakhir (total baris, cabang, item, count per status) |
+| 5. Konfigurasi | Editor threshold (simpan ke `waste_anomaly/config.json`) |
+| 6. Bantuan | Instruksi pakai + 12 sinyal anomali + troubleshooting |
 
 ## Output Excel (6 Sheet)
 
@@ -41,6 +43,32 @@ Jalankan `MULAI.bat`. UI terbuka dengan 5 tab:
 | Top Items | Top 20 item by TOTAL waste (rank, total, max, cabang terpengaruh, count prioritas) |
 | Pareto Alasan | Group by KETERANGAN — sum TOTAL, persentase, cumulative % |
 | Log Run | Timestamp, parameter, summary stats, log lines pipeline |
+
+## Tab Visualisasi — 12 Grafik (NEW v1.1)
+
+Setelah run pipeline, tab "3. Visualisasi" auto-load 12 grafik matplotlib embedded:
+
+| # | Grafik | Tipe | Fungsi Analisa |
+|---|--------|------|---------------|
+| 1 | Distribusi Status | Pie/donut | % baris per ANOMALY STATUS (Prioritas Tinggi/Potensi/Review/Normal) |
+| 2 | Waste per Cabang | Bar | Total waste qty per NAMA RESTO — identifikasi cabang problem |
+| 3 | Top 10 Items | Horizontal bar | Item dengan waste tertinggi (siap untuk intervensi) |
+| 4 | Status per Cabang | Stacked bar | Breakdown status anomali per cabang |
+| 5 | Pareto Alasan | Bar + line | 80/20: keterangan mana yang kontribusi 80% waste |
+| 6 | Heatmap Cabang×Item | Matrix | Spot outlier cell — cabang×item kombinasi bermasalah |
+| 7 | Frekuensi Penyebab | Bar | Berapa kali tiap anomaly reason (S1-S12) muncul |
+| 8 | Scatter MAX vs TOTAL | Scatter | Deteksi outlier: titik dekat garis identitas = single-day event |
+| 9 | Box TOTAL per JENIS | Box plot | Distribusi waste per jenis (SUSUT/TRIAL/WASTE) |
+| 10 | Score per Cabang | Grouped bar | Avg & max anomali score per cabang + threshold lines |
+| 11 | Kategori per Cabang | Stacked bar | KATEGORI ANOMALI (Lonjakan Ekstrem / Non-Handling / Normal) per cabang |
+| 12 | Distribusi JENIS | Donut | % baris per JENIS (WASTE/SUSUT/TRIAL) |
+
+**Fitur:**
+- Auto-refresh setelah pipeline selesai
+- Tombol "⟳ Refresh Grafik" untuk re-render manual
+- Tombol "Export Semua PNG…" untuk simpan 12 grafik ke folder (150 DPI, white background)
+- Scrollable canvas (mouse wheel + scrollbar)
+- Color palette: teal + pink + status colors (NO indigo/blue sesuai panduan)
 
 ## 12 Sinyal Anomali (S1-S12)
 
@@ -69,11 +97,12 @@ Jalankan `MULAI.bat`. UI terbuka dengan 5 tab:
 
 ```
 Waste/
-├── MULAI.bat                       ← ENTRY POINT (buka UI 5 tab)
-├── SETUP.bat                       ← One-time install (pandas, numpy, openpyxl)
+├── MULAI.bat                       ← ENTRY POINT (buka UI 6 tab)
+├── SETUP.bat                       ← One-time install (pandas, numpy, openpyxl, matplotlib)
 ├── README.md                       ← File ini
 ├── .gitignore
 ├── ui_app.py                       ← UI Tkinter multi-tab (entry point)
+├── make_sample.py                  ← Generate sample workbook untuk testing
 ├── waste_anomaly/
 │   ├── __init__.py
 │   ├── config.json                 ← Thresholds + sheet name candidates
@@ -81,6 +110,7 @@ Waste/
 │   ├── loader.py                   ← Excel loaders (REKAP_MENTAH + BOM + DATABASE_SATUAN)
 │   ├── stages.py                   ← 14 stage replika M code
 │   ├── signals.py                  ← 12 sinyal anomali + composite score
+│   ├── charts.py                   ← 12 grafik matplotlib (NEW v1.1)
 │   ├── exporter.py                 ← Multi-sheet xlsx writer + formatting
 │   └── utils.py                    ← Helper (Number.From, List.Sum, dll)
 ├── data/                           ← Letakkan workbook input di sini
@@ -158,7 +188,9 @@ Edit `waste_anomaly/config.json` → section `thresholds`. Atau pakai tab "4. Ko
 | `Tidak menemukan sheet untuk 'rekap_mentah'` | Pastikan workbook punya sheet `REKAP_MENTAH` / `Rekap Mentah` / `REKAP`. Atau edit `config.json` → `input_sheets.rekap_mentah` untuk tambah nama kandidat. |
 | `BOM sheet tidak ditemukan` | BOM join dilewati. Sinyal S6/S7 tidak trigger. Tambahkan sheet `BOM` / `MASTER BOM` untuk mengaktifkan. |
 | `DATABASE_SATUAN tidak ditemukan` | STATUS menjadi "Cek" untuk semua baris. Tambahkan sheet `DATABASE_SATUAN` untuk mengaktifkan. |
-| `ModuleNotFoundError: pandas` | Jalankan `SETUP.bat` dulu. |
+| `ModuleNotFoundError: pandas / matplotlib` | Jalankan `SETUP.bat` dulu. Atau manual: `pip install pandas numpy openpyxl matplotlib`. |
+| Tab Visualisasi kosong | Pastikan sudah run pipeline. Klik "⟳ Refresh Grafik" manual kalau tidak auto-load. |
+| Grafik matplotlib error di Linux headless | Set env: `export MPLBACKEND=TkAgg` sebelum jalankan `python ui_app.py`. |
 | UI tidak terbuka | Pastikan Python 3.10+ terpasang (`python --version`). |
 
 ## Reference

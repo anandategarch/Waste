@@ -5,15 +5,16 @@ title Waste Anomaly Detection
 color 0A
 cls
 echo ============================================================
-echo   WASTE ANOMALY DETECTION - v1.0.0
+echo   WASTE ANOMALY DETECTION - v1.1.0
 echo ============================================================
 echo.
-echo  Membuka aplikasi dengan 5 tab:
+echo  Membuka aplikasi dengan 6 tab:
 echo    1. Run Pipeline  - pilih workbook + Key Akhir + jalankan
 echo    2. Hasil         - preview tabel hasil (Detail/Anomali/Cabang/Top/Pareto)
-echo    3. Ringkasan    - ringkasan run terakhir
-echo    4. Konfigurasi  - editor threshold (simpan ke config.json)
-echo    5. Bantuan      - instruksi pakai + 12 sinyal anomali
+echo    3. Visualisasi   - 12 grafik matplotlib + export PNG
+echo    4. Ringkasan    - ringkasan run terakhir
+echo    5. Konfigurasi  - editor threshold (simpan ke config.json)
+echo    6. Bantuan      - instruksi pakai + 12 sinyal anomali
 echo.
 echo  Pastikan SETUP.bat sudah dijalankan minimal sekali.
 echo.

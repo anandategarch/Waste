@@ -1,14 +1,15 @@
 """
 ui_app.py — Tkinter multi-tab UI untuk Waste Anomaly Detection.
 
-Versi: 1.0.0
+Versi: 1.1.0  (tambah tab Visualisasi dengan 12 grafik matplotlib embedded)
 
 Tab:
-  1. Run Pipeline  — pilih workbook + Key Akhir + Run + log
-  2. Hasil         — preview tabel hasil (Detail + Anomali Prioritas)
-  3. Ringkasan     — summary per cabang, top items, pareto
-  4. Konfigurasi   — threshold editor (load/save config.json)
-  5. Bantuan       — instruksi pakai
+  1. Run Pipeline   — pilih workbook + Key Akhir + Run + log
+  2. Hasil          — preview tabel hasil (Detail + Anomali Prioritas + Cabang + Top + Pareto)
+  3. Visualisasi    — 12 grafik: pie, bar, pareto, heatmap, scatter, box, dll (NEW v1.1)
+  4. Ringkasan      — summary per cabang, top items, pareto
+  5. Konfigurasi    — threshold editor (load/save config.json)
+  6. Bantuan        — instruksi pakai
 
 Entry point: python ui_app.py  (atau jalankan MULAI.bat)
 """
@@ -25,13 +26,18 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+# Set matplotlib backend ke TkAgg SEBELUM import charts (untuk embedded rendering)
+import matplotlib
+matplotlib.use("TkAgg")
+
 # Pastikan module lokal ke-import
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from waste_anomaly.pipeline import run_pipeline
 from waste_anomaly.utils import load_config, CONFIG_PATH
+from waste_anomaly import charts as wa_charts
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 APP_TITLE = "Waste Anomaly Detection"
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_OUTPUT = APP_DIR / "output" / "Waste_Anomaly_Report.xlsx"
@@ -197,20 +203,25 @@ class WasteAnomalyApp(tk.Tk):
         nb.add(tab2, text="2. Hasil")
         self._build_result_tab(tab2)
 
-        # Tab 3: Ringkasan
+        # Tab 3: Visualisasi (NEW v1.1)
         tab3 = ttk.Frame(nb)
-        nb.add(tab3, text="3. Ringkasan")
-        self._build_summary_tab(tab3)
+        nb.add(tab3, text="3. Visualisasi")
+        self._build_viz_tab(tab3)
 
-        # Tab 4: Konfigurasi
+        # Tab 4: Ringkasan
         tab4 = ttk.Frame(nb)
-        nb.add(tab4, text="4. Konfigurasi")
-        self._build_config_tab(tab4)
+        nb.add(tab4, text="4. Ringkasan")
+        self._build_summary_tab(tab4)
 
-        # Tab 5: Bantuan
+        # Tab 5: Konfigurasi
         tab5 = ttk.Frame(nb)
-        nb.add(tab5, text="5. Bantuan")
-        self._build_help_tab(tab5)
+        nb.add(tab5, text="5. Konfigurasi")
+        self._build_config_tab(tab5)
+
+        # Tab 6: Bantuan
+        tab6 = ttk.Frame(nb)
+        nb.add(tab6, text="6. Bantuan")
+        self._build_help_tab(tab6)
 
     # --------------------------------------------------------
     # TAB 1: RUN PIPELINE
@@ -311,7 +322,152 @@ class WasteAnomalyApp(tk.Tk):
         self._preview_dfs: dict[str, "pd.DataFrame"] = {}
 
     # --------------------------------------------------------
-    # TAB 3: RINGKASAN
+    # TAB 3: VISUALISASI (NEW v1.1)
+    # --------------------------------------------------------
+    def _build_viz_tab(self, parent):
+        """Tab Visualisasi: 12 grafik matplotlib embedded, scrollable."""
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=1)
+
+        # Card container
+        c = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground="#e2e8f0", highlightthickness=1)
+        c.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        c.columnconfigure(0, weight=1)
+        c.rowconfigure(1, weight=1)
+
+        # Header + controls
+        hdr = tk.Frame(c, bg=C_CARD)
+        hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 8))
+        tk.Label(hdr, text="Visualisasi & Grafik", font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(side="left")
+        tk.Label(hdr, text="12 grafik analisa • matplotlib • auto-update setelah run pipeline", font=F_HINT, fg="#6B7280", bg=C_CARD).pack(side="left", padx=12)
+
+        # Refresh button
+        self.btn_viz_refresh = ttk.Button(hdr, text="⟳ Refresh Grafik", command=self._refresh_viz)
+        self.btn_viz_refresh.pack(side="right", padx=4)
+        self.btn_viz_export = ttk.Button(hdr, text="Export Semua PNG…", command=self._export_all_charts)
+        self.btn_viz_export.pack(side="right", padx=4)
+
+        # Scrollable canvas untuk charts
+        outer = tk.Frame(c, bg=C_CARD)
+        outer.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(outer, bg=C_CARD, highlightthickness=0)
+        sb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        sb_x = ttk.Scrollbar(outer, orient="horizontal", command=canvas.xview)
+        self._viz_scroll_canvas = canvas
+        self._viz_inner = tk.Frame(canvas, bg=C_CARD)
+        self._viz_inner.bind("<Configure>",
+                              lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=self._viz_inner, anchor="nw")
+        canvas.configure(yscrollcommand=sb.set, xscrollcommand=sb_x.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+        sb_x.grid(row=1, column=0, sticky="ew")
+
+        # Mouse wheel scroll
+        def _on_wheel(e):
+            # Linux: e.num == 4 up, 5 down. Windows/Mac: e.delta
+            if hasattr(e, "num") and e.num:
+                direction = -1 if e.num == 4 else 1
+                canvas.yview_scroll(direction, "units")
+            else:
+                canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_wheel)
+        canvas.bind_all("<Button-4>", _on_wheel)
+        canvas.bind_all("<Button-5>", _on_wheel)
+
+        # Placeholder sebelum run pertama
+        self._viz_placeholder = tk.Label(
+            self._viz_inner,
+            text="\nBelum ada data visualisasi.\n\n Jalankan pipeline di tab '1. Run Pipeline' terlebih dahulu,\nlalu klik '⟳ Refresh Grafik' di atas.\n\n12 grafik akan muncul di sini otomatis.",
+            font=F_BODY, fg="#6B7280", bg=C_CARD, justify="center",
+            padx=40, pady=60,
+        )
+        self._viz_placeholder.pack(fill="x", padx=16, pady=16)
+        self._viz_canvases: list = []
+
+    def _refresh_viz(self):
+        """Re-render semua chart di tab Visualisasi."""
+        # Destroy previous widgets
+        for widget in self._viz_inner.winfo_children():
+            widget.destroy()
+        self._viz_canvases = []
+
+        df = self._preview_dfs.get("Detail")
+        if df is None or df.empty:
+            self._viz_placeholder = tk.Label(
+                self._viz_inner,
+                text="\nBelum ada data visualisasi.\n\nJalankan pipeline di tab '1. Run Pipeline' terlebih dahulu,\nlalu klik '⟳ Refresh Grafik' di atas.\n\n12 grafik akan muncul di sini otomatis.",
+                font=F_BODY, fg="#6B7280", bg=C_CARD, justify="center",
+                padx=40, pady=60,
+            )
+            self._viz_placeholder.pack(fill="x", padx=16, pady=16)
+            return
+
+        # Layout: 2 chart per row (grid)
+        charts_to_render = wa_charts.ALL_CHARTS
+        cols_per_row = 2
+
+        for idx, (title, desc, fn) in enumerate(charts_to_render):
+            row = idx // cols_per_row
+            col = idx % cols_per_row
+
+            # Card per chart
+            card = tk.Frame(self._viz_inner, bg=C_CARD, relief="solid", borderwidth=1,
+                            highlightbackground="#e2e8f0", highlightthickness=1)
+            card.grid(row=row, column=col, sticky="nsew", padx=10, pady=10)
+            card.columnconfigure(0, weight=1)
+            card.rowconfigure(1, weight=1)
+
+            # Title bar
+            title_frame = tk.Frame(card, bg="#f8fafc")
+            title_frame.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 0))
+            tk.Label(title_frame, text=f"📊 {title}", font=(FONT_NAME, 10, "bold"),
+                     fg=C_HEADER, bg="#f8fafc").pack(side="left", padx=8, pady=6)
+            tk.Label(title_frame, text=desc, font=F_HINT, fg="#6B7280",
+                     bg="#f8fafc").pack(side="left", padx=8)
+
+            # Render figure
+            try:
+                fig = fn(df)
+                canvas_widget = wa_charts.embed_figure(card, fig)
+                canvas_widget.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
+                self._viz_canvases.append((title, fig, canvas_widget))
+            except Exception as e:
+                err = tk.Label(card, text=f"Error render:\n{e}",
+                              font=F_BODY, fg="#dc2626", bg=C_CARD, justify="left")
+                err.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
+
+        # Configure grid columns
+        for c in range(cols_per_row):
+            self._viz_inner.columnconfigure(c, weight=1, minsize=420)
+
+        # Auto-switch ke tab Visualisasi (optional)
+        # Tidak otomatis switch — biar user tidak kejut
+
+    def _export_all_charts(self):
+        """Export semua chart ke PNG."""
+        if not self._viz_canvases:
+            messagebox.showinfo("Export", "Belum ada chart. Refresh dulu.")
+            return
+        folder = filedialog.askdirectory(title="Pilih folder untuk simpan PNG")
+        if not folder:
+            return
+        saved = 0
+        for title, fig, _ in self._viz_canvases:
+            safe = title.replace(" ", "_").replace("/", "-").replace("×", "x")
+            path = Path(folder) / f"{safe}.png"
+            try:
+                fig.savefig(path, dpi=150, bbox_inches="tight", facecolor="white")
+                saved += 1
+            except Exception as e:
+                print(f"Failed save {title}: {e}", file=sys.stderr)
+        messagebox.showinfo("Export", f"{saved} chart disimpan ke:\n{folder}")
+
+    # --------------------------------------------------------
+    # TAB 4: RINGKASAN
     # --------------------------------------------------------
     def _build_summary_tab(self, parent):
         parent.columnconfigure(0, weight=1)
@@ -634,6 +790,11 @@ Pattern referensi: https://github.com/anandategarch/Inventory-Adjusment
         # Load preview
         self._load_preview_data(self.last_output_path)
         self._update_summary_tab(summary)
+        # Auto-refresh tab Visualisasi (NEW v1.1)
+        try:
+            self._refresh_viz()
+        except Exception as e:
+            print(f"[viz auto-refresh] {e}", file=sys.stderr)
         messagebox.showinfo(
             "Pipeline Selesai",
             f"Pipeline selesai!\n\n"

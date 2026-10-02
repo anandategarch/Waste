@@ -12,6 +12,7 @@ echo  Menginstall dependencies untuk Waste Anomaly Detection:
 echo    - pandas         (data processing)
 echo    - numpy           (numerical computation)
 echo    - openpyxl        (Excel I/O)
+echo    - matplotlib      (visualisasi grafik)
 echo.
 echo  Tekan ENTER untuk mulai install...
 pause >nul
@@ -19,7 +20,7 @@ pause >nul
 echo.
 echo [1/2] Install Python packages...
 python -m pip install --upgrade pip
-python -m pip install pandas numpy openpyxl
+python -m pip install pandas numpy openpyxl matplotlib
 if errorlevel 1 (
     echo [ERROR] Gagal install Python packages. Cek instalasi Python Anda.
     echo         Pastikan Python 3.10+ terpasang: python --version
@@ -29,7 +30,7 @@ if errorlevel 1 (
 
 echo.
 echo [2/2] Verifikasi instalasi...
-python -c "import pandas, numpy, openpyxl; print('OK: pandas', pandas.__version__, '| numpy', numpy.__version__, '| openpyxl', openpyxl.__version__)"
+python -c "import pandas, numpy, openpyxl, matplotlib; print('OK: pandas', pandas.__version__, '| numpy', numpy.__version__, '| openpyxl', openpyxl.__version__, '| matplotlib', matplotlib.__version__)"
 if errorlevel 1 (
     echo [ERROR] Verifikasi gagal. Coba install ulang manual.
     pause
