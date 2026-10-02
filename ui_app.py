@@ -255,7 +255,7 @@ class WasteAnomalyApp(tk.Tk):
         style.map("Treeview", background=[("selected", "#dbeafe")], foreground=[("selected", C_HEADER)])
 
     # --------------------------------------------------------
-    # HEADER
+    # HEADER (with global refresh button)
     # --------------------------------------------------------
     def _build_header(self):
         hdr = tk.Frame(self, bg=C_HEADER, height=50)
@@ -266,6 +266,46 @@ class WasteAnomalyApp(tk.Tk):
         sub = tk.Label(hdr, text=f"v{APP_VERSION}  •  Replika Power Query M code  •  12 sinyal anomali + drill-down",
                        font=F_HINT, fg="#94a3b8", bg=C_HEADER)
         sub.pack(side="left", padx=8)
+
+        # Global Refresh button — selalu visible di header kanan
+        btn_frame = tk.Frame(hdr, bg=C_HEADER)
+        btn_frame.pack(side="right", padx=12, pady=8)
+        self.btn_global_refresh = tk.Button(
+            btn_frame, text="⟳ Refresh Semua",
+            font=(FONT_NAME, 9, "bold"), fg="white", bg="#0f766e",
+            activebackground="#115e59", activeforeground="white",
+            relief="flat", cursor="hand2", padx=12, pady=4,
+            command=self._global_refresh,
+        )
+        self.btn_global_refresh.pack(side="right")
+        # Tooltip-like label
+        tk.Label(btn_frame, text="Re-render Dashboard + Charts:",
+                 font=F_HINT, fg="#94a3b8", bg=C_HEADER).pack(side="right", padx=4)
+
+    def _global_refresh(self):
+        """Refresh semua tab yang punya chart: Dashboard, Visualisasi, Compare."""
+        df = self._preview_dfs.get("Detail")
+        if df is None or df.empty:
+            messagebox.showinfo("Refresh", "Belum ada data. Run pipeline dulu di tab 'Run Pipeline'.")
+            return
+        # Re-render Dashboard
+        try:
+            self._apply_dashboard_filter()
+        except Exception as e:
+            print(f"[refresh dashboard] {e}", file=sys.stderr)
+        # Re-render Visualisasi gallery
+        try:
+            self._refresh_viz()
+        except Exception as e:
+            print(f"[refresh viz] {e}", file=sys.stderr)
+        # Re-render Compare Cabang
+        try:
+            if hasattr(self, "_compare_chart_frames"):
+                self._render_compare_charts()
+        except Exception as e:
+            print(f"[refresh compare] {e}", file=sys.stderr)
+        # Update status
+        self._set_status(f"✓ Refreshed all charts • {len(df)} rows loaded", "done")
 
     # --------------------------------------------------------
     # TABS

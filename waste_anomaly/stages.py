@@ -46,18 +46,55 @@ def stage_01_source(
 
     1. Drop TOTAL (akan dihitung ulang).
     2. Drop kolom tidak dipakai: PIC, KATEGORI, STATUS, PENYEBAB TERJADINYA WASTE.
-    3. Coerce hari 1..31 ke numeric.
-    4. Filter JENIS in {SUSUT, TRIAL, WASTE}.
+    3. Drop semua derived/output columns (idempotent — pipeline bisa di-run di file output).
+    4. Coerce hari 1..31 ke numeric.
+    5. Filter JENIS in {SUSUT, TRIAL, WASTE}.
     """
     out = df.copy()
 
-    # Drop TOTAL (akan dihitung ulang)
-    if "TOTAL" in out.columns:
-        out = out.drop(columns=["TOTAL"])
+    # Drop semua derived/output columns supaya pipeline idempotent.
+    # M code asli hanya drop TOTAL, tapi kalau user load file OUTPUT M code,
+    # kolom-kolom hasil pipeline sudah ada → collision saat recompute.
+    # Solusi: drop semua derived columns (akan dihitung ulang oleh stages berikutnya).
+    derived_cols_to_drop = [
+        # Stage 1 original drops
+        "PIC", "KATEGORI", "STATUS", "PENYEBAB TERJADINYA WASTE", "TOTAL",
+        # Stage 2 outputs
+        "MAX", "AVG", "MAX TOTAL", "AVG TOTAL", "TOTAL BOM", "% to BOM",
+        "Status2", "Count Hari",
+        "AVG AKTIF", "MEDIAN AKTIF", "SECOND MAX", "HARI MAX",
+        "MAX - AVG", "MAX - AVG AKTIF",
+        "MAX / AVG", "MAX / AVG AKTIF", "MAX / MEDIAN AKTIF", "MAX / SECOND MAX",
+        "MAX SHARE", "NILAI HARI TERAKHIR", "LAST DAY SHARE",
+        "SINGLE DAY", "SCALE SIGNAL",
+        # Stage 3 outputs
+        "KETERANGAN GABUNGAN", "KONTRIBUSI TERBESAR", "SOURCE DATA GABUNGAN",
+        # Stage 5 outputs
+        "Rill % to BOM",
+        # Stage 6 outputs
+        "PEER COUNT", "PEER MEDIAN TOTAL", "PEER MEDIAN MAX",
+        "TOTAL / PEER MEDIAN", "MAX / PEER MEDIAN MAX",
+        # Stage 7 outputs
+        "TopTotal", "TopBOM",
+        # Stage 9/10 outputs
+        "HELPER",
+        # Stage 11 outputs
+        "MAX / BOM", "TOTAL / BOM",
+        "ANOMALY SCORE", "ANOMALY STATUS", "ANOMALY REASONS",
+        "KATEGORI ANOMALI", "RANGKING WASTE",
+        # Stage 9 helper columns (dari DATABASE_SATUAN)
+        "CANCEL NOTA", "SUSUT", "TRIAL", "HANDLING",
+        "KUALITAS EKSTERNAL", "KUALITAS", "KUALITAS INTERNAL",
+        "EKSTERNAL", "INTERNAL", "ALAT MESIN", "OVERSTOCK",
+    ]
+    cols_to_drop = [c for c in derived_cols_to_drop if c in out.columns]
+    if cols_to_drop:
+        out = out.drop(columns=cols_to_drop)
 
-    # Drop kolom tidak dipakai
-    drop_cols = ["PIC", "KATEGORI", "STATUS", "PENYEBAB TERJADINYA WASTE"]
-    out = out.drop(columns=[c for c in drop_cols if c in out.columns])
+    # Sanity: pastikan tidak ada duplicate columns tersisa
+    if out.columns.duplicated().any():
+        # Drop duplicate columns (keep first)
+        out = out.loc[:, ~out.columns.duplicated()]
 
     # Coerce hari 1..31 ke numeric
     all_day_cols = [str(i) for i in range(1, 32) if str(i) in out.columns]
@@ -71,7 +108,7 @@ def stage_01_source(
     ]
     for c in text_cols:
         if c in out.columns:
-            out[c] = out[c].astype(str).replace("nan", None).replace("None", None)
+            out[c] = out[c].astype("string")
             out[c] = out[c].where(out[c].notna() & (out[c] != ""), None)
 
     # Filter JENIS
@@ -290,8 +327,17 @@ def stage_03_reason(
         })
     rs = pd.DataFrame(rs_rows)
 
-    # Merge back to df (left join)
-    out = df.merge(rs, on=group_keys_short, how="left")
+    # Merge back to df (left join) — defensive: drop kolom yang akan di-merge dulu
+    # supaya tidak terjadi suffix _x/_y kalau df sudah punya kolom itu (idempotent case)
+    cols_to_merge = ["KETERANGAN GABUNGAN", "SOURCE DATA GABUNGAN", "KONTRIBUSI TERBESAR"]
+    df_clean = df.copy()
+    for c in cols_to_merge:
+        if c in df_clean.columns:
+            df_clean = df_clean.drop(columns=[c])
+    out = df_clean.merge(rs, on=group_keys_short, how="left")
+    # Defensive: pastikan tidak ada duplicate columns
+    if out.columns.duplicated().any():
+        out = out.loc[:, ~out.columns.duplicated()]
     return out
 
 
@@ -321,7 +367,15 @@ def stage_04_group(
         .agg({"TOTAL": "max", "AVG": "max"})
         .rename(columns={"TOTAL": "MAX TOTAL", "AVG": "AVG TOTAL"})
     )
-    out = df.merge(gt, on=group_keys, how="left")
+    # Defensive: drop MAX TOTAL/AVG TOTAL dari df kalau sudah ada (idempotent case)
+    df_clean = df.copy()
+    for c in ["MAX TOTAL", "AVG TOTAL"]:
+        if c in df_clean.columns:
+            df_clean = df_clean.drop(columns=[c])
+    out = df_clean.merge(gt, on=group_keys, how="left")
+    # Defensive: pastikan tidak ada duplicate columns
+    if out.columns.duplicated().any():
+        out = out.loc[:, ~out.columns.duplicated()]
     return out
 
 
@@ -351,6 +405,9 @@ def stage_05_bom(
     bom["Nama Barang"] = bom["Nama Barang"].astype(str).str.strip()
 
     df_join = df.copy()
+    # Defensive: drop TOTAL BOM dari df kalau sudah ada (idempotent), supaya merge tidak buat _x/_y
+    if "TOTAL BOM" in df_join.columns:
+        df_join = df_join.drop(columns=["TOTAL BOM"])
     df_join["NAMA RESTO"] = df_join["NAMA RESTO"].astype(str).str.strip()
     df_join["NAMA BARANG"] = df_join["NAMA BARANG"].astype(str).str.strip()
 
@@ -370,6 +427,9 @@ def stage_05_bom(
         out["TOTAL"] / out["TOTAL BOM"],
         0.0,
     )
+    # Defensive: pastikan tidak ada duplicate columns pasca-merge
+    if out.columns.duplicated().any():
+        out = out.loc[:, ~out.columns.duplicated()]
     return out
 
 
@@ -414,7 +474,15 @@ def stage_06_peer(
         )
     )
 
-    out = df.merge(peer_stats, on=keys_short, how="left")
+    # Defensive: drop peer columns dari df kalau sudah ada (idempotent case)
+    df_clean = df.copy()
+    for c in ["PEER COUNT", "PEER MEDIAN TOTAL", "PEER MEDIAN MAX"]:
+        if c in df_clean.columns:
+            df_clean = df_clean.drop(columns=[c])
+    out = df_clean.merge(peer_stats, on=keys_short, how="left")
+    # Defensive: pastikan tidak ada duplicate columns
+    if out.columns.duplicated().any():
+        out = out.loc[:, ~out.columns.duplicated()]
     return out
 
 
@@ -457,7 +525,15 @@ def stage_07_top(
         .reset_index()
     )
 
-    out = df.merge(top_df, on=keys, how="left")
+    # Defensive: drop TopTotal/TopBOM dari df kalau sudah ada (idempotent case)
+    df_clean = df.copy()
+    for c in ["TopTotal", "TopBOM"]:
+        if c in df_clean.columns:
+            df_clean = df_clean.drop(columns=[c])
+    out = df_clean.merge(top_df, on=keys, how="left")
+    # Defensive: pastikan tidak ada duplicate columns
+    if out.columns.duplicated().any():
+        out = out.loc[:, ~out.columns.duplicated()]
     return out
 
 
@@ -510,6 +586,10 @@ def stage_09_satuan(
     # Strip & uppercase-lowercase untuk matching
     sat["NAMA ITEM"] = sat["NAMA ITEM"].astype(str).str.strip()
     df_join = df.copy()
+    # Defensive: drop helper cols dari df kalau sudah ada (idempotent case)
+    for c in expected_helper_cols:
+        if c in df_join.columns:
+            df_join = df_join.drop(columns=[c])
     df_join["NAMA BARANG"] = df_join["NAMA BARANG"].astype(str).str.strip()
 
     out = df_join.merge(
@@ -525,6 +605,9 @@ def stage_09_satuan(
     for c in expected_helper_cols:
         if c not in out.columns:
             out[c] = np.nan
+    # Defensive: pastikan tidak ada duplicate columns
+    if out.columns.duplicated().any():
+        out = out.loc[:, ~out.columns.duplicated()]
     return out
 
 
@@ -558,9 +641,16 @@ def stage_10_helper(
     })
 
     def _resolve_helper(row: pd.Series):
+        # Defensive helper: kalau ada duplicate columns, row.get() return Series.
+        # Paksa ambil scalar value (iloc[0]) supaya float() tidak error.
+        def _scalar(v):
+            if isinstance(v, pd.Series):
+                return v.iloc[0] if len(v) > 0 else None
+            return v
+
         # 1) % to BOM — INDEPENDEN dari KETERANGAN (sesuai M code)
-        total_value = row.get("TOTAL")
-        bom_value = row.get("TOTAL BOM")
+        total_value = _scalar(row.get("TOTAL"))
+        bom_value = _scalar(row.get("TOTAL BOM"))
         if (total_value is None or bom_value is None
                 or (isinstance(bom_value, float) and np.isnan(bom_value))):
             pct_bom = "Cek"
@@ -574,13 +664,13 @@ def stage_10_helper(
                 pct_bom = None
 
         # 2) HELPER & STATUS — bergantung KETERANGAN
-        ket = row.get("KETERANGAN")
+        ket = _scalar(row.get("KETERANGAN"))
         if ket is None or (isinstance(ket, float) and np.isnan(ket)) or str(ket).strip() == "":
             return None, None, pct_bom
         col = cat_map.get(str(ket).strip())
         if col is None or col not in df.columns:
             return None, None, pct_bom
-        helper_value = row.get(col)
+        helper_value = _scalar(row.get(col))
         # Coerce ke numerik (None stays None)
         try:
             if helper_value is None or (isinstance(helper_value, float) and np.isnan(helper_value)):
@@ -590,7 +680,7 @@ def stage_10_helper(
         except (ValueError, TypeError):
             helper_value_num = None
         # STATUS logic dari M code
-        max_value = row.get("MAX")
+        max_value = _scalar(row.get("MAX"))
         max_value_num = float(max_value) if max_value is not None and not (isinstance(max_value, float) and np.isnan(max_value)) else 0
         if helper_value_num is None:
             status_value = None
@@ -601,9 +691,17 @@ def stage_10_helper(
                 status_value = "Tidak Sesuai"
         return helper_value_num, status_value, pct_bom
 
-    helper_records = df.apply(_resolve_helper, axis=1, result_type="expand")
+    # Defensive: drop HELPER/STATUS/% to BOM dari df kalau sudah ada (idempotent case)
+    df_clean = df.copy()
+    for c in ["HELPER", "STATUS", "% to BOM"]:
+        if c in df_clean.columns:
+            df_clean = df_clean.drop(columns=[c])
+    helper_records = df_clean.apply(_resolve_helper, axis=1, result_type="expand")
     helper_records.columns = ["HELPER", "STATUS", "% to BOM"]
-    out = pd.concat([df.reset_index(drop=True), helper_records.reset_index(drop=True)], axis=1)
+    out = pd.concat([df_clean.reset_index(drop=True), helper_records.reset_index(drop=True)], axis=1)
+    # Defensive: pastikan tidak ada duplicate columns
+    if out.columns.duplicated().any():
+        out = out.loc[:, ~out.columns.duplicated()]
     return out
 
 
