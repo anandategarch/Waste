@@ -30,7 +30,7 @@
   "default_key_akhir": 31,
 
   "input_sheets": {
-    "rekap_mentah": ["REKAP_MENTAH", "Rekap Mentah", "REKAP", "Sheet1"],
+    "rekap_mentah": ["REKAP_MENTAH", "Rekap Mentah", "REKAP", "Sheet1", "DATA_WASTE", "Data Waste", "DATA"],
     "bom": ["BOM", "2  22 05", "MASTER BOM", "Master BOM"],
     "database_satuan": ["DATABASE_SATUAN", "Database Satuan", "SATUAN"]
   },

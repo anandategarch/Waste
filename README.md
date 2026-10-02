@@ -11,15 +11,26 @@ Jalankan `SETUP.bat` di root folder. Install dependencies:
 - matplotlib (visualisasi grafik)
 
 ### 2. Siapkan Workbook Input
-Satu file Excel `.xlsx` berisi **3 sheet** (atau named range):
+
+**Cara termudah — pakai template standar:**
+
+Copy `data/template_REKAP_MENTAH.xlsx` ke folder kerja Anda. Template sudah berisi 4 sheet dengan struktur standar:
+- **PETUNJUK** — instruksi cara pakai
+- **REKAP_MENTAH** — 53 kolom (warna hijau = input wajib, abu-abu = output auto)
+- **BOM** — opsional, untuk sinyal BOM
+- **DATABASE_SATUAN** — opsional, untuk STATUS Sesuai/Tidak Sesuai
+
+Isi sheet **REKAP_MENTAH** dengan data waste harian Anda (kolom `1`..`31` = qty waste per hari). JENIS wajib `WASTE`, `SUSUT`, atau `TRIAL`.
+
+**Atau pakai workbook existing dengan struktur sama:**
 
 | Sheet | Nama Kandidat | Wajib? | Kolom |
 |-------|---------------|--------|-------|
-| REKAP_MENTAH | `REKAP_MENTAH`, `Rekap Mentah`, `REKAP`, `Sheet1` | ✅ Wajib | `JENIS`, `NAMA BARANG`, `KETERANGAN`, `SATUAN`, `NAMA RESTO`, `SOURCE DATA`, `1`..`31` (hari), `KATEGORI`, `STATUS`, `PIC`, `PENYEBAB TERJADINYA WASTE`, `TOTAL` |
+| REKAP_MENTAH | `REKAP_MENTAH`, `Rekap Mentah`, `REKAP`, `Sheet1`, `DATA_WASTE`, `DATA` | ✅ Wajib | `JENIS`, `NAMA BARANG`, `KETERANGAN`, `SATUAN`, `NAMA RESTO`, `SOURCE DATA`, `1`..`31` (hari), `KATEGORI`, `STATUS`, `PIC`, `PENYEBAB TERJADINYA WASTE`, `TOTAL` |
 | BOM | `BOM`, `2  22 05`, `MASTER BOM` | Opsional | `Nomor #`, `Nama Barang`, `TOTAL BOM` |
 | DATABASE_SATUAN | `DATABASE_SATUAN`, `Database Satuan`, `SATUAN` | Opsional | `NAMA ITEM`, `SUSUT`, `TRIAL`, `HANDLING`, `KUALITAS EKSTERNAL`, `KUALITAS`, `KUALITAS INTERNAL`, `EKSTERNAL`, `INTERNAL`, `ALAT MESIN`, `OVERSTOCK`, `CANCEL NOTA` |
 
-> Sheet BOM & DATABASE_SATUAN opsional — kalau tidak ada, sinyal BOM dan STATUS akan di-skip tapi pipeline tetap jalan.
+> **Idempotent:** Pipeline bisa di-run di file yang sudah berisi output M code (kolom MAX, AVG, KETERANGAN GABUNGAN, dll) — semua derived columns akan di-drop & dihitung ulang otomatis oleh Stage 1.
 
 ### 3. Jalankan (setiap kali)
 Jalankan `MULAI.bat`. UI terbuka dengan **8 tab**:
@@ -191,12 +202,13 @@ Waste/
 ├── .gitignore
 ├── ui_app.py                       ← UI Tkinter professional dashboard (v2.1)
 ├── make_sample.py                  ← Generate sample workbook untuk testing
+├── make_template.py                ← Generate template kosong dengan struktur standar (NEW v2.1.1)
 ├── waste_anomaly/
 │   ├── __init__.py
 │   ├── config.json                 ← Thresholds + sheet name candidates
 │   ├── pipeline.py                 ← Orchestrator 14 stage
 │   ├── loader.py                   ← Excel loaders (REKAP_MENTAH + BOM + DATABASE_SATUAN)
-│   ├── stages.py                   ← 14 stage replika M code (audited v2.0)
+│   ├── stages.py                   ← 14 stage replika M code (idempotent v2.1.1)
 │   ├── signals.py                  ← 12 sinyal anomali + composite score (max 19)
 │   ├── charts.py                   ← 12 static chart matplotlib
 │   ├── dashboard.py                ← 6 interactive chart + 4 comparison chart (NEW v2.1)
@@ -204,7 +216,8 @@ Waste/
 │   ├── exporter.py                 ← Multi-sheet xlsx writer + formatting
 │   └── utils.py                    ← Helper (Number.From, List.Sum, dll)
 ├── data/                           ← Letakkan workbook input di sini
-│   └── README.md
+│   ├── README.md
+│   └── template_REKAP_MENTAH.xlsx  ← Template standar (NEW v2.1.1) — copy & isi
 ├── output/                         ← Output Excel tersimpan di sini
 │   └── .gitkeep
 └── filters.json                    ← (auto-generated) saved filter profiles
@@ -239,9 +252,13 @@ Waste/
 
 1. Download ZIP repo: https://github.com/anandategarch/Waste/archive/refs/heads/main.zip
 2. Ekstrak
-3. Letakkan workbook Excel Anda di folder `data/`
-4. Jalankan `SETUP.bat` (sekali saja)
-5. Jalankan `MULAI.bat` (setiap kali)
+3. Copy `data/template_REKAP_MENTAH.xlsx` ke lokasi kerja Anda, rename sesuai kebutuhan
+4. Isi sheet `REKAP_MENTAH` dengan data waste harian (kolom 1-31 = qty per hari)
+5. (Opsional) Isi sheet `BOM` dan `DATABASE_SATUAN` untuk aktifkan sinyal BOM & STATUS
+6. Jalankan `SETUP.bat` (sekali saja)
+7. Jalankan `MULAI.bat` → Browse file Anda → Mulai Pipeline
+
+> **Tip:** Anda juga bisa langsung pakai file `DATA_WASTE.xlsx` yang sudah ada (struktur 53 kolom) — pipeline akan auto-drop derived columns & recompute.
 
 ## CLI Mode (tanpa UI)
 

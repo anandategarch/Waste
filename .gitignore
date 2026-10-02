@@ -35,6 +35,7 @@ data/*.xlsx
 data/*.xlsm
 data/*.xls
 !data/README.md
+!data/template_REKAP_MENTAH.xlsx
 !data/sample_template.xlsx
 
 # Logs
