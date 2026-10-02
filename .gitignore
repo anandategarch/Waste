@@ -30,13 +30,11 @@ output/*.log
 # Filter profiles (user-specific, auto-generated)
 filters.json
 
-# Sample data (jangan commit data asli)
+# Sample data (jangan commit data asli — DATA_WASTE.xlsx user-specific)
 data/*.xlsx
 data/*.xlsm
 data/*.xls
 !data/README.md
-!data/template_REKAP_MENTAH.xlsx
-!data/sample_template.xlsx
 
 # Logs
 *.log

@@ -1,30 +1,22 @@
-# Folder Data
+# Folder Data (Opsional)
 
-Letakkan workbook Excel input Anda di sini.
+Letakkan `DATA_WASTE.xlsx` Anda di sini (atau di folder mana saja — browse via UI saat run pipeline).
 
-## Template Standar (NEW v2.1.1)
+## Workflow Anda
 
-File `template_REKAP_MENTAH.xlsx` adalah **template standar** untuk input pipeline. Copy file ini, rename sesuai kebutuhan, lalu isi.
+```
+1. Query data dari sistem (Accurate / database / dll)
+2. Olah di Excel (manual / Power Query / formula)
+3. Save as DATA_WASTE.xlsx (struktur 53 kolom standar)
+4. Replace file lama (overwrite / copy paste)
+5. Run pipeline via MULAI.bat → Browse file → Mulai
+```
 
-## Format yang Didukung
+## Format Standar — `DATA_WASTE.xlsx` (53 kolom)
 
-- `.xlsx` (recommended)
-- `.xlsm`
-- `.xls` (legacy)
+Pipeline idempotent — bisa di-run di file yang sudah berisi output M code (kolom MAX, AVG, KETERANGAN GABUNGAN, dll). Stage 1 akan auto-drop semua derived columns & recompute dari kolom hari 1..31.
 
-## Sheet yang Diperlukan
-
-| Sheet | Nama Kandidat | Wajib? |
-|-------|---------------|--------|
-| REKAP_MENTAH | `REKAP_MENTAH`, `Rekap Mentah`, `REKAP`, `Sheet1`, `DATA_WASTE`, `DATA` | ✅ Wajib |
-| BOM | `BOM`, `2  22 05`, `MASTER BOM` | Opsional |
-| DATABASE_SATUAN | `DATABASE_SATUAN`, `Database Satuan`, `SATUAN` | Opsional |
-
-## Struktur REKAP_MENTAH (53 kolom)
-
-Template memakai struktur yang sama dengan `DATA_WASTE.xlsx` (output M code user). Kolom dibagi 2 warna:
-
-### Warna Hijau (USER WAJIB ISI)
+### Kolom Input Wajib (user isi)
 | Kolom | Tipe | Contoh |
 |-------|------|--------|
 | SOURCE DATA | text | WASTE BAHAN DAN PACKAGING |
@@ -35,31 +27,27 @@ Template memakai struktur yang sama dengan `DATA_WASTE.xlsx` (output M code user
 | SATUAN | text | GR, KG, PORSI |
 | 1 .. 31 | number | qty waste untuk hari ke-N (0 kalau tidak ada) |
 
-### Warna Abu-abu (OUTPUT — biarkan kosong, pipeline akan hitung)
-| Kolom | Sumber |
-|-------|--------|
-| STATUS, HELPER, MAX TOTAL, AVG TOTAL, TOTAL BOM, % to BOM | Output Stage 1-10 |
-| TOTAL, AVG, MAX, Status2, Count Hari | Output Stage 2 |
-| KETERANGAN GABUNGAN, KONTRIBUSI TERBESAR, SOURCE DATA GABUNGAN | Output Stage 3 |
-| RANGKING WASTE, Rill % to BOM | Output Stage 5-11 |
+### Kolom Output (boleh kosong, pipeline akan hitung ulang)
+STATUS, HELPER, MAX TOTAL, AVG TOTAL, TOTAL BOM, % to BOM, TOTAL, AVG, MAX, Status2, KETERANGAN GABUNGAN, KONTRIBUSI TERBESAR, SOURCE DATA GABUNGAN, Count Hari, RANGKING WASTE, Rill % to BOM
 
-## Cara Pakai Template
+## Sheet Name Detection
 
-1. Copy `template_REKAP_MENTAH.xlsx` ke folder kerja Anda
-2. Rename (mis. `Waste_2025-09.xlsx`)
-3. Buka di Excel
-4. Sheet **PETUNJUK** berisi instruksi lengkap (baca dulu)
-5. Sheet **REKAP_MENTAH**:
-   - Hapus sample row (baris ke-2)
-   - Isi data waste Anda mulai baris ke-2
-   - Kolom hijau WAJIB diisi, kolom abu-abu BIARKAN KOSONG
-6. (Opsional) Sheet **BOM**: isi kalau mau sinyal BOM aktif
-7. (Opsional) Sheet **DATABASE_SATUAN**: isi kalau mau STATUS aktif
-8. Save file
-9. Jalankan `MULAI.bat` → Browse file Anda → Mulai Pipeline
+Loader auto-detect sheet berikut (case-insensitive):
+- `REKAP_MENTAH`, `Rekap Mentah`, `REKAP`, `Sheet1`, `DATA_WASTE`, `Data Waste`, `DATA`
 
-## Tips
+Kalau nama sheet Anda beda, edit `waste_anomaly/config.json` → `input_sheets.rekap_mentah` untuk tambah nama kandidat.
 
-- Kalau workbook Anda punya nama sheet custom, edit `waste_anomaly/config.json` → `input_sheets` untuk tambah nama kandidat.
-- Kalau kolom BOM/SATUAN punya nama lain, edit section `bom_columns` / `satuan_columns`.
-- **Idempotent**: pipeline bisa di-run di file output sendiri (mis. `Waste_Anomaly_Report.xlsx`) — semua derived columns akan di-drop & dihitung ulang.
+## Sheet Opsional (untuk sinyal BOM & STATUS)
+
+| Sheet | Nama Kandidat | Kolom |
+|-------|---------------|-------|
+| BOM | `BOM`, `2  22 05`, `MASTER BOM` | `Nomor #` (= NAMA RESTO), `Nama Barang` (= NAMA BARANG), `TOTAL BOM` |
+| DATABASE_SATUAN | `DATABASE_SATUAN`, `Database Satuan`, `SATUAN` | `NAMA ITEM` (= NAMA BARANG), 11 kolom kategori (CANCEL NOTA, SUSUT, TRIAL, HANDLING, KUALITAS EKSTERNAL, KUALITAS, KUALITAS INTERNAL, EKSTERNAL, INTERNAL, ALAT MESIN, OVERSTOCK) |
+
+Kalau sheet BOM/DATABASE_SATUAN tidak ada, sinyal BOM (S6/S7) & STATUS (Sesuai/Tidak Sesuai) tidak akan trigger tapi pipeline tetap jalan.
+
+## Format yang Didukung
+
+- `.xlsx` (recommended)
+- `.xlsm`
+- `.xls` (legacy)

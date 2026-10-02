@@ -10,27 +10,41 @@ Jalankan `SETUP.bat` di root folder. Install dependencies:
 - openpyxl (Excel I/O)
 - matplotlib (visualisasi grafik)
 
-### 2. Siapkan Workbook Input
+### 2. Siapkan Workbook Input — `DATA_WASTE.xlsx`
 
-**Cara termudah — pakai template standar:**
+**Workflow Anda:**
+```
+Query data → Olah di Excel → Save as DATA_WASTE.xlsx → Replace file lama → Run pipeline
+```
 
-Copy `data/template_REKAP_MENTAH.xlsx` ke folder kerja Anda. Template sudah berisi 4 sheet dengan struktur standar:
-- **PETUNJUK** — instruksi cara pakai
-- **REKAP_MENTAH** — 53 kolom (warna hijau = input wajib, abu-abu = output auto)
-- **BOM** — opsional, untuk sinyal BOM
-- **DATABASE_SATUAN** — opsional, untuk STATUS Sesuai/Tidak Sesuai
+**Format standar input = `DATA_WASTE.xlsx`** (53 kolom). Anda olah data di Excel dulu (manual / Power Query / formula), lalu save dengan struktur standar ini. Pipeline idempotent — bisa di-run di file yang sudah berisi output sekalipun, semua derived columns akan di-drop & dihitung ulang otomatis.
 
-Isi sheet **REKAP_MENTAH** dengan data waste harian Anda (kolom `1`..`31` = qty waste per hari). JENIS wajib `WASTE`, `SUSUT`, atau `TRIAL`.
+**Letakkan `DATA_WASTE.xlsx` di mana saja** (folder Downloads, Documents, dll). Browse lewat UI saat run pipeline.
 
-**Atau pakai workbook existing dengan struktur sama:**
+**Struktur 53 kolom yang diharapkan:**
 
-| Sheet | Nama Kandidat | Wajib? | Kolom |
-|-------|---------------|--------|-------|
-| REKAP_MENTAH | `REKAP_MENTAH`, `Rekap Mentah`, `REKAP`, `Sheet1`, `DATA_WASTE`, `DATA` | ✅ Wajib | `JENIS`, `NAMA BARANG`, `KETERANGAN`, `SATUAN`, `NAMA RESTO`, `SOURCE DATA`, `1`..`31` (hari), `KATEGORI`, `STATUS`, `PIC`, `PENYEBAB TERJADINYA WASTE`, `TOTAL` |
-| BOM | `BOM`, `2  22 05`, `MASTER BOM` | Opsional | `Nomor #`, `Nama Barang`, `TOTAL BOM` |
-| DATABASE_SATUAN | `DATABASE_SATUAN`, `Database Satuan`, `SATUAN` | Opsional | `NAMA ITEM`, `SUSUT`, `TRIAL`, `HANDLING`, `KUALITAS EKSTERNAL`, `KUALITAS`, `KUALITAS INTERNAL`, `EKSTERNAL`, `INTERNAL`, `ALAT MESIN`, `OVERSTOCK`, `CANCEL NOTA` |
+| # | Kolom | Wajib? | Contoh |
+|---|-------|--------|--------|
+| 0-8 | STATUS, HELPER, MAX TOTAL, AVG TOTAL, TOTAL BOM, % to BOM, TOTAL, AVG, MAX | Opsional (akan dihitung ulang) | kosong / 0 |
+| 9 | SOURCE DATA | ✅ Wajib | WASTE BAHAN DAN PACKAGING |
+| 10 | JENIS | ✅ Wajib (filter: WASTE/SUSUT/TRIAL) | WASTE |
+| 11 | KETERANGAN | ✅ Wajib | Alat/ Mesin, Cancel Nota, Eksternal, Internal, Over Stock, Handling, Kualitas, dll |
+| 12 | NAMA BARANG | ✅ Wajib | ADONAN GORENG MEKAR |
+| 13 | NAMA RESTO | ✅ Wajib | B.1001.MLGPAR |
+| 14 | SATUAN | ✅ Wajib | GR, KG, PORSI |
+| 15-45 | 1 .. 31 | ✅ Wajib (qty waste per hari) | 0 / 50 / 100 |
+| 46-52 | Status2, KETERANGAN GABUNGAN, KONTRIBUSI TERBESAR, SOURCE DATA GABUNGAN, Count Hari, RANGKING WASTE, Rill % to BOM | Opsional (akan dihitung ulang) | kosong |
 
-> **Idempotent:** Pipeline bisa di-run di file yang sudah berisi output M code (kolom MAX, AVG, KETERANGAN GABUNGAN, dll) — semua derived columns akan di-drop & dihitung ulang otomatis oleh Stage 1.
+> **Idempotent:** Kalau ada kolom output (MAX, AVG, KETERANGAN GABUNGAN, dll) di file Anda — tidak masalah. Stage 1 akan auto-drop semua derived columns & recompute dari kolom hari 1..31.
+
+**Opsional — sheet tambahan untuk aktifkan sinyal BOM & STATUS:**
+
+| Sheet | Nama Kandidat | Kolom |
+|-------|---------------|-------|
+| BOM | `BOM`, `2  22 05`, `MASTER BOM` | `Nomor #` (= NAMA RESTO), `Nama Barang` (= NAMA BARANG), `TOTAL BOM` |
+| DATABASE_SATUAN | `DATABASE_SATUAN`, `Database Satuan`, `SATUAN` | `NAMA ITEM`, `SUSUT`, `TRIAL`, `HANDLING`, `KUALITAS EKSTERNAL`, `KUALITAS`, `KUALITAS INTERNAL`, `EKSTERNAL`, `INTERNAL`, `ALAT MESIN`, `OVERSTOCK`, `CANCEL NOTA` |
+
+Kalau sheet BOM/DATABASE_SATUAN tidak ada, sinyal BOM (S6/S7) & STATUS (Sesuai/Tidak Sesuai) tidak akan trigger tapi pipeline tetap jalan.
 
 ### 3. Jalankan (setiap kali)
 Jalankan `MULAI.bat`. UI terbuka dengan **8 tab**:
@@ -202,22 +216,20 @@ Waste/
 ├── .gitignore
 ├── ui_app.py                       ← UI Tkinter professional dashboard (v2.1)
 ├── make_sample.py                  ← Generate sample workbook untuk testing
-├── make_template.py                ← Generate template kosong dengan struktur standar (NEW v2.1.1)
 ├── waste_anomaly/
 │   ├── __init__.py
 │   ├── config.json                 ← Thresholds + sheet name candidates
 │   ├── pipeline.py                 ← Orchestrator 14 stage
-│   ├── loader.py                   ← Excel loaders (REKAP_MENTAH + BOM + DATABASE_SATUAN)
+│   ├── loader.py                   ← Excel loaders (auto-detect sheet name)
 │   ├── stages.py                   ← 14 stage replika M code (idempotent v2.1.1)
 │   ├── signals.py                  ← 12 sinyal anomali + composite score (max 19)
 │   ├── charts.py                   ← 12 static chart matplotlib
-│   ├── dashboard.py                ← 6 interactive chart + 4 comparison chart (NEW v2.1)
-│   ├── filters.py                  ← Filter profile persistence (NEW v2.1)
+│   ├── dashboard.py                ← 6 interactive chart + 4 comparison chart
+│   ├── filters.py                  ← Filter profile persistence
 │   ├── exporter.py                 ← Multi-sheet xlsx writer + formatting
 │   └── utils.py                    ← Helper (Number.From, List.Sum, dll)
-├── data/                           ← Letakkan workbook input di sini
-│   ├── README.md
-│   └── template_REKAP_MENTAH.xlsx  ← Template standar (NEW v2.1.1) — copy & isi
+├── data/                           ← (opsional) letakkan DATA_WASTE.xlsx di sini
+│   └── README.md
 ├── output/                         ← Output Excel tersimpan di sini
 │   └── .gitkeep
 └── filters.json                    ← (auto-generated) saved filter profiles
@@ -252,13 +264,15 @@ Waste/
 
 1. Download ZIP repo: https://github.com/anandategarch/Waste/archive/refs/heads/main.zip
 2. Ekstrak
-3. Copy `data/template_REKAP_MENTAH.xlsx` ke lokasi kerja Anda, rename sesuai kebutuhan
-4. Isi sheet `REKAP_MENTAH` dengan data waste harian (kolom 1-31 = qty per hari)
-5. (Opsional) Isi sheet `BOM` dan `DATABASE_SATUAN` untuk aktifkan sinyal BOM & STATUS
-6. Jalankan `SETUP.bat` (sekali saja)
-7. Jalankan `MULAI.bat` → Browse file Anda → Mulai Pipeline
+3. Jalankan `SETUP.bat` (sekali saja)
+4. Siapkan `DATA_WASTE.xlsx` Anda (query → olah di Excel → save dengan struktur 53 kolom standar)
+5. Jalankan `MULAI.bat` → Browse `DATA_WASTE.xlsx` Anda → Mulai Pipeline
 
-> **Tip:** Anda juga bisa langsung pakai file `DATA_WASTE.xlsx` yang sudah ada (struktur 53 kolom) — pipeline akan auto-drop derived columns & recompute.
+**Untuk run berikutnya (data baru):**
+1. Replace `DATA_WASTE.xlsx` Anda dengan file baru (overwrite / copy paste)
+2. Jalankan `MULAI.bat` → Browse file → Mulai Pipeline
+
+> **Tip:** Pipeline idempotent. Bisa di-run di file output sendiri (`Waste_Anomaly_Report.xlsx`) atau file `DATA_WASTE.xlsx` yang sudah berisi output M code — semua derived columns akan di-drop & dihitung ulang oleh Stage 1.
 
 ## CLI Mode (tanpa UI)
 
