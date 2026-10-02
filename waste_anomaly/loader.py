@@ -184,6 +184,10 @@ def load_bom(
     out["Nama Barang"] = df[item_col]
     out["TOTAL BOM"] = pd.to_numeric(df[total_col], errors="coerce")
 
+    # Strip whitespace sebelum dedup (konsisten dengan stage_05_bom join)
+    out["Nomor #"] = out["Nomor #"].astype(str).str.strip()
+    out["Nama Barang"] = out["Nama Barang"].astype(str).str.strip()
+
     # Distinct by (Nomor #, Nama Barang) — setara Table.Distinct di M
     out = out.drop_duplicates(subset=["Nomor #", "Nama Barang"], keep="first")
     if logger:
@@ -227,6 +231,8 @@ def load_database_satuan(
             logger("[loader] WARNING: DATABASE_SATUAN tidak punya kolom NAMA ITEM")
         return pd.DataFrame(columns=["NAMA ITEM"])
     out = df.rename(columns={item_col: "NAMA ITEM"})
+    # Strip whitespace sebelum dedup (konsisten dengan stage_09_satuan join)
+    out["NAMA ITEM"] = out["NAMA ITEM"].astype(str).str.strip()
     # Distinct by NAMA ITEM (setara Table.Distinct)
     out = out.drop_duplicates(subset=["NAMA ITEM"], keep="first")
     if logger:

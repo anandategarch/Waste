@@ -162,8 +162,8 @@ def _write_sheet(
     # Body
     for r_idx, row in enumerate(df.itertuples(index=False, name=None), start=2):
         for c_idx, val in enumerate(row, start=1):
-            # Handle NaN -> empty
-            if val is None or (isinstance(val, float) and np.isnan(val)):
+            # Handle NaN/pd.NA/None -> empty
+            if val is None or val is pd.NA or (isinstance(val, float) and np.isnan(val)):
                 v = None
             elif isinstance(val, (np.integer,)):
                 v = int(val)
@@ -187,8 +187,8 @@ def _write_sheet(
     # Auto-width (approximate; cap at 40)
     for c_idx, col_name in enumerate(cols, start=1):
         max_len = len(str(col_name))
-        # Sample 100 rows max untuk efisiensi
-        sample = df[col_name].astype(str).head(100).tolist()
+        # Sample 100 rows max untuk efisiensi — drop NaN agar tidak menambah lebar palsu
+        sample = df[col_name].dropna().astype(str).head(100).tolist()
         if sample:
             sample_max = max(len(s) for s in sample)
             max_len = max(max_len, min(sample_max, 60))
@@ -215,7 +215,7 @@ def _build_per_cabang(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     g = df.groupby("NAMA RESTO", dropna=False)
     out = g.agg(
-        Total_Barang=("NAMA BARANG", "count"),
+        Total_Barang=("NAMA BARANG", "size"),  # size counts ALL rows (count only counts non-null)
         Total_Waste=("TOTAL", "sum"),
         Max_Waste_Single=("MAX", "max"),
         Anomali_Prioritas=("ANOMALY STATUS", lambda x: int((x == "Prioritas Tinggi").sum())),
@@ -258,13 +258,13 @@ def _build_pareto(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     g = (
         df.groupby("KETERANGAN", dropna=False)
-        .agg(Total_Waste=("TOTAL", "sum"), Jumlah_Barang=("NAMA BARANG", "count"))
+        .agg(Total_Waste=("TOTAL", "sum"), Jumlah_Barang=("NAMA BARANG", "size"))  # size counts all rows
         .reset_index()
         .sort_values("Total_Waste", ascending=False)
     )
     grand_total = g["Total_Waste"].sum()
-    if grand_total > 0:
-        g["Persentase"] = (g["Total_Waste"] / grand_total)
+    if grand_total and grand_total > 0:
+        g["Persentase"] = (g["Total_Waste"] / grand_total) * 100  # display as 0-100
         g["Cumulative"] = g["Persentase"].cumsum()
     else:
         g["Persentase"] = 0

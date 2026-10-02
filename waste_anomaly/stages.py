@@ -110,62 +110,66 @@ def stage_02_stats(
     for row_vals in hari_lists:
         # HariList: nilai asli (None untuk NaN)
         hari_list = [None if (isinstance(v, float) and np.isnan(v)) else v for v in row_vals]
-        # AktifList: non-null & > 0
+        # non_null: semua nilai non-null (untuk TOTAL, MAX — setara List.Sum/List.Max di M)
+        non_null = [v for v in hari_list if v is not None]
+        # AktifList: non-null & > 0 (untuk CountHari, AvgAktif, MedianAktif)
         aktif_list = [v for v in hari_list if v is not None and v > 0]
-        # Sorted desc untuk SecondMax
+        # Sorted desc untuk SecondMax (dari aktif_list, sama seperti M SortedAktif)
         sorted_aktif = sorted(aktif_list, reverse=True)
 
-        total = sum(aktif_list)  # List.Sum(HariList) skip null
-        max_value = sorted_aktif[0] if sorted_aktif else 0
-        # AvgValue = List.Average(HariList) — di M List.Average skip null
-        non_null = [v for v in hari_list if v is not None]
-        avg_value = float(np.mean(non_null)) if non_null else 0
+        # TOTAL = List.Sum(HariList) — null kalau semua null (M behavior)
+        total = sum(non_null) if non_null else None
+        # MAX = List.Max(HariList) — null kalau semua null, max semua non-null (termasuk 0 & negatif)
+        max_value = max(non_null) if non_null else None
+        # AvgValue = List.Average(HariList) — null kalau semua null
+        avg_value = float(np.mean(non_null)) if non_null else None
         count_hari = len(aktif_list)
         avg_aktif = float(np.mean(aktif_list)) if aktif_list else None
         median_aktif = float(np.median(aktif_list)) if aktif_list else None
         second_max_val = sorted_aktif[1] if len(sorted_aktif) >= 2 else None
         hari_max = None
-        if max_value and max_value > 0:
+        if max_value is not None and max_value > 0:
             for i, v in enumerate(hari_list):
                 if v is not None and v == max_value:
                     hari_max = i + 1  # 1-based
                     break
-        else:
-            max_value = 0  # konsisten dengan M code (try otherwise 0)
+        # Note: max_value bisa 0 atau negatif; hanya set 0 kalau None fallback ke 0
+        # (untuk kompatibilitas downstream, walau baris None-TOTAL akan di-filter ValidStats)
+        if max_value is None:
+            max_value = 0  # downstream guard
 
-        # LastDayValue: nilai hari ke-KeyAkhir
+        # LastDayValue: nilai hari ke-KeyAkhir — keep as-is (None for missing/null, 0 & negatives preserved)
         key_akhir_text = str(clamp(int(key_akhir), 1, 31))
         last_day_value = None
-        # Ambil dari row asli (hari list) berdasarkan posisi
         if day_cols:
             idx = day_cols.index(key_akhir_text) if key_akhir_text in day_cols else None
             if idx is not None:
                 v = hari_list[idx] if idx < len(hari_list) else None
-                last_day_value = v if (v is not None and v > 0) else None
+                last_day_value = v  # preserve None/0/negatives as-is
 
-        status2 = "Kosong" if total == 0 else "Isi"
+        status2 = "Kosong" if (total is None or total == 0) else "Isi"
 
-        # Gap
-        max_minus_avg = (max_value - avg_value) if (max_value and avg_value is not None) else None
+        # Gap — gunakan null-check (<> null), BUKAN truthy check
+        max_minus_avg = (max_value - avg_value) if (max_value is not None and avg_value is not None) else None
         max_minus_avg_aktif = (
             (max_value - avg_aktif) if (max_value is not None and avg_aktif is not None) else None
         )
 
-        # Ratios
-        max_avg_ratio = safe_div(max_value, avg_value) if avg_value else 0
-        max_avg_aktif_ratio = safe_div(max_value, avg_aktif)
-        max_median_ratio = safe_div(max_value, median_aktif)
-        max_second_ratio = safe_div(max_value, second_max_val)
+        # Ratios — guarded dengan > 0 (avoid div-by-zero), match M behavior
+        max_avg_ratio = safe_div(max_value, avg_value) if (avg_value is not None and avg_value > 0) else 0
+        max_avg_aktif_ratio = safe_div(max_value, avg_aktif) if (avg_aktif is not None and avg_aktif > 0) else 0
+        max_median_ratio = safe_div(max_value, median_aktif) if (median_aktif is not None and median_aktif > 0) else 0
+        max_second_ratio = safe_div(max_value, second_max_val) if (second_max_val is not None and second_max_val > 0) else 0
 
-        # Shares
-        max_share = safe_div(max_value, total) if total else 0
-        last_day_share = safe_div(last_day_value, total) if (total and last_day_value) else 0
+        # Shares — guarded dengan > 0
+        max_share = safe_div(max_value, total) if (total is not None and total > 0) else 0
+        last_day_share = safe_div(last_day_value, total) if (total is not None and total > 0 and last_day_value is not None and last_day_value > 0) else 0
 
         # Single day
         single_day = "YES" if count_hari == 1 else "NO"
 
         # Scale signal (heuristic dari M code — deteksi kelipatan 10× dari median)
-        scale_ratio = safe_div(max_value, median_aktif) if median_aktif else 0
+        scale_ratio = safe_div(max_value, median_aktif) if (median_aktif is not None and median_aktif > 0) else 0
         scale_signal = "NO"
         if scale_ratio >= 8:
             in_band = any(
@@ -222,7 +226,7 @@ def stage_03_reason(
       - SOURCE DATA GABUNGAN (concat distinct)
       - KONTRIBUSI TERBESAR (top keterangan + %)
     """
-    # ReasonTotals: sum TOTAL by full group
+    # ReasonTotals: sum TOTAL by full group — keep null semantics (sum skipna returns NaN for all-NaN group)
     group_keys_full = ["NAMA RESTO", "NAMA BARANG", "JENIS", "KETERANGAN", "SOURCE DATA"]
     if not all(k in df.columns for k in group_keys_full):
         # Kolom kurang, return df apa adanya
@@ -230,9 +234,8 @@ def stage_03_reason(
 
     rt = (
         df[group_keys_full + ["TOTAL"]]
-        .assign(TOTAL=lambda x: x["TOTAL"].fillna(0))
         .groupby(group_keys_full, dropna=False, as_index=False)
-        .agg(TOTAL_REASON=("TOTAL", "sum"))
+        .agg(TOTAL_REASON=("TOTAL", "sum"))  # sum skipna=True (default), NaN if all-NaN
     )
 
     # ReasonSummary: roll-up to (NAMA RESTO, NAMA BARANG, JENIS)
@@ -342,14 +345,14 @@ def stage_05_bom(
         df["Rill % to BOM"] = 0.0
         return df
 
-    # Siapkan BOM untuk join
+    # Siapkan BOM untuk join (strip whitespace untuk match robust)
     bom = bom_df.copy()
-    bom["Nomor #"] = bom["Nomor #"].astype(str)
-    bom["Nama Barang"] = bom["Nama Barang"].astype(str)
+    bom["Nomor #"] = bom["Nomor #"].astype(str).str.strip()
+    bom["Nama Barang"] = bom["Nama Barang"].astype(str).str.strip()
 
     df_join = df.copy()
-    df_join["NAMA RESTO"] = df_join["NAMA RESTO"].astype(str)
-    df_join["NAMA BARANG"] = df_join["NAMA BARANG"].astype(str)
+    df_join["NAMA RESTO"] = df_join["NAMA RESTO"].astype(str).str.strip()
+    df_join["NAMA BARANG"] = df_join["NAMA BARANG"].astype(str).str.strip()
 
     out = df_join.merge(
         bom[["Nomor #", "Nama Barang", "TOTAL BOM"]],
@@ -396,8 +399,6 @@ def stage_06_peer(
 
     peer_outlet = (
         df[keys_full + ["TOTAL", "MAX"]]
-        .assign(TOTAL=lambda x: x["TOTAL"].fillna(0))
-        .assign(MAX=lambda x: x["MAX"].fillna(0))
         .groupby(keys_full, dropna=False, as_index=False)
         .agg(PEER_TOTAL_OUTLET=("TOTAL", "sum"), PEER_MAX_OUTLET=("MAX", "max"))
     )
@@ -557,16 +558,35 @@ def stage_10_helper(
     })
 
     def _resolve_helper(row: pd.Series):
+        # 1) % to BOM — INDEPENDEN dari KETERANGAN (sesuai M code)
+        total_value = row.get("TOTAL")
+        bom_value = row.get("TOTAL BOM")
+        if (total_value is None or bom_value is None
+                or (isinstance(bom_value, float) and np.isnan(bom_value))):
+            pct_bom = "Cek"
+        else:
+            try:
+                if float(bom_value) == 0:
+                    pct_bom = None  # try ... otherwise null di M code
+                else:
+                    pct_bom = float(total_value) / float(bom_value)
+            except (ValueError, TypeError):
+                pct_bom = None
+
+        # 2) HELPER & STATUS — bergantung KETERANGAN
         ket = row.get("KETERANGAN")
         if ket is None or (isinstance(ket, float) and np.isnan(ket)) or str(ket).strip() == "":
-            return None, None, "Cek"
+            return None, None, pct_bom
         col = cat_map.get(str(ket).strip())
         if col is None or col not in df.columns:
-            return None, None, "Cek"
+            return None, None, pct_bom
         helper_value = row.get(col)
-        # Coerce ke 0/1 numerik
+        # Coerce ke numerik (None stays None)
         try:
-            helper_value_num = float(helper_value) if helper_value is not None and not (isinstance(helper_value, float) and np.isnan(helper_value)) else None
+            if helper_value is None or (isinstance(helper_value, float) and np.isnan(helper_value)):
+                helper_value_num = None
+            else:
+                helper_value_num = float(helper_value)
         except (ValueError, TypeError):
             helper_value_num = None
         # STATUS logic dari M code
@@ -579,16 +599,6 @@ def stage_10_helper(
                 status_value = "Sesuai"
             else:
                 status_value = "Tidak Sesuai"
-        # % to BOM
-        total_value = row.get("TOTAL")
-        bom_value = row.get("TOTAL BOM")
-        if total_value is None or bom_value is None or (isinstance(bom_value, float) and np.isnan(bom_value)):
-            pct_bom = "Cek"
-        else:
-            try:
-                pct_bom = float(total_value) / float(bom_value)
-            except (ValueError, TypeError, ZeroDivisionError):
-                pct_bom = None
         return helper_value_num, status_value, pct_bom
 
     helper_records = df.apply(_resolve_helper, axis=1, result_type="expand")

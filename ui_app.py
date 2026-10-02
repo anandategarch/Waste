@@ -1,17 +1,25 @@
 """
-ui_app.py — Tkinter multi-tab UI untuk Waste Anomaly Detection.
+ui_app.py — Tkinter professional dashboard untuk Waste Anomaly Detection.
 
-Versi: 1.1.0  (tambah tab Visualisasi dengan 12 grafik matplotlib embedded)
+Versi: 2.0.0  (PROFESSIONAL REBUILD)
 
-Tab:
-  1. Run Pipeline   — pilih workbook + Key Akhir + Run + log
-  2. Hasil          — preview tabel hasil (Detail + Anomali Prioritas + Cabang + Top + Pareto)
-  3. Visualisasi    — 12 grafik: pie, bar, pareto, heatmap, scatter, box, dll (NEW v1.1)
-  4. Ringkasan      — summary per cabang, top items, pareto
-  5. Konfigurasi    — threshold editor (load/save config.json)
-  6. Bantuan        — instruksi pakai
+Fitur baru:
+  - Layout dashboard-style (KPI cards + filter bar + drill-down table + interactive charts)
+  - KPI cards: total baris, prioritas, potensi, perlu review, total waste, cabang count
+  - Filter bar: search + dropdown cabang/JENIS/KETERANGAN/status + clear filter
+  - Interactive charts: klik bar/slice → auto-filter table + re-render charts lain (drill-down)
+  - Active filter chips (clickable untuk remove)
+  - Detail table dengan pagination + sortable columns
+  - Export buttons (Excel + PNG charts)
 
-Entry point: python ui_app.py  (atau jalankan MULAI.bat)
+Tabs:
+  1. Dashboard     — KPI + filter + interactive charts + drill-down table
+  2. Hasil         — preview tabel hasil (Detail/Anomali/Cabang/Top/Pareto)
+  3. Visualisasi   — 12 grafik matplotlib (full charts gallery)
+  4. Ringkasan     — summary run terakhir
+  5. Konfigurasi   — threshold editor
+  6. Bantuan       — instruksi pakai + 12 sinyal + troubleshooting
+  7. Run Pipeline  — pilih workbook + Key Akhir + Run + log
 """
 
 from __future__ import annotations
@@ -36,9 +44,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from waste_anomaly.pipeline import run_pipeline
 from waste_anomaly.utils import load_config, CONFIG_PATH
 from waste_anomaly import charts as wa_charts
+from waste_anomaly import dashboard as wa_dash
 
-APP_VERSION = "1.1.0"
-APP_TITLE = "Waste Anomaly Detection"
+APP_VERSION = "2.0.0"
+APP_TITLE = "Waste Anomaly Detection — Pro Dashboard"
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_OUTPUT = APP_DIR / "output" / "Waste_Anomaly_Report.xlsx"
 
@@ -47,22 +56,33 @@ DEFAULT_OUTPUT = APP_DIR / "output" / "Waste_Anomaly_Report.xlsx"
 # ============================================================
 FONT_NAME = "Segoe UI"
 MONO_NAME = "Consolas"
-F_APP_TITLE = (FONT_NAME, 16, "bold")
-F_CARD = (FONT_NAME, 11, "bold")
-F_BODY = (FONT_NAME, 10)
-F_HINT = (FONT_NAME, 9)
-F_LOG = (MONO_NAME, 10)
+F_APP_TITLE = (FONT_NAME, 14, "bold")
+F_CARD = (FONT_NAME, 10, "bold")
+F_BODY = (FONT_NAME, 9)
+F_HINT = (FONT_NAME, 8)
+F_LOG = (MONO_NAME, 9)
+F_KPI_NUM = (FONT_NAME, 18, "bold")
+F_KPI_LABEL = (FONT_NAME, 8)
 
-C_BG = "#eef2f7"
-C_CARD = "#ffffff"
-C_HEADER = "#172033"
-C_FOOTER = "#e2e8f0"
+C_BG = "#f1f5f9"            # slate-100
+C_CARD = "#ffffff"           # white
+C_HEADER = "#0f172a"        # slate-900
+C_FOOTER = "#e2e8f0"        # slate-200
 C_TERM_BG = "#0b1220"
-C_TERM_FG = "#d1d5db"
+C_BORDER = "#e2e8f0"
+C_HOVER = "#f8fafc"
+
+# Status colors (match charts.py)
+C_STATUS = {
+    "Prioritas Tinggi": ("#dc2626", "#fef2f2"),  # (fg, bg-light)
+    "Potensi Anomali":  ("#ea580c", "#fff7ed"),
+    "Perlu Review":     ("#b45309", "#fffbeb"),
+    "Normal":           ("#16a34a", "#f0fdf4"),
+}
 
 
 # ============================================================
-# POPUP LOG WINDOW (pola proven dari Inventory-Adjusment)
+# POPUP LOG WINDOW
 # ============================================================
 
 class SimpleLogPopup(tk.Toplevel):
@@ -79,9 +99,8 @@ class SimpleLogPopup(tk.Toplevel):
 
         self.text = tk.Text(
             frm, wrap="word", state="disabled",
-            bg=C_TERM_BG, fg=C_TERM_FG, font=F_LOG,
+            bg=C_TERM_BG, fg="#d1d5db", font=F_LOG,
             padx=10, pady=10, relief="flat",
-            insertbackground=C_TERM_FG,
         )
         sb = ttk.Scrollbar(frm, orient="vertical", command=self.text.yview)
         self.text.configure(yscrollcommand=sb.set)
@@ -90,7 +109,6 @@ class SimpleLogPopup(tk.Toplevel):
         frm.rowconfigure(0, weight=1)
         frm.columnconfigure(0, weight=1)
 
-        # Footer
         frm_btn = ttk.Frame(self)
         frm_btn.pack(fill="x", padx=8, pady=(0, 8))
         ttk.Button(frm_btn, text="Bersihkan", command=self.clear).pack(side="right", padx=4)
@@ -114,7 +132,57 @@ class SimpleLogPopup(tk.Toplevel):
         if content:
             self.clipboard_clear()
             self.clipboard_append(content)
-            messagebox.showinfo("Salin Log", "Log telah disalin ke clipboard.", parent=self)
+
+
+# ============================================================
+# KPI CARD WIDGET
+# ============================================================
+
+class KPICard(tk.Frame):
+    """KPI card dengan angka besar + label + warna tema."""
+
+    def __init__(self, parent, label: str, value: str = "0", color: str = "#0f172a", bg: str = "#ffffff"):
+        super().__init__(parent, bg=bg, relief="flat",
+                         highlightbackground=C_BORDER, highlightthickness=1)
+        self._label_var = tk.StringVar(value=label)
+        self._value_var = tk.StringVar(value=value)
+        self._color = color
+
+        # Padding
+        self.columnconfigure(0, weight=1)
+        # Label
+        lbl = tk.Label(self, textvariable=self._label_var, font=F_KPI_LABEL,
+                       fg="#64748b", bg=bg, anchor="w")
+        lbl.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 0))
+        # Value
+        self.val_lbl = tk.Label(self, textvariable=self._value_var, font=F_KPI_NUM,
+                                fg=color, bg=bg, anchor="w")
+        self.val_lbl.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 8))
+
+    def set_value(self, value: str):
+        self._value_var.set(value)
+
+    def set_color(self, color: str):
+        self._color = color
+        self.val_lbl.configure(fg=color)
+
+
+# ============================================================
+# FILTER CHIP WIDGET (clickable untuk remove)
+# ============================================================
+
+class FilterChip(tk.Frame):
+    """Chip kecil menampilkan active filter; klik × untuk remove."""
+
+    def __init__(self, parent, label: str, on_remove):
+        super().__init__(parent, bg="#fef3c7", relief="flat",
+                         highlightbackground="#fcd34d", highlightthickness=1)
+        self._on_remove = on_remove
+        tk.Label(self, text=label, font=F_HINT, fg="#92400e", bg="#fef3c7").pack(side="left", padx=(6, 2), pady=2)
+        btn = tk.Label(self, text="×", font=(FONT_NAME, 10, "bold"), fg="#92400e", bg="#fef3c7",
+                       cursor="hand2")
+        btn.pack(side="left", padx=(0, 6))
+        btn.bind("<Button-1>", lambda e: on_remove())
 
 
 # ============================================================
@@ -125,16 +193,24 @@ class WasteAnomalyApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"{APP_TITLE} v{APP_VERSION}")
-        self.geometry("1100x720")
-        self.minsize(900, 600)
+        self.geometry("1400x880")
+        self.minsize(1100, 700)
         self.configure(bg=C_BG)
 
+        # State
         self.config = load_config()
         self.ui_queue: queue.Queue = queue.Queue()
         self.worker_thread: threading.Thread | None = None
         self.log_popup: SimpleLogPopup | None = None
         self.last_output_path: str | None = None
         self.last_summary: dict | None = None
+        self._preview_dfs: dict[str, "pd.DataFrame"] = {}
+
+        # Drill-down state: dict filter_key -> value (None artinya no filter)
+        self.active_filters: dict[str, str | None] = {
+            "cabang": None, "item": None, "jenis": None,
+            "keterangan": None, "status": None,
+        }
 
         self._build_styles()
         self._build_header()
@@ -147,43 +223,41 @@ class WasteAnomalyApp(tk.Tk):
     # --------------------------------------------------------
     def _build_styles(self):
         style = ttk.Style(self)
-        style.theme_use("clam")
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
         style.configure("TFrame", background=C_BG)
         style.configure("Card.TFrame", background=C_CARD)
         style.configure("TLabel", background=C_BG, font=F_BODY, foreground="#1F2937")
         style.configure("Card.TLabel", background=C_CARD, font=F_BODY, foreground="#1F2937")
         style.configure("CardTitle.TLabel", background=C_CARD, font=F_CARD, foreground=C_HEADER)
         style.configure("Hint.TLabel", background=C_BG, font=F_HINT, foreground="#6B7280")
-        style.configure("TButton", font=F_BODY, padding=6)
-        style.configure("Accent.TButton", font=(FONT_NAME, 10, "bold"), padding=8)
+        style.configure("TButton", font=F_BODY, padding=4)
+        style.configure("Accent.TButton", font=(FONT_NAME, 9, "bold"), padding=6)
         style.configure("TNotebook", background=C_BG, borderwidth=0)
-        style.configure("TNotebook.Tab", padding=(16, 8), font=F_BODY)
+        style.configure("TNotebook.Tab", padding=(14, 6), font=F_BODY)
         style.map("TNotebook.Tab",
                   background=[("selected", C_CARD)],
                   foreground=[("selected", C_HEADER)])
-        style.configure("TEntry", fieldbackground=C_CARD, padding=4)
-        style.configure("TCombobox", padding=4)
+        style.configure("TEntry", fieldbackground=C_CARD, padding=3)
+        style.configure("TCombobox", padding=3)
+        # Treeview
+        style.configure("Treeview", font=F_BODY, rowheight=22, background=C_CARD, fieldbackground=C_CARD)
+        style.configure("Treeview.Heading", font=(FONT_NAME, 9, "bold"), background="#f1f5f9", foreground=C_HEADER)
+        style.map("Treeview", background=[("selected", "#dbeafe")], foreground=[("selected", C_HEADER)])
 
     # --------------------------------------------------------
     # HEADER
     # --------------------------------------------------------
     def _build_header(self):
-        hdr = ttk.Frame(self)
+        hdr = tk.Frame(self, bg=C_HEADER, height=50)
         hdr.pack(fill="x", side="top")
-        hdr.configure(style="TFrame")
-        # Inner card
-        inner = tk.Frame(hdr, bg=C_HEADER, height=56)
-        inner.pack(fill="x")
-        lbl = tk.Label(
-            inner, text=f"  {APP_TITLE}",
-            font=F_APP_TITLE, fg="white", bg=C_HEADER,
-        )
+        hdr.pack_propagate(False)
+        lbl = tk.Label(hdr, text=f"  📊  {APP_TITLE}", font=F_APP_TITLE, fg="white", bg=C_HEADER)
         lbl.pack(side="left", padx=16, pady=10)
-        sub = tk.Label(
-            inner,
-            text=f"v{APP_VERSION}  •  Replika Python dari Power Query M code  •  Key Akhir default: {self.config.get('default_key_akhir', 31)}",
-            font=F_HINT, fg="#94a3b8", bg=C_HEADER,
-        )
+        sub = tk.Label(hdr, text=f"v{APP_VERSION}  •  Replika Power Query M code  •  12 sinyal anomali + drill-down",
+                       font=F_HINT, fg="#94a3b8", bg=C_HEADER)
         sub.pack(side="left", padx=8)
 
     # --------------------------------------------------------
@@ -193,107 +267,477 @@ class WasteAnomalyApp(tk.Tk):
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=8, pady=8)
 
-        # Tab 1: Run Pipeline
+        # Tab 1: Dashboard (PRO)
         tab1 = ttk.Frame(nb)
-        nb.add(tab1, text="1. Run Pipeline")
-        self._build_run_tab(tab1)
+        nb.add(tab1, text="📊 Dashboard")
+        self._build_dashboard_tab(tab1)
 
         # Tab 2: Hasil
         tab2 = ttk.Frame(nb)
-        nb.add(tab2, text="2. Hasil")
+        nb.add(tab2, text="📋 Hasil")
         self._build_result_tab(tab2)
 
-        # Tab 3: Visualisasi (NEW v1.1)
+        # Tab 3: Visualisasi (12 chart gallery)
         tab3 = ttk.Frame(nb)
-        nb.add(tab3, text="3. Visualisasi")
+        nb.add(tab3, text="📈 Visualisasi")
         self._build_viz_tab(tab3)
 
         # Tab 4: Ringkasan
         tab4 = ttk.Frame(nb)
-        nb.add(tab4, text="4. Ringkasan")
+        nb.add(tab4, text="🗂 Ringkasan")
         self._build_summary_tab(tab4)
 
-        # Tab 5: Konfigurasi
+        # Tab 5: Run Pipeline
         tab5 = ttk.Frame(nb)
-        nb.add(tab5, text="5. Konfigurasi")
-        self._build_config_tab(tab5)
+        nb.add(tab5, text="▶ Run Pipeline")
+        self._build_run_tab(tab5)
 
-        # Tab 6: Bantuan
+        # Tab 6: Konfigurasi
         tab6 = ttk.Frame(nb)
-        nb.add(tab6, text="6. Bantuan")
-        self._build_help_tab(tab6)
+        nb.add(tab6, text="⚙ Konfigurasi")
+        self._build_config_tab(tab6)
+
+        # Tab 7: Bantuan
+        tab7 = ttk.Frame(nb)
+        nb.add(tab7, text="❓ Bantuan")
+        self._build_help_tab(tab7)
 
     # --------------------------------------------------------
-    # TAB 1: RUN PIPELINE
+    # TAB 1: DASHBOARD (PRO — drill-down)
     # --------------------------------------------------------
-    def _build_run_tab(self, parent):
+    def _build_dashboard_tab(self, parent):
+        """Dashboard layout: KPI cards row + filter bar + interactive charts + drill-down table."""
         parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(2, weight=1)
+        parent.rowconfigure(3, weight=1)
 
-        # Card 1: Input
-        c1 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground="#e2e8f0", highlightthickness=1)
-        c1.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
-        tk.Label(c1, text="Input Workbook", font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(anchor="w", padx=16, pady=(12, 4))
-        frm = ttk.Frame(c1)
-        frm.pack(fill="x", padx=16, pady=(0, 12))
-        self.var_workbook = tk.StringVar()
-        ent = ttk.Entry(frm, textvariable=self.var_workbook)
-        ent.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        ttk.Button(frm, text="Browse…", command=self._browse_workbook).pack(side="left", padx=4)
-        ttk.Button(frm, text="Buka Folder Sample", command=self._open_data_folder).pack(side="left", padx=4)
+        # ===== Row 0: KPI cards =====
+        kpi_frame = tk.Frame(parent, bg=C_BG)
+        kpi_frame.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
+        kpi_frame.columnconfigure(0, weight=1, uniform="kpi")
+        kpi_frame.columnconfigure(1, weight=1, uniform="kpi")
+        kpi_frame.columnconfigure(2, weight=1, uniform="kpi")
+        kpi_frame.columnconfigure(3, weight=1, uniform="kpi")
+        kpi_frame.columnconfigure(4, weight=1, uniform="kpi")
+        kpi_frame.columnconfigure(5, weight=1, uniform="kpi")
 
-        # Card 2: Parameters
-        c2 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground="#e2e8f0", highlightthickness=1)
-        c2.grid(row=1, column=0, sticky="ew", padx=8, pady=8)
-        tk.Label(c2, text="Parameter", font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(anchor="w", padx=16, pady=(12, 4))
-        frm2 = ttk.Frame(c2)
-        frm2.pack(fill="x", padx=16, pady=(0, 12))
-        tk.Label(frm2, text="Key Akhir (1-31):").pack(side="left", padx=(0, 8))
-        self.var_key_akhir = tk.IntVar(value=self.config.get("default_key_akhir", 31))
-        sp = ttk.Spinbox(frm2, from_=1, to=31, textvariable=self.var_key_akhir, width=6)
-        sp.pack(side="left", padx=4)
-        tk.Label(frm2, text="(hanya hari 1..N dianalisa)", font=F_HINT, foreground="#6B7280").pack(side="left", padx=8)
+        self.kpi_total = KPICard(kpi_frame, "TOTAL BARIS", "0", "#0f172a")
+        self.kpi_total.grid(row=0, column=0, sticky="ew", padx=2)
+        self.kpi_prioritas = KPICard(kpi_frame, "PRIORITAS TINGGI", "0", "#dc2626")
+        self.kpi_prioritas.grid(row=0, column=1, sticky="ew", padx=2)
+        self.kpi_potensi = KPICard(kpi_frame, "POTENSI ANOMALI", "0", "#ea580c")
+        self.kpi_potensi.grid(row=0, column=2, sticky="ew", padx=2)
+        self.kpi_review = KPICard(kpi_frame, "PERLU REVIEW", "0", "#b45309")
+        self.kpi_review.grid(row=0, column=3, sticky="ew", padx=2)
+        self.kpi_waste = KPICard(kpi_frame, "TOTAL WASTE", "0", "#0f766e")
+        self.kpi_waste.grid(row=0, column=4, sticky="ew", padx=2)
+        self.kpi_cabang = KPICard(kpi_frame, "CABANG", "0", "#9333ea")
+        self.kpi_cabang.grid(row=0, column=5, sticky="ew", padx=2)
 
-        tk.Label(frm2, text="Output:").pack(side="left", padx=(20, 8))
-        self.var_output = tk.StringVar(value=str(DEFAULT_OUTPUT))
-        ent2 = ttk.Entry(frm2, textvariable=self.var_output, width=50)
-        ent2.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        ttk.Button(frm2, text="Browse…", command=self._browse_output).pack(side="left")
+        # ===== Row 1: Filter bar =====
+        filter_frame = tk.Frame(parent, bg=C_CARD, relief="flat",
+                               highlightbackground=C_BORDER, highlightthickness=1)
+        filter_frame.grid(row=1, column=0, sticky="ew", padx=8, pady=4)
+        filter_frame.columnconfigure(7, weight=1)
 
-        # Card 3: Controls + progress
-        c3 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground="#e2e8f0", highlightthickness=1)
-        c3.grid(row=2, column=0, sticky="nsew", padx=8, pady=8)
-        c3.columnconfigure(0, weight=1)
-        c3.rowconfigure(3, weight=1)
+        tk.Label(filter_frame, text="🔍 Filter Drill-Down:", font=F_CARD, fg=C_HEADER,
+                 bg=C_CARD).grid(row=0, column=0, padx=(10, 6), pady=6)
 
-        tk.Label(c3, text="Kontrol", font=F_CARD, fg=C_HEADER, bg=C_CARD).grid(row=0, column=0, sticky="w", padx=16, pady=(12, 4))
+        # Search box
+        tk.Label(filter_frame, text="Cari:", font=F_BODY, bg=C_CARD).grid(row=0, column=1, padx=2)
+        self.var_search = tk.StringVar()
+        self.var_search.trace_add("write", lambda *_: self._apply_dashboard_filter())
+        ttk.Entry(filter_frame, textvariable=self.var_search, width=20).grid(row=0, column=2, padx=2)
 
-        frm3 = ttk.Frame(c3)
-        frm3.grid(row=1, column=0, sticky="ew", padx=16, pady=4)
-        self.btn_run = ttk.Button(frm3, text="▶ Mulai Pipeline", style="Accent.TButton", command=self._start_pipeline)
-        self.btn_run.pack(side="left", padx=4)
-        self.btn_log = ttk.Button(frm3, text="Log Proses", command=self._show_log_popup)
-        self.btn_log.pack(side="left", padx=4)
-        self.btn_open_out = ttk.Button(frm3, text="Buka Output", command=self._open_output)
-        self.btn_open_out.pack(side="left", padx=4)
-        self.btn_open_out_dir = ttk.Button(frm3, text="Buka Folder Output", command=self._open_output_folder)
-        self.btn_open_out_dir.pack(side="left", padx=4)
+        # Dropdown Cabang
+        tk.Label(filter_frame, text="Cabang:", font=F_BODY, bg=C_CARD).grid(row=0, column=3, padx=(8, 2))
+        self.var_filter_cabang = tk.StringVar(value="(Semua)")
+        self._cb_cabang = ttk.Combobox(filter_frame, textvariable=self.var_filter_cabang, width=15, state="readonly")
+        self._cb_cabang.grid(row=0, column=4, padx=2)
+        self._cb_cabang.bind("<<ComboboxSelected>>", lambda e: self._on_filter_dropdown_change("cabang", self.var_filter_cabang.get()))
 
-        self.progress = ttk.Progressbar(c3, mode="determinate")
-        self.progress.grid(row=2, column=0, sticky="ew", padx=16, pady=8)
+        # Dropdown Status
+        tk.Label(filter_frame, text="Status:", font=F_BODY, bg=C_CARD).grid(row=0, column=5, padx=(8, 2))
+        self.var_filter_status = tk.StringVar(value="(Semua)")
+        self._cb_status = ttk.Combobox(filter_frame, textvariable=self.var_filter_status, width=14, state="readonly")
+        self._cb_status["values"] = ["(Semua)", "Prioritas Tinggi", "Potensi Anomali", "Perlu Review", "Normal"]
+        self._cb_status.grid(row=0, column=6, padx=2)
+        self._cb_status.bind("<<ComboboxSelected>>", lambda e: self._on_filter_dropdown_change("status", self.var_filter_status.get()))
 
-        self.lbl_status = tk.Label(c3, text="Idle. Pilih workbook dan klik Mulai Pipeline.", bg=C_CARD, fg="#475569", font=F_BODY, anchor="w")
-        self.lbl_status.grid(row=3, column=0, sticky="ew", padx=16, pady=(4, 12))
+        # Clear button
+        self.btn_clear_filter = ttk.Button(filter_frame, text="✕ Clear Filter", command=self._clear_all_filters)
+        self.btn_clear_filter.grid(row=0, column=8, sticky="e", padx=10)
+
+        # Active filter chips container
+        self.chips_frame = tk.Frame(filter_frame, bg=C_CARD)
+        self.chips_frame.grid(row=1, column=0, columnspan=9, sticky="ew", padx=10, pady=(0, 6))
+        self.chips_frame.columnconfigure(0, weight=1)
+
+        # ===== Row 2: Interactive charts (3 charts) =====
+        charts_frame = tk.Frame(parent, bg=C_BG)
+        charts_frame.grid(row=2, column=0, sticky="ew", padx=8, pady=4)
+        charts_frame.columnconfigure(0, weight=1, uniform="chart")
+        charts_frame.columnconfigure(1, weight=1, uniform="chart")
+        charts_frame.columnconfigure(2, weight=1, uniform="chart")
+
+        self._dash_chart_frames = []
+        for i in range(3):
+            f = tk.Frame(charts_frame, bg=C_CARD, relief="flat",
+                         highlightbackground=C_BORDER, highlightthickness=1)
+            f.grid(row=0, column=i, sticky="nsew", padx=2)
+            f.columnconfigure(0, weight=1)
+            f.rowconfigure(1, weight=1)
+            self._dash_chart_frames.append(f)
+
+        # ===== Row 3: Drill-down detail table =====
+        detail_frame = tk.Frame(parent, bg=C_CARD, relief="flat",
+                                highlightbackground=C_BORDER, highlightthickness=1)
+        detail_frame.grid(row=3, column=0, sticky="nsew", padx=8, pady=4)
+        detail_frame.columnconfigure(0, weight=1)
+        detail_frame.rowconfigure(1, weight=1)
+
+        # Header
+        hdr = tk.Frame(detail_frame, bg=C_CARD)
+        hdr.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 4))
+        tk.Label(hdr, text="📋 Drill-Down Detail Table", font=F_CARD, fg=C_HEADER,
+                 bg=C_CARD).pack(side="left")
+        self.lbl_detail_count = tk.Label(hdr, text="(belum ada data)", font=F_HINT, fg="#6B7280", bg=C_CARD)
+        self.lbl_detail_count.pack(side="left", padx=8)
+        ttk.Button(hdr, text="Export Excel", command=self._export_filtered_excel).pack(side="right", padx=4)
+
+        # Treeview with scrollbars
+        tree_wrap = tk.Frame(detail_frame, bg=C_CARD)
+        tree_wrap.grid(row=1, column=0, sticky="nsew", padx=4, pady=(0, 8))
+        tree_wrap.columnconfigure(0, weight=1)
+        tree_wrap.rowconfigure(0, weight=1)
+
+        self.tree_dashboard = ttk.Treeview(tree_wrap, show="headings")
+        sb_y = ttk.Scrollbar(tree_wrap, orient="vertical", command=self.tree_dashboard.yview)
+        sb_x = ttk.Scrollbar(tree_wrap, orient="horizontal", command=self.tree_dashboard.xview)
+        self.tree_dashboard.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+        self.tree_dashboard.grid(row=0, column=0, sticky="nsew")
+        sb_y.grid(row=0, column=1, sticky="ns")
+        sb_x.grid(row=1, column=0, sticky="ew")
+
+        # Bind click on treeview row to drill-down (set filter to that row's cabang+item)
+        self.tree_dashboard.bind("<Double-1>", self._on_tree_double_click)
+
+        # Status placeholder
+        self._dash_canvases = []
+        self._set_dashboard_placeholder()
+
+    def _set_dashboard_placeholder(self):
+        """Tampilkan placeholder sebelum run pipeline."""
+        for widget in self._dash_chart_frames:
+            for c in widget.winfo_children():
+                c.destroy()
+        for f in self._dash_chart_frames:
+            tk.Label(f, text="📊\n\nBelum ada data.\n\nJalankan pipeline\ndi tab 'Run Pipeline'.",
+                     font=F_BODY, fg="#6B7280", bg=C_CARD, justify="center").grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        # Clear tree
+        self.tree_dashboard.delete(*self.tree_dashboard.get_children())
+        self.tree_dashboard["columns"] = ["info"]
+        self.tree_dashboard.heading("info", text="info")
+        self.tree_dashboard.insert("", "end", values=["(jalankan pipeline untuk lihat data)"])
 
     # --------------------------------------------------------
-    # TAB 2: HASIL (Treeview)
+    # FILTER LOGIC (drill-down)
+    # --------------------------------------------------------
+    def _on_filter_dropdown_change(self, key: str, value: str):
+        if value == "(Semua)":
+            self.active_filters[key] = None
+        else:
+            self.active_filters[key] = value
+        self._apply_dashboard_filter()
+
+    def _on_chart_click(self, key: str, value: str | None):
+        """Handler untuk klik chart. value=None artinya clear filter ini."""
+        self.active_filters[key] = value
+        # Sync dropdown UI
+        if key == "cabang":
+            self.var_filter_cabang.set(value if value else "(Semua)")
+        elif key == "status":
+            self.var_filter_status.set(value if value else "(Semua)")
+        self._apply_dashboard_filter()
+
+    def _clear_all_filters(self):
+        for k in self.active_filters:
+            self.active_filters[k] = None
+        self.var_search.set("")
+        self.var_filter_cabang.set("(Semua)")
+        self.var_filter_status.set("(Semua)")
+        self._apply_dashboard_filter()
+
+    def _apply_dashboard_filter(self):
+        """Apply all active filters + re-render charts + table."""
+        df = self._preview_dfs.get("Detail")
+        if df is None or df.empty:
+            return
+
+        filtered = df.copy()
+        for key, val in self.active_filters.items():
+            if val is None:
+                continue
+            if key == "cabang" and "NAMA RESTO" in filtered.columns:
+                filtered = filtered[filtered["NAMA RESTO"] == val]
+            elif key == "item" and "NAMA BARANG" in filtered.columns:
+                filtered = filtered[filtered["NAMA BARANG"] == val]
+            elif key == "jenis" and "JENIS" in filtered.columns:
+                filtered = filtered[filtered["JENIS"] == val]
+            elif key == "keterangan" and "KETERANGAN" in filtered.columns:
+                filtered = filtered[filtered["KETERANGAN"] == val]
+            elif key == "status" and "ANOMALY STATUS" in filtered.columns:
+                filtered = filtered[filtered["ANOMALY STATUS"] == val]
+
+        # Apply search
+        search = self.var_search.get().strip().lower()
+        if search:
+            mask = filtered.apply(
+                lambda row: any(search in str(v).lower() for v in row.values),
+                axis=1,
+            )
+            filtered = filtered[mask]
+
+        # Update chips
+        self._update_filter_chips()
+        # Re-render charts & table
+        self._render_dashboard_charts(filtered)
+        self._render_dashboard_table(filtered)
+
+    def _update_filter_chips(self):
+        for c in self.chips_frame.winfo_children():
+            c.destroy()
+        active_items = [(k, v) for k, v in self.active_filters.items() if v]
+        if not active_items:
+            tk.Label(self.chips_frame, text="Tidak ada filter aktif. Klik bar chart di atas untuk drill-down.",
+                     font=F_HINT, fg="#94a3b8", bg=C_CARD).grid(row=0, column=0, sticky="w")
+            return
+        col = 0
+        for k, v in active_items:
+            chip = FilterChip(self.chips_frame, f"{k}: {v}",
+                              on_remove=lambda key=k: self._remove_filter(key))
+            chip.grid(row=0, column=col, sticky="w", padx=2)
+            col += 1
+
+    def _remove_filter(self, key: str):
+        self.active_filters[key] = None
+        if key == "cabang":
+            self.var_filter_cabang.set("(Semua)")
+        elif key == "status":
+            self.var_filter_status.set("(Semua)")
+        self._apply_dashboard_filter()
+
+    # --------------------------------------------------------
+    # RENDER DASHBOARD CHARTS (interactive)
+    # --------------------------------------------------------
+    def _render_dashboard_charts(self, df: pd.DataFrame):
+        # Destroy existing
+        self._dash_canvases = []
+        for widget, frame in zip([wa_dash.chart_status_bar_interactive,
+                                   wa_dash.chart_cabang_bar_interactive,
+                                   wa_dash.chart_top_items_interactive],
+                                  self._dash_chart_frames):
+            for c in frame.winfo_children():
+                c.destroy()
+
+        if df.empty:
+            for f in self._dash_chart_frames:
+                tk.Label(f, text="(tidak ada data\nuntuk filter ini)",
+                         font=F_BODY, fg="#6B7280", bg=C_CARD, justify="center").grid(
+                    row=0, column=0, sticky="nsew", padx=20, pady=20)
+            return
+
+        # Build active_filter tuple untuk highlight
+        def _af(key):
+            return (key, self.active_filters.get(key))
+
+        # Chart 1: Status bar (interactive)
+        f0 = self._dash_chart_frames[0]
+        fig0 = wa_dash.chart_status_bar_interactive(df, on_click=self._on_chart_click, active_filter=_af("status"))
+        c0 = wa_charts.embed_figure(f0, fig0)
+        c0.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        self._dash_canvases.append(("status", fig0, c0))
+
+        # Chart 2: Cabang bar (interactive)
+        f1 = self._dash_chart_frames[1]
+        fig1 = wa_dash.chart_cabang_bar_interactive(df, on_click=self._on_chart_click, active_filter=_af("cabang"))
+        c1 = wa_charts.embed_figure(f1, fig1)
+        c1.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        self._dash_canvases.append(("cabang", fig1, c1))
+
+        # Chart 3: Top items (interactive)
+        f2 = self._dash_chart_frames[2]
+        fig2 = wa_dash.chart_top_items_interactive(df, on_click=self._on_chart_click, active_filter=_af("item"))
+        c2 = wa_charts.embed_figure(f2, fig2)
+        c2.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+        self._dash_canvases.append(("item", fig2, c2))
+
+    # --------------------------------------------------------
+    # RENDER DASHBOARD TABLE
+    # --------------------------------------------------------
+    def _render_dashboard_table(self, df: pd.DataFrame):
+        # Reset
+        self.tree_dashboard.delete(*self.tree_dashboard.get_children())
+        if df.empty:
+            self.tree_dashboard["columns"] = ["info"]
+            self.tree_dashboard.heading("info", text="info")
+            self.tree_dashboard.insert("", "end", values=["(tidak ada baris untuk filter ini)"])
+            self.lbl_detail_count.configure(text="0 baris")
+            return
+
+        # Pilih kolom utama untuk tampil (lainnya ada di Excel export)
+        display_cols = [
+            "NAMA RESTO", "NAMA BARANG", "JENIS", "KETERANGAN",
+            "TOTAL", "MAX", "Count Hari",
+            "ANOMALY SCORE", "ANOMALY STATUS", "ANOMALY REASONS",
+            "KATEGORI ANOMALI", "RANGKING WASTE",
+        ]
+        cols = [c for c in display_cols if c in df.columns]
+        self.tree_dashboard["columns"] = cols
+        for c in cols:
+            self.tree_dashboard.heading(c, text=c, command=lambda col=c: self._sort_treeview(col))
+            self.tree_dashboard.column(c, width=110, stretch=False)
+
+        # Limit to 500 rows for performance
+        rows_to_show = df[cols].head(500)
+        # Track row tags for status coloring
+        status_col_idx = cols.index("ANOMALY STATUS") if "ANOMALY STATUS" in cols else None
+        for row_idx, row in enumerate(rows_to_show.itertuples(index=False, name=None)):
+            vals = []
+            for v in row:
+                if v is None or (isinstance(v, float) and pd.isna(v)):
+                    vals.append("")
+                elif isinstance(v, float):
+                    vals.append(round(v, 3))
+                else:
+                    vals.append(v)
+            tag = ""
+            if status_col_idx is not None and vals[status_col_idx] in C_STATUS:
+                tag = f"status_{row_idx % 2}"
+                # Use status name as tag for coloring
+                tag = vals[status_col_idx].replace(" ", "_").lower()
+            self.tree_dashboard.insert("", "end", values=vals, tags=(tag,) if tag else ())
+
+        # Configure tag colors
+        for status, (fg, bg) in C_STATUS.items():
+            tag = status.replace(" ", "_").lower()
+            self.tree_dashboard.tag_configure(tag, background=bg, foreground=fg)
+
+        count = len(df)
+        self.lbl_detail_count.configure(text=f"{count} baris (showing first {min(500, count)})")
+
+    def _sort_treeview(self, col: str):
+        """Sort treeview by column (toggle asc/desc)."""
+        items = [(self.tree_dashboard.set(k, col), k) for k in self.tree_dashboard.get_children("")]
+        try:
+            # Try numeric sort
+            items.sort(key=lambda t: float(t[0]) if t[0] not in ("", None) else 0.0, reverse=getattr(self, "_sort_desc", False))
+        except (ValueError, TypeError):
+            items.sort(key=lambda t: str(t[0]), reverse=getattr(self, "_sort_desc", False))
+        for i, (_, k) in enumerate(items):
+            self.tree_dashboard.move(k, "", i)
+        self._sort_desc = not getattr(self, "_sort_desc", False)
+
+    def _on_tree_double_click(self, event):
+        """Double-click row → drill-down: set filter cabang + item dari row."""
+        selection = self.tree_dashboard.selection()
+        if not selection:
+            return
+        item = selection[0]
+        vals = self.tree_dashboard.item(item, "values")
+        if not vals:
+            return
+        cols = self.tree_dashboard["columns"]
+        # Cari NAMA RESTO & NAMA BARANG
+        try:
+            cabang = vals[cols.index("NAMA RESTO")] if "NAMA RESTO" in cols else None
+            item_name = vals[cols.index("NAMA BARANG")] if "NAMA BARANG" in cols else None
+        except (ValueError, IndexError):
+            return
+        if cabang and cabang != "(Semua)":
+            self.active_filters["cabang"] = cabang
+            self.var_filter_cabang.set(cabang)
+        if item_name:
+            self.active_filters["item"] = item_name
+        self._apply_dashboard_filter()
+
+    def _export_filtered_excel(self):
+        """Export current filtered rows to Excel."""
+        df = self._preview_dfs.get("Detail")
+        if df is None or df.empty:
+            messagebox.showinfo("Export", "Belum ada data. Run pipeline dulu.")
+            return
+        # Apply current filters
+        filtered = df.copy()
+        for key, val in self.active_filters.items():
+            if val is None:
+                continue
+            col_map = {"cabang": "NAMA RESTO", "item": "NAMA BARANG", "jenis": "JENIS",
+                       "keterangan": "KETERANGAN", "status": "ANOMALY STATUS"}
+            col_name = col_map.get(key)
+            if col_name and col_name in filtered.columns:
+                filtered = filtered[filtered[col_name] == val]
+        search = self.var_search.get().strip().lower()
+        if search:
+            mask = filtered.apply(lambda row: any(search in str(v).lower() for v in row.values), axis=1)
+            filtered = filtered[mask]
+
+        path = filedialog.asksaveasfilename(
+            title="Export Filtered Excel",
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx")],
+            initialfile=f"filtered_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+        )
+        if not path:
+            return
+        try:
+            filtered.to_excel(path, index=False, engine="openpyxl")
+            messagebox.showinfo("Export", f"{len(filtered)} baris diekspor ke:\n{path}")
+        except Exception as e:
+            messagebox.showerror("Export Error", str(e))
+
+    # --------------------------------------------------------
+    # UPDATE KPI CARDS
+    # --------------------------------------------------------
+    def _update_kpi_cards(self, df: pd.DataFrame, summary: dict):
+        total = len(df)
+        if "ANOMALY STATUS" in df.columns:
+            prioritas = int((df["ANOMALY STATUS"] == "Prioritas Tinggi").sum())
+            potensi = int((df["ANOMALY STATUS"] == "Potensi Anomali").sum())
+            review = int((df["ANOMALY STATUS"] == "Perlu Review").sum())
+            normal = int((df["ANOMALY STATUS"] == "Normal").sum())
+        else:
+            prioritas = potensi = review = normal = 0
+        if "TOTAL" in df.columns:
+            total_waste = float(df["TOTAL"].sum())
+        else:
+            total_waste = 0
+        cabang = df["NAMA RESTO"].nunique() if "NAMA RESTO" in df.columns else 0
+
+        self.kpi_total.set_value(f"{total:,}")
+        self.kpi_prioritas.set_value(f"{prioritas:,}")
+        self.kpi_potensi.set_value(f"{potensi:,}")
+        self.kpi_review.set_value(f"{review:,}")
+        self.kpi_waste.set_value(f"{total_waste:,.1f}")
+        self.kpi_cabang.set_value(f"{cabang:,}")
+
+        # Populate cabang dropdown
+        if "NAMA RESTO" in df.columns:
+            cabangs = sorted(df["NAMA RESTO"].dropna().astype(str).unique().tolist())
+            self.var_filter_cabang.set("(Semua)")
+            # Find combobox widget (we set it earlier but easier to use ttk.Combobox reference)
+            # We need a stored reference — let's fetch from filter_frame
+            # Quick fix: store on init
+            if hasattr(self, "_cb_cabang"):
+                self._cb_cabang["values"] = ["(Semua)"] + cabangs
+
+    # --------------------------------------------------------
+    # TAB 2: HASIL (preview all sheets)
     # --------------------------------------------------------
     def _build_result_tab(self, parent):
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(1, weight=1)
 
-        # Card: controls
-        c1 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground="#e2e8f0", highlightthickness=1)
+        c1 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground=C_BORDER, highlightthickness=1)
         c1.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
         tk.Label(c1, text="Preview Hasil", font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(anchor="w", padx=16, pady=(12, 4))
         frm = ttk.Frame(c1)
@@ -305,8 +749,7 @@ class WasteAnomalyApp(tk.Tk):
         ttk.Radiobutton(frm, text="Top Items", variable=self.var_result_sheet, value="Top", command=self._refresh_preview).pack(side="left", padx=4)
         ttk.Radiobutton(frm, text="Pareto", variable=self.var_result_sheet, value="Pareto", command=self._refresh_preview).pack(side="left", padx=4)
 
-        # Card: treeview
-        c2 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground="#e2e8f0", highlightthickness=1)
+        c2 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground=C_BORDER, highlightthickness=1)
         c2.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
         c2.columnconfigure(0, weight=1)
         c2.rowconfigure(0, weight=1)
@@ -319,35 +762,56 @@ class WasteAnomalyApp(tk.Tk):
         sb_y.grid(row=0, column=1, sticky="ns")
         sb_x.grid(row=1, column=0, sticky="ew")
 
-        self._preview_dfs: dict[str, "pd.DataFrame"] = {}
+    def _refresh_preview(self):
+        sheet_map = {
+            "Detail": "Detail", "Anomali": "Anomali Prioritas",
+            "Cabang": "Per Cabang", "Top": "Top Items", "Pareto": "Pareto Alasan",
+        }
+        sheet = sheet_map.get(self.var_result_sheet.get(), "Detail")
+        df = self._preview_dfs.get(sheet)
+        self.tree.delete(*self.tree.get_children())
+        if df is None or df.empty:
+            self.tree["columns"] = ["info"]
+            self.tree.heading("info", text="info")
+            self.tree.insert("", "end", values=["(tidak ada data — jalankan pipeline dulu)"])
+            return
+        cols = list(df.columns)
+        self.tree["columns"] = cols
+        for c in cols:
+            self.tree.heading(c, text=str(c))
+            self.tree.column(c, width=120, stretch=False)
+        for row in df.head(500).itertuples(index=False, name=None):
+            vals = []
+            for v in row:
+                if v is None or (isinstance(v, float) and pd.isna(v)):
+                    vals.append("")
+                elif isinstance(v, float):
+                    vals.append(round(v, 4))
+                else:
+                    vals.append(v)
+            self.tree.insert("", "end", values=vals)
 
     # --------------------------------------------------------
-    # TAB 3: VISUALISASI (NEW v1.1)
+    # TAB 3: VISUALISASI (12 chart gallery)
     # --------------------------------------------------------
     def _build_viz_tab(self, parent):
-        """Tab Visualisasi: 12 grafik matplotlib embedded, scrollable."""
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(0, weight=1)
 
-        # Card container
-        c = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground="#e2e8f0", highlightthickness=1)
+        c = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground=C_BORDER, highlightthickness=1)
         c.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
         c.columnconfigure(0, weight=1)
         c.rowconfigure(1, weight=1)
 
-        # Header + controls
         hdr = tk.Frame(c, bg=C_CARD)
         hdr.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 8))
-        tk.Label(hdr, text="Visualisasi & Grafik", font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(side="left")
-        tk.Label(hdr, text="12 grafik analisa • matplotlib • auto-update setelah run pipeline", font=F_HINT, fg="#6B7280", bg=C_CARD).pack(side="left", padx=12)
-
-        # Refresh button
+        tk.Label(hdr, text="Visualisasi & Grafik — 12 Chart Gallery", font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(side="left")
+        tk.Label(hdr, text="matplotlib • auto-update setelah run pipeline", font=F_HINT, fg="#6B7280", bg=C_CARD).pack(side="left", padx=12)
         self.btn_viz_refresh = ttk.Button(hdr, text="⟳ Refresh Grafik", command=self._refresh_viz)
         self.btn_viz_refresh.pack(side="right", padx=4)
         self.btn_viz_export = ttk.Button(hdr, text="Export Semua PNG…", command=self._export_all_charts)
         self.btn_viz_export.pack(side="right", padx=4)
 
-        # Scrollable canvas untuk charts
         outer = tk.Frame(c, bg=C_CARD)
         outer.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
         outer.columnconfigure(0, weight=1)
@@ -355,20 +819,15 @@ class WasteAnomalyApp(tk.Tk):
 
         canvas = tk.Canvas(outer, bg=C_CARD, highlightthickness=0)
         sb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
-        sb_x = ttk.Scrollbar(outer, orient="horizontal", command=canvas.xview)
         self._viz_scroll_canvas = canvas
         self._viz_inner = tk.Frame(canvas, bg=C_CARD)
-        self._viz_inner.bind("<Configure>",
-                              lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        self._viz_inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=self._viz_inner, anchor="nw")
-        canvas.configure(yscrollcommand=sb.set, xscrollcommand=sb_x.set)
+        canvas.configure(yscrollcommand=sb.set)
         canvas.grid(row=0, column=0, sticky="nsew")
         sb.grid(row=0, column=1, sticky="ns")
-        sb_x.grid(row=1, column=0, sticky="ew")
 
-        # Mouse wheel scroll
         def _on_wheel(e):
-            # Linux: e.num == 4 up, 5 down. Windows/Mac: e.delta
             if hasattr(e, "num") and e.num:
                 direction = -1 if e.num == 4 else 1
                 canvas.yview_scroll(direction, "units")
@@ -378,10 +837,9 @@ class WasteAnomalyApp(tk.Tk):
         canvas.bind_all("<Button-4>", _on_wheel)
         canvas.bind_all("<Button-5>", _on_wheel)
 
-        # Placeholder sebelum run pertama
         self._viz_placeholder = tk.Label(
             self._viz_inner,
-            text="\nBelum ada data visualisasi.\n\n Jalankan pipeline di tab '1. Run Pipeline' terlebih dahulu,\nlalu klik '⟳ Refresh Grafik' di atas.\n\n12 grafik akan muncul di sini otomatis.",
+            text="\nBelum ada data visualisasi.\n\nJalankan pipeline di tab 'Run Pipeline' terlebih dahulu,\nlalu klik '⟳ Refresh Grafik' di atas.",
             font=F_BODY, fg="#6B7280", bg=C_CARD, justify="center",
             padx=40, pady=60,
         )
@@ -389,8 +847,6 @@ class WasteAnomalyApp(tk.Tk):
         self._viz_canvases: list = []
 
     def _refresh_viz(self):
-        """Re-render semua chart di tab Visualisasi."""
-        # Destroy previous widgets
         for widget in self._viz_inner.winfo_children():
             widget.destroy()
         self._viz_canvases = []
@@ -399,37 +855,27 @@ class WasteAnomalyApp(tk.Tk):
         if df is None or df.empty:
             self._viz_placeholder = tk.Label(
                 self._viz_inner,
-                text="\nBelum ada data visualisasi.\n\nJalankan pipeline di tab '1. Run Pipeline' terlebih dahulu,\nlalu klik '⟳ Refresh Grafik' di atas.\n\n12 grafik akan muncul di sini otomatis.",
+                text="\nBelum ada data visualisasi.\n\nJalankan pipeline di tab 'Run Pipeline' terlebih dahulu,\nlalu klik '⟳ Refresh Grafik' di atas.",
                 font=F_BODY, fg="#6B7280", bg=C_CARD, justify="center",
                 padx=40, pady=60,
             )
             self._viz_placeholder.pack(fill="x", padx=16, pady=16)
             return
 
-        # Layout: 2 chart per row (grid)
-        charts_to_render = wa_charts.ALL_CHARTS
         cols_per_row = 2
-
-        for idx, (title, desc, fn) in enumerate(charts_to_render):
+        for idx, (title, desc, fn) in enumerate(wa_charts.ALL_CHARTS):
             row = idx // cols_per_row
             col = idx % cols_per_row
-
-            # Card per chart
             card = tk.Frame(self._viz_inner, bg=C_CARD, relief="solid", borderwidth=1,
-                            highlightbackground="#e2e8f0", highlightthickness=1)
+                            highlightbackground=C_BORDER, highlightthickness=1)
             card.grid(row=row, column=col, sticky="nsew", padx=10, pady=10)
             card.columnconfigure(0, weight=1)
             card.rowconfigure(1, weight=1)
-
-            # Title bar
             title_frame = tk.Frame(card, bg="#f8fafc")
             title_frame.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 0))
-            tk.Label(title_frame, text=f"📊 {title}", font=(FONT_NAME, 10, "bold"),
+            tk.Label(title_frame, text=f"📊 {title}", font=(FONT_NAME, 9, "bold"),
                      fg=C_HEADER, bg="#f8fafc").pack(side="left", padx=8, pady=6)
-            tk.Label(title_frame, text=desc, font=F_HINT, fg="#6B7280",
-                     bg="#f8fafc").pack(side="left", padx=8)
-
-            # Render figure
+            tk.Label(title_frame, text=desc, font=F_HINT, fg="#6B7280", bg="#f8fafc").pack(side="left", padx=8)
             try:
                 fig = fn(df)
                 canvas_widget = wa_charts.embed_figure(card, fig)
@@ -439,16 +885,10 @@ class WasteAnomalyApp(tk.Tk):
                 err = tk.Label(card, text=f"Error render:\n{e}",
                               font=F_BODY, fg="#dc2626", bg=C_CARD, justify="left")
                 err.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
-
-        # Configure grid columns
-        for c in range(cols_per_row):
-            self._viz_inner.columnconfigure(c, weight=1, minsize=420)
-
-        # Auto-switch ke tab Visualisasi (optional)
-        # Tidak otomatis switch — biar user tidak kejut
+        for c_i in range(cols_per_row):
+            self._viz_inner.columnconfigure(c_i, weight=1, minsize=420)
 
     def _export_all_charts(self):
-        """Export semua chart ke PNG."""
         if not self._viz_canvases:
             messagebox.showinfo("Export", "Belum ada chart. Refresh dulu.")
             return
@@ -473,38 +913,121 @@ class WasteAnomalyApp(tk.Tk):
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(1, weight=1)
 
-        c1 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground="#e2e8f0", highlightthickness=1)
+        c1 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground=C_BORDER, highlightthickness=1)
         c1.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
         tk.Label(c1, text="Ringkasan Run Terakhir", font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(anchor="w", padx=16, pady=(12, 4))
         self.lbl_summary = tk.Label(c1, text="(belum ada run)", bg=C_CARD, fg="#475569", font=F_BODY, anchor="w", justify="left")
         self.lbl_summary.pack(fill="x", padx=16, pady=(0, 12))
 
-        c2 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground="#e2e8f0", highlightthickness=1)
+        c2 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground=C_BORDER, highlightthickness=1)
         c2.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
         c2.columnconfigure(0, weight=1)
         c2.rowconfigure(0, weight=1)
         self.tree_summary = ttk.Treeview(c2, show="tree headings")
         self.tree_summary.grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
 
+    def _update_summary_tab(self, summary: dict):
+        msg = (
+            f"Waktu Run     : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"Total Baris   : {summary.get('total_rows', 0)}\n"
+            f"Cabang Unik   : {summary.get('cabang_count', 0)}\n"
+            f"Item Unik     : {summary.get('item_count', 0)}\n"
+            f"Anomali       : {summary.get('prioritas_count', 0)} prioritas • "
+            f"{summary.get('potensi_count', 0)} potensi • "
+            f"{summary.get('review_count', 0)} review • "
+            f"{summary.get('normal_count', 0)} normal\n"
+            f"Output        : {summary.get('output_path', '-')}"
+        )
+        self.lbl_summary.configure(text=msg)
+        df = self._preview_dfs.get("Per Cabang")
+        self.tree_summary.delete(*self.tree_summary.get_children())
+        if df is None or df.empty:
+            return
+        cols = list(df.columns)
+        self.tree_summary["columns"] = cols
+        for c in cols:
+            self.tree_summary.heading(c, text=str(c))
+            self.tree_summary.column(c, width=140, stretch=False)
+        for row in df.itertuples(index=False, name=None):
+            vals = []
+            for v in row:
+                if v is None or (isinstance(v, float) and pd.isna(v)):
+                    vals.append("")
+                elif isinstance(v, float):
+                    vals.append(round(v, 4))
+                else:
+                    vals.append(v)
+            self.tree_summary.insert("", "end", values=vals)
+
     # --------------------------------------------------------
-    # TAB 4: KONFIGURASI
+    # TAB 5: RUN PIPELINE
+    # --------------------------------------------------------
+    def _build_run_tab(self, parent):
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(2, weight=1)
+
+        c1 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground=C_BORDER, highlightthickness=1)
+        c1.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
+        tk.Label(c1, text="Input Workbook", font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(anchor="w", padx=16, pady=(12, 4))
+        frm = ttk.Frame(c1)
+        frm.pack(fill="x", padx=16, pady=(0, 12))
+        self.var_workbook = tk.StringVar()
+        ttk.Entry(frm, textvariable=self.var_workbook).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ttk.Button(frm, text="Browse…", command=self._browse_workbook).pack(side="left", padx=4)
+        ttk.Button(frm, text="Buka Folder Sample", command=self._open_data_folder).pack(side="left", padx=4)
+
+        c2 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground=C_BORDER, highlightthickness=1)
+        c2.grid(row=1, column=0, sticky="ew", padx=8, pady=8)
+        tk.Label(c2, text="Parameter", font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(anchor="w", padx=16, pady=(12, 4))
+        frm2 = ttk.Frame(c2)
+        frm2.pack(fill="x", padx=16, pady=(0, 12))
+        tk.Label(frm2, text="Key Akhir (1-31):").pack(side="left", padx=(0, 8))
+        self.var_key_akhir = tk.IntVar(value=self.config.get("default_key_akhir", 31))
+        ttk.Spinbox(frm2, from_=1, to=31, textvariable=self.var_key_akhir, width=6).pack(side="left", padx=4)
+        tk.Label(frm2, text="(hanya hari 1..N dianalisa)", font=F_HINT, foreground="#6B7280").pack(side="left", padx=8)
+        tk.Label(frm2, text="Output:").pack(side="left", padx=(20, 8))
+        self.var_output = tk.StringVar(value=str(DEFAULT_OUTPUT))
+        ttk.Entry(frm2, textvariable=self.var_output, width=50).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ttk.Button(frm2, text="Browse…", command=self._browse_output).pack(side="left")
+
+        c3 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground=C_BORDER, highlightthickness=1)
+        c3.grid(row=2, column=0, sticky="nsew", padx=8, pady=8)
+        c3.columnconfigure(0, weight=1)
+        c3.rowconfigure(3, weight=1)
+        tk.Label(c3, text="Kontrol", font=F_CARD, fg=C_HEADER, bg=C_CARD).grid(row=0, column=0, sticky="w", padx=16, pady=(12, 4))
+        frm3 = ttk.Frame(c3)
+        frm3.grid(row=1, column=0, sticky="ew", padx=16, pady=4)
+        self.btn_run = ttk.Button(frm3, text="▶ Mulai Pipeline", style="Accent.TButton", command=self._start_pipeline)
+        self.btn_run.pack(side="left", padx=4)
+        self.btn_log = ttk.Button(frm3, text="Log Proses", command=self._show_log_popup)
+        self.btn_log.pack(side="left", padx=4)
+        self.btn_open_out = ttk.Button(frm3, text="Buka Output", command=self._open_output)
+        self.btn_open_out.pack(side="left", padx=4)
+        self.btn_open_out_dir = ttk.Button(frm3, text="Buka Folder Output", command=self._open_output_folder)
+        self.btn_open_out_dir.pack(side="left", padx=4)
+        self.progress = ttk.Progressbar(c3, mode="determinate")
+        self.progress.grid(row=2, column=0, sticky="ew", padx=16, pady=8)
+        self.lbl_status = tk.Label(c3, text="Idle. Pilih workbook dan klik Mulai Pipeline.", bg=C_CARD, fg="#475569", font=F_BODY, anchor="w")
+        self.lbl_status.grid(row=3, column=0, sticky="ew", padx=16, pady=(4, 12))
+
+    # --------------------------------------------------------
+    # TAB 6: KONFIGURASI
     # --------------------------------------------------------
     def _build_config_tab(self, parent):
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(1, weight=1)
 
-        c1 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground="#e2e8f0", highlightthickness=1)
+        c1 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground=C_BORDER, highlightthickness=1)
         c1.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
         tk.Label(c1, text="Threshold & Konfigurasi", font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(anchor="w", padx=16, pady=(12, 4))
         tk.Label(c1, text=f"Di-load dari: {CONFIG_PATH}", font=F_HINT, fg="#6B7280", bg=C_CARD).pack(anchor="w", padx=16)
         tk.Label(c1, text="Edit nilai threshold di bawah, lalu klik Simpan untuk apply ke config.json.", font=F_HINT, fg="#6B7280", bg=C_CARD).pack(anchor="w", padx=16, pady=(0, 12))
 
-        c2 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground="#e2e8f0", highlightthickness=1)
+        c2 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground=C_BORDER, highlightthickness=1)
         c2.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
         c2.columnconfigure(0, weight=1)
         c2.rowconfigure(0, weight=1)
 
-        # Scrollable threshold form
         canvas = tk.Canvas(c2, bg=C_CARD, highlightthickness=0)
         sb = ttk.Scrollbar(c2, orient="vertical", command=canvas.yview)
         inner = tk.Frame(canvas, bg=C_CARD)
@@ -519,24 +1042,57 @@ class WasteAnomalyApp(tk.Tk):
         for i, (key, val) in enumerate(sorted(thresholds.items())):
             tk.Label(inner, text=key, bg=C_CARD, font=F_BODY, width=24, anchor="w").grid(row=i, column=0, padx=(12, 8), pady=2, sticky="w")
             var = tk.StringVar(value=str(val))
-            ent = ttk.Entry(inner, textvariable=var, width=12)
-            ent.grid(row=i, column=1, padx=4, pady=2, sticky="w")
+            ttk.Entry(inner, textvariable=var, width=12).grid(row=i, column=1, padx=4, pady=2, sticky="w")
             self._config_vars[key] = var
 
-        # Save buttons
         btn_frame = tk.Frame(inner, bg=C_CARD)
         btn_frame.grid(row=len(thresholds) + 1, column=0, columnspan=2, padx=12, pady=12, sticky="w")
         ttk.Button(btn_frame, text="Simpan config.json", command=self._save_config).pack(side="left", padx=4)
         ttk.Button(btn_frame, text="Reset Default", command=self._reset_config).pack(side="left", padx=4)
 
+    def _save_config(self):
+        try:
+            new_th = {}
+            for k, var in self._config_vars.items():
+                raw = var.get().strip()
+                try:
+                    new_th[k] = int(raw)
+                except ValueError:
+                    try:
+                        new_th[k] = float(raw)
+                    except ValueError:
+                        messagebox.showerror("Config Error", f"Nilai untuk {k} tidak valid: {raw}")
+                        return
+            self.config["thresholds"] = new_th
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(self.config, f, ensure_ascii=False, indent=2)
+            messagebox.showinfo("Config", f"Disimpan ke {CONFIG_PATH}")
+        except Exception as e:
+            messagebox.showerror("Config Error", str(e))
+
+    def _reset_config(self):
+        default_cfg = {
+            "thresholds": {
+                "TH_SPIKE": 3, "TH_MAX_AVG_AKTIF": 2.5, "TH_MAX_MEDIAN": 3,
+                "TH_MAX_SECOND": 3, "TH_MAX_SHARE_WARN": 0.50,
+                "TH_MAX_SHARE_HIGH": 0.70, "TH_MAX_BOM_WARN": 0.25,
+                "TH_MAX_BOM_HIGH": 0.50, "TH_TOTAL_BOM_WARN": 0.50,
+                "TH_TOTAL_BOM_HIGH": 1.00, "TH_PEER_MIN": 3,
+                "TH_PEER_WARN": 2, "TH_PEER_HIGH": 3, "TH_LAST_SHARE": 0.70,
+            }
+        }
+        for k, var in self._config_vars.items():
+            if k in default_cfg["thresholds"]:
+                var.set(str(default_cfg["thresholds"][k]))
+
     # --------------------------------------------------------
-    # TAB 5: BANTUAN
+    # TAB 7: BANTUAN
     # --------------------------------------------------------
     def _build_help_tab(self, parent):
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(0, weight=1)
 
-        c1 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground="#e2e8f0", highlightthickness=1)
+        c1 = tk.Frame(parent, bg=C_CARD, relief="flat", borderwidth=1, highlightbackground=C_BORDER, highlightthickness=1)
         c1.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
         c1.columnconfigure(0, weight=1)
         c1.rowconfigure(0, weight=1)
@@ -548,7 +1104,6 @@ class WasteAnomalyApp(tk.Tk):
         sb.grid(row=0, column=1, sticky="ns")
 
         help_text = f"""{APP_TITLE} v{APP_VERSION}
-Replika Python dari Power Query M code waste anomaly detection.
 
 === CARA PAKAI ===
 
@@ -557,30 +1112,41 @@ Replika Python dari Power Query M code waste anomaly detection.
    • BOM            — master Bill of Materials (Nomor #, Nama Barang, TOTAL BOM)
    • DATABASE_SATUAN — master helper value per kategori (NAMA ITEM + 11 kolom kategori)
 
-2. Tab "1. Run Pipeline":
+2. Tab "Run Pipeline":
    • Browse... → pilih workbook Excel
    • Isi Key Akhir (1..31) — cutoff hari terakhir periode analisa
    • (Optional) ganti path output Excel
    • Klik "Mulai Pipeline"
 
-3. Log muncul di popup "Log Proses" (otomatis terbuka saat mulai).
+3. Setelah selesai, tab "Dashboard" otomatis ter-isi:
+   • KPI cards di atas (total, prioritas, potensi, waste, cabang)
+   • 3 chart interaktif (klik bar untuk filter)
+   • Drill-down table dengan sortable columns + status coloring
 
-4. Setelah selesai:
-   • Output Excel multi-sheet tersimpan di path Output
-   • Tab "2. Hasil" → preview tabel per sheet
-   • Tab "3. Ringkasan" → ringkasan statistik
+=== DRILL-DOWN (NEW v2.0) ===
 
-5. Tab "4. Konfigurasi" → edit threshold (TH_SPIKE, TH_PEER_HIGH, dll).
-   Klik "Simpan config.json" untuk apply perubahan.
+Cara drill-down:
+  1. Klik bar/slice di chart interaktif → auto-filter table + re-render chart lain
+  2. Pilih dropdown Cabang/Status → filter langsung
+  3. Ketik di Search box → filter free-text semua kolom
+  4. Active filter chips muncul di atas table (klik × untuk remove)
+  5. Double-click baris di table → drill-down ke cabang+item baris itu
+  6. Klik header kolom table → sort asc/desc
+
+Contoh workflow analisa:
+  - Klik bar "Prioritas Tinggi" → lihat semua baris prioritas
+  - Klik bar cabang "RESTO.PWKTAM" → fokus ke cabang itu
+  - Klik bar top item "Bawang Putih" → lihat detail per-hari item itu
+  - Search "Cancel Nota" → filter semua baris dengan keterangan itu
 
 === OUTPUT EXCEL — 6 SHEET ===
 
 • Detail             — semua baris (kolom mengikuti M code Final order)
-• Anomali Prioritas  — hanya baris Prioritas Tinggi + Potensi Anomali
+• Anomali Prioritas  — hanya Prioritas Tinggi + Potensi Anomali
 • Per Cabang         — ringkasan per NAMA RESTO
 • Top Items          — top 20 item by TOTAL waste
 • Pareto Alasan      — group by KETERANGAN + cumulative %
-• Log Run            — timestamp + parameter + summary stats + log lines
+• Log Run            — timestamp + parameter + log lines
 
 === 12 SINYAL ANOMALI ===
 
@@ -597,7 +1163,7 @@ S10 Single-day event             : Count=1 & (MaxBOM >= 0.10 atau MaxPeer >= 2)
 S11 Last Day Share               : LastDay/TOTAL >= 0.70
 S12 Scale Signal                 : heuristic rasio (8-12/80-120/800-1200/8000-12000)
 
-Composite Score (max 18):
+Composite Score (max 19):
 • >= 8  : Prioritas Tinggi
 • >= 5  : Potensi Anomali
 • >= 3  : Perlu Review
@@ -606,18 +1172,17 @@ Composite Score (max 18):
 === TROUBLESHOOTING ===
 
 • "Tidak menemukan sheet untuk 'rekap_mentah'"
-  → Pastikan workbook punya sheet bernama REKAP_MENTAH / Rekap Mentah / REKAP.
+  → Pastikan workbook punya sheet REKAP_MENTAH / Rekap Mentah / REKAP.
      Atau edit waste_anomaly/config.json → input_sheets untuk tambah nama kandidat.
 
 • "BOM sheet tidak ditemukan"
   → BOM join dilewati; TOTAL BOM jadi None dan sinyal BOM (S6/S7) tidak trigger.
      Tambahkan sheet BOM / MASTER BOM untuk mengaktifkan.
 
-• "DATABASE_SATUAN tidak ditemukan"
-  → STATUS menjadi "Cek" untuk semua baris.
-     Tambahkan sheet DATABASE_SATUAN untuk mengaktifkan.
+• Tab Dashboard kosong
+  → Pastikan sudah run pipeline di tab "Run Pipeline" dulu.
 
-=== KONTAK / UPDATE ===
+=== KONTAK ===
 
 Source: https://github.com/anandategarch/Waste
 Pattern referensi: https://github.com/anandategarch/Inventory-Adjusment
@@ -629,8 +1194,9 @@ Pattern referensi: https://github.com/anandategarch/Inventory-Adjusment
     # FOOTER
     # --------------------------------------------------------
     def _build_footer(self):
-        ftr = tk.Frame(self, bg=C_FOOTER, height=28)
+        ftr = tk.Frame(self, bg=C_FOOTER, height=26)
         ftr.pack(fill="x", side="bottom")
+        ftr.pack_propagate(False)
         self.lbl_footer = tk.Label(
             ftr, text=f"Ready  •  v{APP_VERSION}  •  {datetime.now().strftime('%Y-%m-%d')}",
             bg=C_FOOTER, fg="#475569", font=F_HINT,
@@ -647,7 +1213,6 @@ Pattern referensi: https://github.com/anandategarch/Inventory-Adjusment
         )
         if path:
             self.var_workbook.set(path)
-            # Auto-set output path kalau kosong
             if not self.var_output.get():
                 self.var_output.set(str(DEFAULT_OUTPUT))
 
@@ -716,18 +1281,15 @@ Pattern referensi: https://github.com/anandategarch/Inventory-Adjusment
             messagebox.showerror("Input Error", "Output path belum diisi.")
             return
 
-        # Disable run button
         self.btn_run.configure(state="disabled")
         self.progress["value"] = 0
         self._set_status("Starting...", "running")
 
-        # Buka log popup
         self._show_log_popup()
         if self.log_popup:
             self.log_popup.clear()
             self.log_popup.append("=== Mulai Pipeline ===")
 
-        # Run in background thread
         self.worker_thread = threading.Thread(
             target=self._worker_run,
             args=(wb_path, ka, out_path),
@@ -787,10 +1349,15 @@ Pattern referensi: https://github.com/anandategarch/Inventory-Adjusment
             self.log_popup.append(f"Total baris: {summary.get('total_rows', 0)}")
             self.log_popup.append(f"Anomali prioritas: {summary.get('prioritas_count', 0)}")
             self.log_popup.append(f"Output: {self.last_output_path}")
-        # Load preview
+        # Load preview + update dashboard
         self._load_preview_data(self.last_output_path)
         self._update_summary_tab(summary)
-        # Auto-refresh tab Visualisasi (NEW v1.1)
+        # Update dashboard (KPI + charts + table)
+        df = self._preview_dfs.get("Detail")
+        if df is not None and not df.empty:
+            self._update_kpi_cards(df, summary)
+            # Reset filters
+            self._clear_all_filters()
         try:
             self._refresh_viz()
         except Exception as e:
@@ -802,7 +1369,8 @@ Pattern referensi: https://github.com/anandategarch/Inventory-Adjusment
             f"Anomali prioritas: {summary.get('prioritas_count', 0)}\n"
             f"Potensi anomali: {summary.get('potensi_count', 0)}\n"
             f"Perlu review: {summary.get('review_count', 0)}\n\n"
-            f"Output: {self.last_output_path}",
+            f"Output: {self.last_output_path}\n\n"
+            f"Buka tab 'Dashboard' untuk analisa drill-down.",
         )
 
     def _on_pipeline_error(self, err: str):
@@ -819,7 +1387,7 @@ Pattern referensi: https://github.com/anandategarch/Inventory-Adjusment
         self.lbl_footer.configure(text=f"{msg[:80]}  •  v{APP_VERSION}")
 
     # --------------------------------------------------------
-    # PREVIEW (TAB 2)
+    # LOAD PREVIEW DATA
     # --------------------------------------------------------
     def _load_preview_data(self, xlsx_path: str):
         try:
@@ -833,117 +1401,6 @@ Pattern referensi: https://github.com/anandategarch/Inventory-Adjusment
             self._refresh_preview()
         except Exception as e:
             messagebox.showwarning("Preview", f"Gagal load preview: {e}")
-
-    def _refresh_preview(self):
-        sheet_map = {
-            "Detail": "Detail",
-            "Anomali": "Anomali Prioritas",
-            "Cabang": "Per Cabang",
-            "Top": "Top Items",
-            "Pareto": "Pareto Alasan",
-        }
-        sheet = sheet_map.get(self.var_result_sheet.get(), "Detail")
-        df = self._preview_dfs.get(sheet)
-        # Clear tree
-        self.tree.delete(*self.tree.get_children())
-        if df is None or df.empty:
-            self.tree["columns"] = ["info"]
-            self.tree.heading("info", text="info")
-            self.tree.insert("", "end", values=["(tidak ada data — jalankan pipeline dulu)"])
-            return
-        cols = list(df.columns)
-        self.tree["columns"] = cols
-        for c in cols:
-            self.tree.heading(c, text=str(c))
-            self.tree.column(c, width=120, stretch=False)
-        # Insert rows (limit 500 untuk performa)
-        for row in df.head(500).itertuples(index=False, name=None):
-            vals = []
-            for v in row:
-                if v is None or (isinstance(v, float) and pd.isna(v)):
-                    vals.append("")
-                elif isinstance(v, float):
-                    vals.append(round(v, 4))
-                else:
-                    vals.append(v)
-            self.tree.insert("", "end", values=vals)
-
-    # --------------------------------------------------------
-    # SUMMARY (TAB 3)
-    # --------------------------------------------------------
-    def _update_summary_tab(self, summary: dict):
-        # Update label
-        msg = (
-            f"Waktu Run     : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"Total Baris   : {summary.get('total_rows', 0)}\n"
-            f"Cabang Unik   : {summary.get('cabang_count', 0)}\n"
-            f"Item Unik     : {summary.get('item_count', 0)}\n"
-            f"Anomali       : {summary.get('prioritas_count', 0)} prioritas • "
-            f"{summary.get('potensi_count', 0)} potensi • "
-            f"{summary.get('review_count', 0)} review • "
-            f"{summary.get('normal_count', 0)} normal\n"
-            f"Output        : {summary.get('output_path', '-')}"
-        )
-        self.lbl_summary.configure(text=msg)
-        # Update tree dengan tabel ringkasan per cabang
-        df = self._preview_dfs.get("Per Cabang")
-        self.tree_summary.delete(*self.tree_summary.get_children())
-        if df is None or df.empty:
-            return
-        cols = list(df.columns)
-        self.tree_summary["columns"] = cols
-        for c in cols:
-            self.tree_summary.heading(c, text=str(c))
-            self.tree_summary.column(c, width=140, stretch=False)
-        for row in df.itertuples(index=False, name=None):
-            vals = []
-            for v in row:
-                if v is None or (isinstance(v, float) and pd.isna(v)):
-                    vals.append("")
-                elif isinstance(v, float):
-                    vals.append(round(v, 4))
-                else:
-                    vals.append(v)
-            self.tree_summary.insert("", "end", values=vals)
-
-    # --------------------------------------------------------
-    # CONFIG (TAB 4)
-    # --------------------------------------------------------
-    def _save_config(self):
-        try:
-            new_th = {}
-            for k, var in self._config_vars.items():
-                raw = var.get().strip()
-                # Try int dulu, lalu float
-                try:
-                    new_th[k] = int(raw)
-                except ValueError:
-                    try:
-                        new_th[k] = float(raw)
-                    except ValueError:
-                        messagebox.showerror("Config Error", f"Nilai untuk {k} tidak valid: {raw}")
-                        return
-            self.config["thresholds"] = new_th
-            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(self.config, f, ensure_ascii=False, indent=2)
-            messagebox.showinfo("Config", f"Disimpan ke {CONFIG_PATH}")
-        except Exception as e:
-            messagebox.showerror("Config Error", str(e))
-
-    def _reset_config(self):
-        default_cfg = {
-            "thresholds": {
-                "TH_SPIKE": 3, "TH_MAX_AVG_AKTIF": 2.5, "TH_MAX_MEDIAN": 3,
-                "TH_MAX_SECOND": 3, "TH_MAX_SHARE_WARN": 0.50,
-                "TH_MAX_SHARE_HIGH": 0.70, "TH_MAX_BOM_WARN": 0.25,
-                "TH_MAX_BOM_HIGH": 0.50, "TH_TOTAL_BOM_WARN": 0.50,
-                "TH_TOTAL_BOM_HIGH": 1.00, "TH_PEER_MIN": 3,
-                "TH_PEER_WARN": 2, "TH_PEER_HIGH": 3, "TH_LAST_SHARE": 0.70,
-            }
-        }
-        for k, var in self._config_vars.items():
-            if k in default_cfg["thresholds"]:
-                var.set(str(default_cfg["thresholds"][k]))
 
 
 # ============================================================

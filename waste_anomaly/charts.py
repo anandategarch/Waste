@@ -38,11 +38,12 @@ def _get_canvas_class():
 # ============================================================
 
 # Palette tanpa indigo/blue (sesuai panduan UI)
+# Amber-700 (bukan amber-500) untuk contrast WCAG AA dengan white text
 PALETTE_STATUS = {
-    "Prioritas Tinggi": "#dc2626",   # red
-    "Potensi Anomali": "#ea580c",   # orange
-    "Perlu Review":    "#f59e0b",   # amber
-    "Normal":          "#16a34a",   # green
+    "Prioritas Tinggi": "#dc2626",   # red-600
+    "Potensi Anomali": "#ea580c",   # orange-600
+    "Perlu Review":    "#b45309",   # amber-700 (was amber-500; kontras lebih baik)
+    "Normal":          "#16a34a",   # green-600
 }
 
 PALETTE_KATEGORI = [
@@ -105,7 +106,7 @@ def chart_status_pie(df: pd.DataFrame) -> Figure:
         counts.values,
         labels=counts.index,
         colors=colors,
-        autopct=lambda pct: f"{pct:.1f}%\n({int(pct/100*counts.sum())})",
+        autopct=lambda pct: f"{pct:.1f}%\n({int(round(pct/100*counts.sum()))})",  # round to avoid off-by-one
         startangle=90,
         wedgeprops=dict(width=0.45, edgecolor="white", linewidth=2),
         textprops=dict(fontsize=9, color="#1e293b", fontweight="bold"),
@@ -361,7 +362,11 @@ def chart_scatter_max_total(df: pd.DataFrame) -> Figure:
         return fig
 
     # Garis identitas (MAX = TOTAL) — single-day dominance
-    max_xy = max(df["TOTAL"].max(), df["MAX"].max()) * 1.05
+    max_val = max(df["TOTAL"].max(), df["MAX"].max())
+    if pd.isna(max_val) or max_val <= 0:
+        max_xy = 1.0
+    else:
+        max_xy = float(max_val) * 1.05
     ax.plot([0, max_xy], [0, max_xy], "--", color="#94a3b8", linewidth=0.8, alpha=0.7, label="MAX = TOTAL (single-day)")
 
     ax.set_title("Scatter: MAX vs TOTAL — Deteksi Outlier", pad=12)
@@ -399,7 +404,7 @@ def chart_box_total_per_jenis(df: pd.DataFrame) -> Figure:
         ax.set_axis_off()
         return fig
 
-    bp = ax.boxplot(data, labels=labels, patch_artist=True, widths=0.5,
+    bp = ax.boxplot(data, tick_labels=labels, patch_artist=True, widths=0.5,
                     medianprops=dict(color="#0f172a", linewidth=2))
     for patch, color in zip(bp["boxes"], PALETTE_KATEGORI[:len(data)]):
         patch.set_facecolor(color)

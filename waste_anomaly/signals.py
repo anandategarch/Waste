@@ -3,7 +3,7 @@ signals.py — 12 sinyal anomali + composite score + status + reasons + category
 
 Setara dengan section 11 (AddAnalysis) dari M code.
 
-Setiap sinyal S1..S12 adalah boolean (0/1/2). Skor dijumlahkan → CompositeScore (max 18).
+Setiap sinyal S1..S12 adalah boolean (0/1/2). Skor dijumlahkan → CompositeScore (max 19).
 Status:
   Score >= 8 -> "Prioritas Tinggi"
   Score >= 5 -> "Potensi Anomali"

@@ -1,6 +1,6 @@
 # Waste Anomaly Detection
 
-Python + Tkinter program untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, dan **12 grafik visualisasi** matplotlib embedded.
+Python + Tkinter **professional dashboard** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif**, dan **18 grafik** matplotlib embedded.
 
 ## Cara Pakai
 
@@ -22,16 +22,17 @@ Satu file Excel `.xlsx` berisi **3 sheet** (atau named range):
 > Sheet BOM & DATABASE_SATUAN opsional — kalau tidak ada, sinyal BOM dan STATUS akan di-skip tapi pipeline tetap jalan.
 
 ### 3. Jalankan (setiap kali)
-Jalankan `MULAI.bat`. UI terbuka dengan 6 tab:
+Jalankan `MULAI.bat`. UI terbuka dengan **7 tab**:
 
 | Tab | Fungsi |
 |-----|--------|
-| 1. Run Pipeline | Browse workbook → isi Key Akhir (1-31) → Mulai Pipeline |
-| 2. Hasil | Preview tabel hasil (Detail/Anomali Prioritas/Per Cabang/Top Items/Pareto) |
-| 3. Visualisasi | **12 grafik matplotlib** — pie/bar/pareto/heatmap/scatter/box/donut + export PNG |
-| 4. Ringkasan | Summary run terakhir (total baris, cabang, item, count per status) |
-| 5. Konfigurasi | Editor threshold (simpan ke `waste_anomaly/config.json`) |
-| 6. Bantuan | Instruksi pakai + 12 sinyal anomali + troubleshooting |
+| 📊 Dashboard | **PRO** — KPI cards + filter bar + 3 interactive charts + drill-down table |
+| 📋 Hasil | Preview tabel hasil (Detail/Anomali/Cabang/Top/Pareto) |
+| 📈 Visualisasi | 12 grafik matplotlib gallery + export PNG |
+| 🗂 Ringkasan | Summary run terakhir (total, cabang, item, count per status) |
+| ▶ Run Pipeline | Browse workbook + Key Akhir + Run |
+| ⚙ Konfigurasi | Editor threshold (simpan ke config.json) |
+| ❓ Bantuan | Instruksi pakai + 12 sinyal + drill-down workflow |
 
 ## Output Excel (6 Sheet)
 
@@ -44,9 +45,60 @@ Jalankan `MULAI.bat`. UI terbuka dengan 6 tab:
 | Pareto Alasan | Group by KETERANGAN — sum TOTAL, persentase, cumulative % |
 | Log Run | Timestamp, parameter, summary stats, log lines pipeline |
 
-## Tab Visualisasi — 12 Grafik (NEW v1.1)
+## Tab Dashboard — Drill-Down Interaktif (NEW v2.0)
 
-Setelah run pipeline, tab "3. Visualisasi" auto-load 12 grafik matplotlib embedded:
+Tab Dashboard adalah **pusat analisa** dengan layout profesional:
+
+### KPI Cards (6 cards)
+| Card | Warna | Isi |
+|------|-------|-----|
+| TOTAL BARIS | slate | Jumlah baris diproses |
+| PRIORITAS TINGGI | red | Count anomali prioritas tinggi |
+| POTENSI ANOMALI | orange | Count potensi anomali |
+| PERLU REVIEW | amber | Count perlu review |
+| TOTAL WASTE | teal | Sum TOTAL waste (qty) |
+| CABANG | purple | Jumlah cabang unik |
+
+### Filter Bar (5 cara drill-down)
+1. **Search box** — free-text search di semua kolom
+2. **Dropdown Cabang** — pilih cabang spesifik
+3. **Dropdown Status** — pilih status anomali
+4. **Klik bar chart interaktif** — bar yang di-klik jadi filter aktif
+5. **Double-click baris table** — drill-down ke cabang+item baris itu
+
+### Active Filter Chips
+Filter aktif muncul sebagai chip kuning di atas table. Klik `×` di chip untuk remove filter individual, atau klik `✕ Clear Filter` untuk clear semua.
+
+### 3 Interactive Charts
+| # | Chart | Klik untuk Filter |
+|---|-------|------------------|
+| 1 | Status Bar | Klik bar → filter by status anomali |
+| 2 | Cabang Bar | Klik bar → filter by cabang |
+| 3 | Top Items Horizontal | Klik bar → filter by NAMA BARANG |
+
+Bar aktif highlight dengan warna penuh, bar lain jadi abu-abu (visual feedback).
+
+### Drill-Down Detail Table
+- Sortable columns (klik header untuk sort asc/desc)
+- Status coloring (red/orange/amber/green sesuai ANOMALY STATUS)
+- Pagination otomatis (max 500 baris untuk performa)
+- Double-click row → drill-down ke cabang+item
+- Export current filtered view ke Excel
+
+### Workflow Analisa Contoh
+```
+1. Buka tab Dashboard → lihat KPI cards
+2. Klik bar "Prioritas Tinggi" di chart Status → table ter-filter
+3. Klik bar "RESTO.PWKTAM" di chart Cabang → drill-down lebih dalam
+4. Klik bar "Bawang Putih" di chart Top Items → fokus ke item itu
+5. Active chips: [status: Prioritas Tinggi] [cabang: RESTO.PWKTAM] [item: Bawang Putih]
+6. Search "Cancel Nota" → tambah filter keterangan
+7. Export hasil filter ke Excel untuk laporan
+```
+
+## Tab Visualisasi — 12 Grafik (Static Gallery)
+
+Setelah run pipeline, tab "Visualisasi" auto-load 12 grafik matplotlib embedded:
 
 | # | Grafik | Tipe | Fungsi Analisa |
 |---|--------|------|---------------|
@@ -97,20 +149,21 @@ Setelah run pipeline, tab "3. Visualisasi" auto-load 12 grafik matplotlib embedd
 
 ```
 Waste/
-├── MULAI.bat                       ← ENTRY POINT (buka UI 6 tab)
+├── MULAI.bat                       ← ENTRY POINT (buka UI 7 tab)
 ├── SETUP.bat                       ← One-time install (pandas, numpy, openpyxl, matplotlib)
 ├── README.md                       ← File ini
 ├── .gitignore
-├── ui_app.py                       ← UI Tkinter multi-tab (entry point)
+├── ui_app.py                       ← UI Tkinter professional dashboard (v2.0)
 ├── make_sample.py                  ← Generate sample workbook untuk testing
 ├── waste_anomaly/
 │   ├── __init__.py
 │   ├── config.json                 ← Thresholds + sheet name candidates
 │   ├── pipeline.py                 ← Orchestrator 14 stage
 │   ├── loader.py                   ← Excel loaders (REKAP_MENTAH + BOM + DATABASE_SATUAN)
-│   ├── stages.py                   ← 14 stage replika M code
-│   ├── signals.py                  ← 12 sinyal anomali + composite score
-│   ├── charts.py                   ← 12 grafik matplotlib (NEW v1.1)
+│   ├── stages.py                   ← 14 stage replika M code (audited v2.0)
+│   ├── signals.py                  ← 12 sinyal anomali + composite score (max 19)
+│   ├── charts.py                   ← 12 static chart matplotlib
+│   ├── dashboard.py                ← 6 interactive chart untuk drill-down (NEW v2.0)
 │   ├── exporter.py                 ← Multi-sheet xlsx writer + formatting
 │   └── utils.py                    ← Helper (Number.From, List.Sum, dll)
 ├── data/                           ← Letakkan workbook input di sini
