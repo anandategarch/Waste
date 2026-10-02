@@ -307,7 +307,7 @@ Edit `waste_anomaly/config.json` → section `thresholds`. Atau pakai tab "4. Ko
 
 | Error | Solusi |
 |-------|--------|
-| `Tidak menemukan sheet untuk 'rekap_mentah'` | Pastikan workbook punya sheet `REKAP_MENTAH` / `Rekap Mentah` / `REKAP`. Atau edit `config.json` → `input_sheets.rekap_mentah` untuk tambah nama kandidat. |
+| `Tidak menemukan sheet untuk 'rekap_mentah'` | Pastikan workbook punya sheet `DATA_WASTE` / `Sheet1` / `REKAP_MENTAH` / `DATA`. Atau edit `config.json` → `input_sheets.rekap_mentah` untuk tambah nama kandidat. |
 | `BOM sheet tidak ditemukan` | BOM join dilewati. Sinyal S6/S7 tidak trigger. Tambahkan sheet `BOM` / `MASTER BOM` untuk mengaktifkan. |
 | `DATABASE_SATUAN tidak ditemukan` | STATUS menjadi "Cek" untuk semua baris. Tambahkan sheet `DATABASE_SATUAN` untuk mengaktifkan. |
 | `ModuleNotFoundError: pandas / matplotlib` | Jalankan `SETUP.bat` dulu. Atau manual: `pip install pandas numpy openpyxl matplotlib`. |

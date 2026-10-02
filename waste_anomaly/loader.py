@@ -2,7 +2,7 @@
 loader.py — pemuat data input dari workbook Excel.
 
 Setara dengan Excel.CurrentWorkbook() + query referensi M code:
-  - Source = REKAP_MENTAH (named range atau sheet)
+  - Source = DATA_WASTE (named range atau sheet)
   - BOM lookup = query "2  22 05" (BOM master)
   - DATABASE_SATUAN (master expected helper per kategori)
 
@@ -113,7 +113,7 @@ def resolve_sheet_for(
 
 
 # ============================================================
-# LOAD 1: REKAP_MENTAH
+# LOAD 1: DATA_WASTE (input utama)
 # ============================================================
 
 def load_rekap_mentah(
@@ -121,18 +121,18 @@ def load_rekap_mentah(
     config: dict,
     logger=None,
 ) -> pd.DataFrame:
-    """Load REKAP_MENTAH. Setara Source = Excel.CurrentWorkbook(){[Name="REKAP_MENTAH"]}[Content]."""
+    """Load DATA_WASTE (input utama pipeline). Setara Source = Excel.CurrentWorkbook(){[Name="DATA_WASTE"]}[Content]."""
     sheets = list_sheets(workbook_path)
     named = list_named_ranges(workbook_path)
     sheet, ref = resolve_sheet_for("rekap_mentah", config, sheets, named)
     if logger:
-        logger(f"[loader] REKAP_MENTAH: sheet='{sheet}', named_range={ref!r}")
+        logger(f"[loader] DATA_WASTE: sheet='{sheet}', named_range={ref!r}")
 
     # Baca sheet penuh (header baris pertama)
     df = pd.read_excel(workbook_path, sheet_name=sheet, header=0)
     df = _normalize_columns(df)
     if logger:
-        logger(f"[loader] REKAP_MENTAH loaded: {len(df)} rows, {len(df.columns)} cols")
+        logger(f"[loader] DATA_WASTE loaded: {len(df)} rows, {len(df.columns)} cols")
     return df
 
 

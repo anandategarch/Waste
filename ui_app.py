@@ -1526,13 +1526,15 @@ class WasteAnomalyApp(tk.Tk):
 
 === CARA PAKAI ===
 
-1. Siapkan workbook Excel berisi 3 sheet/named-range:
-   • REKAP_MENTAH   — data waste harian (kolom 1..31 + NAMA RESTO + NAMA BARANG + JENIS + KETERANGAN + SATUAN + dll)
-   • BOM            — master Bill of Materials (Nomor #, Nama Barang, TOTAL BOM)
-   • DATABASE_SATUAN — master helper value per kategori (NAMA ITEM + 11 kolom kategori)
+1. Siapkan workbook Excel `DATA_WASTE.xlsx` (struktur 53 kolom standar):
+   Workflow: Query data → Olah di Excel → Save as DATA_WASTE.xlsx
+   • DATA_WASTE (sheet utama) — data waste harian (kolom 1..31 + NAMA RESTO + NAMA BARANG + JENIS + KETERANGAN + SATUAN + dll)
+   • BOM (opsional) — master Bill of Materials (Nomor #, Nama Barang, TOTAL BOM)
+   • DATABASE_SATUAN (opsional) — master helper per kategori (NAMA ITEM + 11 kolom kategori)
+   Sheet name auto-detect: DATA_WASTE / Sheet1 / REKAP_MENTAH / DATA / dll
 
 2. Tab "Run Pipeline":
-   • Browse... → pilih workbook Excel
+   • Browse... → pilih workbook Excel (DATA_WASTE.xlsx Anda)
    • Isi Key Akhir (1..31) — cutoff hari terakhir periode analisa
    • (Optional) ganti path output Excel
    • Klik "Mulai Pipeline"
@@ -1591,7 +1593,7 @@ Composite Score (max 19):
 === TROUBLESHOOTING ===
 
 • "Tidak menemukan sheet untuk 'rekap_mentah'"
-  → Pastikan workbook punya sheet REKAP_MENTAH / Rekap Mentah / REKAP.
+  → Pastikan workbook punya sheet DATA_WASTE / Sheet1 / REKAP_MENTAH.
      Atau edit waste_anomaly/config.json → input_sheets untuk tambah nama kandidat.
 
 • "BOM sheet tidak ditemukan"

@@ -2,7 +2,7 @@
 make_sample.py — generate sample workbook untuk testing pipeline.
 
 Membuat 3 sheet:
-  - REKAP_MENTAH: ~30 baris (5 cabang x 6 item, mix SUSUT/TRIAL/WASTE)
+  - DATA_WASTE: ~30 baris (5 cabang x 6 item, mix SUSUT/TRIAL/WASTE)
   - BOM: 6 item dengan TOTAL BOM
   - DATABASE_SATUAN: 6 item dengan 11 kolom kategori
 
@@ -110,12 +110,12 @@ def main():
     df_satuan = build_satuan()
 
     with pd.ExcelWriter(OUT, engine="openpyxl") as writer:
-        df_rekap.to_excel(writer, sheet_name="REKAP_MENTAH", index=False)
+        df_rekap.to_excel(writer, sheet_name="DATA_WASTE", index=False)
         df_bom.to_excel(writer, sheet_name="BOM", index=False)
         df_satuan.to_excel(writer, sheet_name="DATABASE_SATUAN", index=False)
 
     print(f"Sample workbook dibuat: {OUT}")
-    print(f"  REKAP_MENTAH: {len(df_rekap)} rows")
+    print(f"  DATA_WASTE: {len(df_rekap)} rows")
     print(f"  BOM: {len(df_bom)} rows")
     print(f"  DATABASE_SATUAN: {len(df_satuan)} rows")
 

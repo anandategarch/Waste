@@ -74,7 +74,7 @@ def run_pipeline(
     _log(f"Output: {output_path}", 3)
 
     # ---- LOAD ----
-    _log("Loading REKAP_MENTAH ...", 5)
+    _log("Loading DATA_WASTE ...", 5)
     df_rekap = load_rekap_mentah(workbook_path, config, logger=_log)
 
     _log("Loading BOM ...", 8)
