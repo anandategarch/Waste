@@ -29,7 +29,7 @@ class SimpleLogPopup(tk.Toplevel):
         try:
             self.transient(parent)  # M20: ikuti parent — tanpa focus_force()
         except Exception:
-            _LOGGER.debug("Suppressed: Suppressed Exception", exc_info=True)
+            _LOGGER.debug("Suppressed: Exception", exc_info=True)
         self._build()
 
     def _build(self):
@@ -147,7 +147,7 @@ class FilterChip(tk.Frame):
                     return  # masih di dalam chip
                 node = getattr(node, "master", None)
         except tk.TclError:
-            _LOGGER.debug("Suppressed: Suppressed tk.TclError", exc_info=True)
+            _LOGGER.debug("Suppressed: tk.TclError", exc_info=True)
         self._set_hover(False)
 
     def _set_hover(self, hovered: bool):

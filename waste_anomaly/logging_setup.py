@@ -6,17 +6,18 @@ produksi tidak meninggalkan jejak file apa pun (log hanya popup in-memory
 ``logs/waste_anomaly.log`` (rotating 1 MB × 3 backup) + hook exception
 global Tkinter (``report_callback_exception``).
 
-Cara pakai (ui_app.py startup):
+Cara pakai (ui/app.py startup):
     from waste_anomaly.logging_setup import setup_logging
     log_path = setup_logging()          # → logs/waste_anomaly.log
     ...
-    root.report_callback_exception = install_tk_exception_hook(root)
+    install_tk_exception_hook(app)      # pasang hook ke root Tk
 """
 
 from __future__ import annotations
 
 import logging
 import logging.handlers
+import sys
 import traceback
 from pathlib import Path
 
@@ -34,9 +35,10 @@ def setup_logging(
     """Konfigurasi root logger dengan RotatingFileHandler (idempotent).
 
     Args:
-        log_dir: folder log. Default: ``<cwd>/logs``. Kalau folder tidak bisa
-            dibuat (read-only), fallback ``~/.waste_anomaly/logs``; kalau itu
-            juga gagal → None (logging ke file off, aplikasi tetap jalan).
+        log_dir: folder log. Default: folder exe saat frozen (v2.4.1 — dulu
+            cwd, yang bisa berupa System32 kalau shortcut punya "Start in"
+            berbeda), lalu ``<cwd>/logs``, lalu ``~/.waste_anomaly/logs``.
+            Kalau semua gagal (read-only), → None (console-only).
         level: level file handler (default INFO).
 
     Returns:
@@ -49,7 +51,12 @@ def setup_logging(
     candidates = []
     if log_dir is not None:
         candidates.append(Path(log_dir))
-    candidates.append(Path.cwd() / "logs")
+    else:
+        # v2.4.1: exe mode — log BERDAMPINGAN exe (bukan cwd yang bisa aneh
+        # / bukan _MEIPASS temp yang terhapus saat exit).
+        if getattr(sys, "frozen", False):
+            candidates.append(Path(sys.executable).resolve().parent / "logs")
+        candidates.append(Path.cwd() / "logs")
     candidates.append(Path.home() / ".waste_anomaly" / "logs")
 
     log_dir_path: Path | None = None

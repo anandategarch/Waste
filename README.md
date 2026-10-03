@@ -2,6 +2,8 @@
 
 Python + Tkinter **professional dashboard** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif**, **filter profile persistence**, **comparison mode 2 cabang**, **analisa quadrant & rate league**, dan **22+ grafik** matplotlib embedded.
 
+> **v2.4.1** (hasil "double check") — perbaikan **path frozen-mode PyInstaller**: config.json / filters.json / folder data / log kini disimpan BERDAMPINGAN EXE (dulu hilang senyap karena menulis ke _MEIPASS temp yang terhapus saat exit — kebalikan klaim BUILD_EXE.bat), + **12 pesan log duplikat dibersihkan**, + **10 test baru path frozen** (total **150 test**).
+>
 > **v2.4.0** — hasil "kerjakan semua" (2025): **arsitektur modular** (god-object 3.256 baris / 102 metode dipecah jadi paket `ui/` — 14 file mixin, verbatim terverifikasi + 11 test struktural), **cancel run jujur** (hook antar-stage — CPU benar-benar berhenti), **validasi skema input** (anti degradasi senyap header lowercase), **exporter streaming** (anti OOM 100k baris), **logging framework** (rotating file + hook exception Tk), **140 test**, **CI GitHub Actions**, **packaging .exe** + ikon aplikasi. Detail di **Changelog v2.4.0**.
 
 ## Cara Pakai
@@ -220,7 +222,7 @@ Setelah run pipeline, tab "Visualisasi" auto-load 12 grafik matplotlib embedded:
 python -m pytest tests/ -v
 ```
 
-**140 test** — golden regression end-to-end (fixture `DATA_WASTE.xlsx` 25.901 baris), **unit test 12 sinyal S1–S12** (trigger/non-trigger/boundary/NaN/config), unit test join BOM & normalisasi kunci, unit test presisi float, kontrak summary dict, **validasi skema**, **cancel hook antar-stage**, **exporter dual-mode** (paritas data + streaming 60k baris), logging framework, dan **11 test struktural paket ui/** (MRO, manifest 102 metode, dekorator, registry font). Jalankan setiap kali mengubah kode — angka golden berubah tanpa alasan = regresi.
+**150 test** — golden regression end-to-end (fixture `DATA_WASTE.xlsx` 25.901 baris), **unit test 12 sinyal S1–S12** (trigger/non-trigger/boundary/NaN/config), unit test join BOM & normalisasi kunci, unit test presisi float, kontrak summary dict, **validasi skema**, **cancel hook antar-stage**, **exporter dual-mode** (paritas data + streaming 60k baris), logging framework, **10 test path frozen-mode** (seed sidecar config, fallback read-only, dev-path tak berubah), dan **11 test struktural paket ui/** (MRO, manifest 102 metode, dekorator, registry font). Jalankan setiap kali mengubah kode — angka golden berubah tanpa alasan = regresi.
 
 CI otomatis menjalankan test ini di setiap push/pull-request: matrix Python 3.10/3.12 × Linux/Windows (`.github/workflows/ci.yml`).
 
@@ -259,7 +261,7 @@ Waste/
 │   └── tab_help.py                 ← Tab 10 Bantuan
 ├── assets/                         ← Ikon aplikasi (ico + png)
 ├── make_sample.py                  ← Generate sample workbook untuk testing
-├── tests/                          ← Test suite pytest (140 test)
+├── tests/                          ← Test suite pytest (150 test)
 │   ├── conftest.py
 │   ├── fixtures/ui_methods_manifest.txt  ← Manifest 102 metode (kunci struktural)
 │   ├── test_pipeline_regression.py ← Golden regression 25.901 baris
@@ -270,10 +272,12 @@ Waste/
 │   ├── test_key_normalization.py   ← Normalisasi kunci join
 │   ├── test_float_precision.py     ← Presisi 15 digit (idempotency)
 │   ├── test_logging.py             ← Logging framework
+│   ├── test_frozen_paths.py        ← Path frozen-mode exe (seed sidecar)
 │   └── test_ui_structure.py        ← Struktur paket ui/ (MRO + manifest)
-├── .github/workflows/ci.yml        ← CI: matrix Python × OS, lint + 140 test
+├── .github/workflows/ci.yml        ← CI: matrix Python × OS, lint + 150 test
 ├── waste_anomaly/
-│   ├── __init__.py                 ← __version__ single-source (2.4.0)
+│   ├── __init__.py                 ← __version__ single-source (2.4.1)
+│   ├── frozen.py                   ← Resolusi path PyInstaller exe vs dev (v2.4.1)
 │   ├── config.json                 ← Thresholds + sheet name candidates
 │   ├── pipeline.py                 ← Orchestrator 14 stage + cancel_check
 │   ├── schema.py                   ← Validasi skema input (anti degradasi senyap)
@@ -383,6 +387,32 @@ Edit `waste_anomaly/config.json` → section `thresholds`. Atau pakai tab "⚙ K
 | Tab Visualisasi kosong | Pastikan sudah run pipeline. Klik "⟳ Refresh Grafik" manual kalau tidak auto-load. |
 | Grafik matplotlib error di Linux headless | Set env: `export MPLBACKEND=TkAgg` sebelum jalankan `python ui_app.py`. |
 | UI tidak terbuka | Pastikan Python 3.10+ terpasang (`python --version`). |
+
+## Changelog v2.4.1 — "Double Check": Fix Path Frozen-Mode PyInstaller
+
+Ditemukan saat verifikasi ulang menyeluruh v2.4.0 (semua klaim diuji runtime, bukan cuma percaya commit message).
+
+### Bug — file user hilang senyap di mode exe (KRITIS)
+- **Akar masalah**: `CONFIG_PATH` (utils.py), `PROFILES_PATH` (filters.py), dan `APP_DIR` (ui/shared.py) resolve dari `Path(__file__)`. Di exe PyInstaller, `__file__` menunjuk ke dir ekstraksi temp `_MEIPASS` yang **DIHAPUS saat aplikasi ditutup** — threshold yang disimpan lewat tab Konfigurasi, profil filter, dan folder `data/` lenyap tanpa jejak. Ke balikan dari klaim BUILD_EXE.bat ("config.json disimpan berdampingan dengan exe").
+- **Fix**: modul baru `waste_anomaly/frozen.py` — satu sumber resolusi: file **writable** (config sidecar, filters.json, data/, logs) → folder **EXE** (`Path(sys.executable).parent`); resource **read-only** (ikon, config bundled) → `_MEIPASS` (`bundle_dir()`).
+- **First-run seed**: saat exe dijalankan pertama kali, config bundled otomatis disalin ke `config.json` di samping exe — sekarang klaim BUILD_EXE.bat benar-benar terimplementasi. Folder read-only → fallback baca bundled (pipeline tetap jalan).
+- **Ikon**: dicari di `bundle_res_dir()` (frozen) lalu `app_dir()` (dev) — jalan di kedua mode.
+- **Log**: mode exe menulis `logs/` di samping exe (dulu `cwd` — bisa System32 kalau shortcut punya "Start in" berbeda).
+- **Tab Konfigurasi** kini menampilkan & menulis ke path dinamis (`_active_config_path()`).
+
+### Cleanup
+- **12 pesan log duplikat** "Suppressed: Suppressed …" (sisa penggantian mekanis v2.4.0) → "Suppressed: …".
+- Import `simpledialog` tak terpakai di `tab_dashboard.py` dihapus (F401/F811).
+- Docstring `logging_setup` — contoh pemakaian `install_tk_exception_hook` dibenarkan.
+
+### Test
+- **+10 test** (`test_frozen_paths.py`): dev-path tak berubah (golden aman), seed first-run, sidecar existing menang (edit user bertahan), fallback read-only, roundtrip save/load profil frozen, `app_dir()`/`bundle_res_dir()`. Total **150 test** semua LULUS.
+
+### Verifikasi runtime (bukan cuma test)
+- Golden run data asli: 25.901 baris / 399 anomali / 41 prioritas — **MATCH** (key_akhir=31).
+- Cancel mid-run: pipeline berhenti persis di gate Stage 2 (`cancelled=True`, log terpotong di gate) — **PASS**.
+- Skema lowercase: gagal keras + saran rename — **PASS**.
+- Exporter 60k baris: peak memori **7 MB** (dulu OOM ~1,8 GB) — **PASS**.
 
 ## Changelog v2.4.0 — "Kerjakan Semua": Arsitektur Modular + Infrastruktur Profesional Penuh
 

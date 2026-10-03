@@ -23,12 +23,29 @@ from types import ModuleType
 
 import pandas as pd
 
+from waste_anomaly.frozen import bundle_dir as _bundle_dir
+from waste_anomaly.frozen import exe_dir as _exe_dir
+
 # ============================================================
-# APP META — APP_DIR menunjuk REPO ROOT (parent dari paket ui/),
-# bukan folder ui/ — dipakai untuk lokasi folder data/.
+# APP META — dev: repo root (parent paket ui/). Frozen exe: folder EXE
+# (v2.4.1 — dipakai untuk folder data/ writable & fallback ikon).
+# BUNDLE_DIR = resource read-only PyInstaller (_MEIPASS; dev = repo root).
 # ============================================================
-APP_DIR = Path(__file__).resolve().parent.parent
-APP_VERSION = "2.4.0"
+APP_DIR = _exe_dir()
+BUNDLE_DIR = _bundle_dir()
+
+
+def app_dir() -> Path:
+    """APP_DIR dinamis (diuji unit tests/test_frozen_paths.py)."""
+    return _exe_dir()
+
+
+def bundle_res_dir() -> Path:
+    """BUNDLE_DIR dinamis — resource bundled (ikon, config default)."""
+    return _bundle_dir()
+
+
+APP_VERSION = "2.4.1"
 APP_TITLE = "Waste Anomaly Detection — Pro Dashboard"
 
 # F11 (v2.4.0): logger UI bersama — exception senyap kini tercatat ke file.

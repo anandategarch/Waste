@@ -5,7 +5,10 @@
 # Catatan:
 # - python-calamine OPSIONAL — kalau tidak terinstall saat build, exclude aman
 #   (loader otomatis fallback ke openpyxl).
-# - config.json + assets ikon di-bundle sebagai data.
+# - config.json + assets ikon di-bundle sebagai data (READ-ONLY seed source).
+#   v2.4.1: saat exe pertama kali jalan, config.json otomatis disalin ke
+#   sidecar di samping exe (waste_anomaly/frozen.py) — edit threshold user
+#   + filters.json + data/ + logs/ semuanya bertahan di folder exe.
 # - matplotlib backend TkAgg di-hook otomatis PyInstaller.
 
 import sys

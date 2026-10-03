@@ -53,9 +53,11 @@ echo.
 echo  EXE tersimpan di: dist\WasteAnomalyDetection.exe
 echo  Salin file itu ke PC mana pun (tanpa Python) + DATA_WASTE.xlsx Anda.
 echo.
-echo  CATATAN: file exe memuat config.json default. Threshold bisa tetap
-echo  diedit lewat tab Konfigurasi (config.json disimpan berdampingan
-echo  dengan exe saat pertama kali dijalankan).
+echo  CATATAN (v2.4.1): config.json default di-bundle di dalam exe. Saat
+echo  pertama kali dijalankan, otomatis disalin ke config.json BERDAMPINGAN
+echo  exe — threshold yang diedit lewat tab Konfigurasi + profil filter
+echo  (filters.json) + folder data\ + logs\ semuanya TERSIMPAN di situ dan
+echo  bertahan setelah aplikasi ditutup.
 echo.
 pause
 endlocal

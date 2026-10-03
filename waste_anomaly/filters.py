@@ -33,12 +33,26 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .frozen import exe_dir, is_frozen
+
 
 # ============================================================
 # DEFAULT PROFILE PATH
 # ============================================================
 
-PROFILES_PATH = Path(__file__).resolve().parent.parent / "filters.json"
+def profiles_path() -> Path:
+    """Jalur filters.json (dinamis — v2.4.1 frozen-aware).
+
+    Dev: repo root. Frozen exe: BERDAMPINGAN dengan exe — dulu resolve dari
+    ``__file__`` yang menunjuk _MEIPASS temp (dihapus saat exit → profil
+    filter user hilang senyap di mode exe).
+    """
+    if is_frozen():
+        return exe_dir() / "filters.json"
+    return Path(__file__).resolve().parent.parent / "filters.json"
+
+
+PROFILES_PATH = profiles_path()
 
 
 # ============================================================
@@ -68,7 +82,7 @@ def load_profiles(path: Path | str | None = None) -> dict[str, dict]:
     File korup (JSONDecodeError) di-rename ke <name>.bak dulu — lihat
     _backup_corrupt_file — lalu return {} (mulai bersih, tidak crash).
     """
-    p = Path(path) if path else PROFILES_PATH
+    p = Path(path) if path else profiles_path()
     if not p.exists():
         return {}
     try:
@@ -89,7 +103,7 @@ def save_profiles(profiles: dict[str, dict], path: Path | str | None = None) -> 
     proses yang terputus di tengah menulis tidak meninggalkan filters.json
     korup (profile lama tetap utuh sampai replace berhasil).
     """
-    p = Path(path) if path else PROFILES_PATH
+    p = Path(path) if path else profiles_path()
     tmp = p.with_name(p.name + ".tmp")
     try:
         p.parent.mkdir(parents=True, exist_ok=True)

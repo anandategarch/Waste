@@ -21,7 +21,6 @@ from datetime import datetime
 from tkinter import filedialog
 from tkinter import messagebox
 import pandas as pd
-from tkinter import simpledialog
 import tkinter as tk
 from tkinter import ttk
 from waste_anomaly import charts as wa_charts
@@ -293,7 +292,7 @@ class DashboardTabMixin:
             try:
                 sb.configure(state=state)
             except tk.TclError:
-                _LOGGER.debug("Suppressed: Suppressed tk.TclError", exc_info=True)
+                _LOGGER.debug("Suppressed: tk.TclError", exc_info=True)
 
 
     def _on_search_changed(self):
@@ -304,7 +303,7 @@ class DashboardTabMixin:
             try:
                 self.after_cancel(self._search_after_id)
             except Exception:
-                _LOGGER.debug("Suppressed: Suppressed Exception", exc_info=True)
+                _LOGGER.debug("Suppressed: Exception", exc_info=True)
             self._search_after_id = None
         self._search_after_id = self.after(300, self._search_debounced)
 
@@ -322,7 +321,7 @@ class DashboardTabMixin:
             try:
                 self.after_cancel(self._search_after_id)
             except Exception:
-                _LOGGER.debug("Suppressed: Suppressed Exception", exc_info=True)
+                _LOGGER.debug("Suppressed: Exception", exc_info=True)
             self._search_after_id = None
         self._apply_dashboard_filter()
         return "break"

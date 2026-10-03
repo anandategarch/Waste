@@ -3,7 +3,7 @@
 Mixin untuk WasteAnomalyApp (komposisi di ui/app.py)."""
 from __future__ import annotations
 
-from waste_anomaly.utils import CONFIG_PATH
+from waste_anomaly.utils import _active_config_path
 from .shared import C_BORDER
 from .shared import C_CARD
 from .shared import C_HEADER
@@ -29,7 +29,7 @@ class ConfigTabMixin:
         c1 = tk.Frame(parent, bg=C_CARD, relief="flat", highlightbackground=C_BORDER, highlightthickness=1)
         c1.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
         tk.Label(c1, text="Threshold & Konfigurasi", font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(anchor="w", padx=16, pady=(12, 4))
-        tk.Label(c1, text=f"Di-load dari: {CONFIG_PATH}", font=F_HINT, fg=C_TEXT_MUTED, bg=C_CARD).pack(anchor="w", padx=16)
+        tk.Label(c1, text=f"Di-load dari: {_active_config_path()}", font=F_HINT, fg=C_TEXT_MUTED, bg=C_CARD).pack(anchor="w", padx=16)
         tk.Label(c1, text="Edit nilai threshold di bawah, lalu klik Simpan untuk apply ke config.json.", font=F_HINT, fg=C_TEXT_MUTED, bg=C_CARD).pack(anchor="w", padx=16, pady=(0, 12))
 
         c2 = tk.Frame(parent, bg=C_CARD, relief="flat", highlightbackground=C_BORDER, highlightthickness=1)
@@ -88,11 +88,14 @@ class ConfigTabMixin:
             self.config["thresholds"] = new_th
             # F2 v2.3.2: atomic save — crash/kill mid-write tidak lagi mengorupsi
             # config.json (sebelumnya open("w") + json.dump langsung).
-            tmp_path = CONFIG_PATH.with_suffix(".json.tmp")
+            # v2.4.1: target dinamis — dev: waste_anomaly/config.json; exe:
+            # sidecar di samping exe (dulu menulis ke _MEIPASS temp → hilang).
+            target = _active_config_path()
+            tmp_path = target.with_suffix(".json.tmp")
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(self.config, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, CONFIG_PATH)
-            messagebox.showinfo("Config", f"Disimpan ke {CONFIG_PATH}")
+            os.replace(tmp_path, target)
+            messagebox.showinfo("Config", f"Disimpan ke {target}")
         except Exception as e:
             messagebox.showerror("Config Error", str(e))
 

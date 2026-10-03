@@ -3,7 +3,6 @@
 Mixin untuk WasteAnomalyApp (komposisi di ui/app.py)."""
 from __future__ import annotations
 
-from .shared import APP_DIR
 from .shared import APP_TITLE
 from .shared import APP_VERSION
 from .shared import C_BG
@@ -13,6 +12,8 @@ from .shared import C_HEADER
 from .shared import C_TEXT_MAIN
 from .shared import C_TEXT_MUTED
 from .shared import FONT_NAME
+from .shared import app_dir
+from .shared import bundle_res_dir
 from .shared import F_APP_TITLE
 from .shared import F_BODY
 from .shared import F_CARD
@@ -70,12 +71,16 @@ class AppBase:
         self._init_fonts()  # M17: probe font sistem SEBELUM widget dibangun
         self.title(f"{APP_TITLE} v{APP_VERSION}")
         # L19 (v2.4.0): ikon aplikasi — dulu window pakai ikon default Tk/Tcl.
+        # v2.4.1: frozen exe → assets di-bundle di _MEIPASS (bundle_res_dir),
+        # dev → repo root (app_dir). Cek keduanya supaya jalan di dua mode.
         try:
             from tkinter import PhotoImage as _PhotoImage
-            _icon_path = APP_DIR / "assets" / "app_icon_64.png"
-            if _icon_path.exists():
-                self._app_icon = _PhotoImage(file=str(_icon_path))
-                self.iconphoto(True, self._app_icon)
+            for _icon_path in (bundle_res_dir() / "assets" / "app_icon_64.png",
+                               app_dir() / "assets" / "app_icon_64.png"):
+                if _icon_path.exists():
+                    self._app_icon = _PhotoImage(file=str(_icon_path))
+                    self.iconphoto(True, self._app_icon)
+                    break
         except Exception:
             _LOGGER.debug("Ikon aplikasi gagal dimuat (lanjut tanpa ikon)", exc_info=True)
         # M15: ukuran awal di-clamp ke layar + jendela diposisikan di tengah
@@ -169,7 +174,7 @@ class AppBase:
         try:
             style.theme_use("clam")
         except Exception:
-            _LOGGER.debug("Suppressed: Suppressed Exception", exc_info=True)
+            _LOGGER.debug("Suppressed: Exception", exc_info=True)
         style.configure("TFrame", background=C_BG)
         style.configure("Card.TFrame", background=C_CARD)
         style.configure("TLabel", background=C_BG, font=F_BODY, foreground=C_TEXT_MAIN)
@@ -321,14 +326,14 @@ class AppBase:
                         try:
                             fig.canvas.mpl_disconnect(cid)
                         except Exception:
-                            _LOGGER.debug("Suppressed: Suppressed Exception", exc_info=True)
+                            _LOGGER.debug("Suppressed: Exception", exc_info=True)
             except Exception:
-                _LOGGER.debug("Suppressed: Suppressed Exception", exc_info=True)
+                _LOGGER.debug("Suppressed: Exception", exc_info=True)
             try:
                 if canvas is not None and canvas.get_tk_widget().winfo_exists():
                     canvas.get_tk_widget().destroy()
             except Exception:
-                _LOGGER.debug("Suppressed: Suppressed Exception", exc_info=True)
+                _LOGGER.debug("Suppressed: Exception", exc_info=True)
             dispose_figure(fig)
 
 
@@ -589,11 +594,13 @@ class AppBase:
             else:
                 os.system(f'xdg-open "{path}" 2>/dev/null &')
         except Exception:
-            _LOGGER.debug("Suppressed: Suppressed Exception", exc_info=True)
+            _LOGGER.debug("Suppressed: Exception", exc_info=True)
 
 
     def _open_data_folder(self):
-        data_dir = APP_DIR / "data"
+        # v2.4.1: app_dir() dinamis — dev: repo root; exe: folder exe
+        # (dulu APP_DIR konstanta _MEIPASS → folder sample dibuat di temp dir).
+        data_dir = app_dir() / "data"
         data_dir.mkdir(exist_ok=True)
         self._open_path_in_explorer(data_dir)
 
@@ -690,7 +697,7 @@ class AppBase:
                     base += " ▼" if state[col] == "desc" else " ▲"
                 tree.heading(col, text=base)
             except tk.TclError:
-                _LOGGER.debug("Suppressed: Suppressed tk.TclError", exc_info=True)
+                _LOGGER.debug("Suppressed: tk.TclError", exc_info=True)
 
 
     def _tree_sort_handler(self, tree, get_df, render_fn):
@@ -799,7 +806,7 @@ class AppBase:
         try:
             self.notebook.select(0)
         except Exception:
-            _LOGGER.debug("Suppressed: Suppressed Exception", exc_info=True)
+            _LOGGER.debug("Suppressed: Exception", exc_info=True)
         if hasattr(self, "_ent_search"):
             self._ent_search.focus_set()
         return "break"

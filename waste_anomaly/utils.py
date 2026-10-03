@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import shutil
 import warnings
 from datetime import datetime
 from pathlib import Path
@@ -35,12 +36,56 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
+from .frozen import bundle_dir, exe_dir, is_frozen
+
 
 # ============================================================
 # KONFIGURASI
 # ============================================================
 
+# Dev mode: config.json di dalam paket (perilaku lama — tidak berubah).
+# Frozen/exe mode: lihat _active_config_path() — sidecar di samping exe
+# (v2.4.1: __file__ menunjuk _MEIPASS temp yang dihapus saat exit, jadi
+# menyimpan threshold ke sana = hilang senyap).
 CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
+
+
+def _seed_sidecar_config(bundled: Path, sidecar: Path) -> bool:
+    """Frozen first-run: salin config bundled (_MEIPASS) → sidecar (folder exe).
+
+    Mengimplementasikan klaim BUILD_EXE.bat "config.json disimpan berdampingan
+    dengan exe saat pertama kali dijalankan". Gagal (folder read-only) → False,
+    caller fallback baca bundled read-only.
+    """
+    try:
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(bundled, sidecar)
+        return True
+    except OSError:
+        return False
+
+
+def _active_config_path() -> Path:
+    """Jalur config.json yang benar-benar dipakai (dinamis — frozen-aware).
+
+    1. Dev: CONFIG_PATH klasik (waste_anomaly/config.json).
+    2. Frozen + sidecar ada (entah user edit entah hasil seed) → sidecar.
+    3. Frozen + sidecar belum ada → SEED dari bundled, lalu pakai sidecar.
+    4. Frozen + seed gagal (exe folder read-only) → bundled read-only
+       (pipeline tetap jalan; perubahan user tidak bisa disimpan).
+    """
+    if not is_frozen():
+        return CONFIG_PATH
+    sidecar = exe_dir() / "config.json"
+    if sidecar.exists():
+        return sidecar
+    bundled = bundle_dir() / "waste_anomaly" / "config.json"
+    if bundled.exists():
+        if _seed_sidecar_config(bundled, sidecar) and sidecar.exists():
+            return sidecar
+        return bundled  # read-only fallback
+    return sidecar  # tidak ada bundled juga — biarkan load_config warn+default
+
 
 # Default config minimal — dipakai baca config gagal (lihat load_config).
 _DEFAULT_CONFIG = {
@@ -71,7 +116,7 @@ def load_config(config_path: str | os.PathLike | None = None) -> dict:
          dipakai; tidak ada consumer yang iterasi seluruh key config).
     TIDAK raise — pipeline tetap jalan dengan default (perilaku lama).
     """
-    p = Path(config_path) if config_path else CONFIG_PATH
+    p = Path(config_path) if config_path else _active_config_path()
     try:
         with open(p, "r", encoding="utf-8") as f:
             return json.load(f)

@@ -5,7 +5,7 @@ title Waste Anomaly Detection
 color 0A
 cls
 echo ============================================================
-echo   WASTE ANOMALY DETECTION - v2.4.0
+echo   WASTE ANOMALY DETECTION - v2.4.1
 echo ============================================================
 echo.
 echo  Membuka aplikasi dengan 10 tab (PRO Dashboard v2.3):
