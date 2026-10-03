@@ -4,19 +4,17 @@ signals.py — 12 sinyal anomali + composite score + status + reasons + category
 Setara dengan section 11 (AddAnalysis) dari M code.
 
 Setiap sinyal S1..S12 adalah boolean (0/1/2). Skor dijumlahkan → CompositeScore (max 19).
-Status:
-  Score >= 8 -> "Prioritas Tinggi"
-  Score >= 5 -> "Potensi Anomali"
-  Score >= 3 -> "Perlu Review"
-  else       -> "Normal"
+Status (cutoff dapat diatur di config.json → thresholds; default di bawah):
+  Score >= STATUS_PRIORITAS (8) -> "Prioritas Tinggi"
+  Score >= STATUS_POTENSI   (5) -> "Potensi Anomali"
+  Score >= STATUS_REVIEW    (3) -> "Perlu Review"
+  else                          -> "Normal"
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-
-from .utils import clamp, safe_div
 
 
 # ============================================================
@@ -27,9 +25,22 @@ def compute_signals(
     df: pd.DataFrame,
     key_akhir: int,
     config: dict,
+    params: dict | None = None,
 ) -> pd.DataFrame:
-    """Tambah 12 sinyal + analisa kolom turunan. Setara AddAnalysis di M code."""
-    th = config.get("thresholds", {})
+    """Tambah 12 sinyal + analisa kolom turunan. Setara AddAnalysis di M code.
+
+    Args:
+        df: DataFrame hasil stage 10 (kolom kalkulasi sudah ada).
+        key_akhir: Hari terakhir periode (1..31).
+        config: config dict — threshold dibaca dari ``config["thresholds"]``.
+        params: optional dict override threshold (key sama dengan thresholds
+            di config.json) yang di-merge di atas config. Default None.
+            Backward-compatible: dipanggil tanpa params perilaku tidak berubah.
+    """
+    th = dict(config.get("thresholds", {}) or {})
+    if params:
+        # override eksplisit di atas config (jangan mutasi config caller)
+        th.update(params)
     th_spike = th.get("TH_SPIKE", 3)
     th_max_avg_aktif = th.get("TH_MAX_AVG_AKTIF", 2.5)
     th_max_median = th.get("TH_MAX_MEDIAN", 3)
@@ -44,6 +55,13 @@ def compute_signals(
     th_peer_warn = th.get("TH_PEER_WARN", 2)
     th_peer_high = th.get("TH_PEER_HIGH", 3)
     th_last_share = th.get("TH_LAST_SHARE", 0.70)
+    # Status cutoffs + sinyal minor (M13): dulu hardcoded — sekarang dari config
+    # (config.json "thresholds"), dengan default yang identik dengan baseline.
+    th_status_prioritas = th.get("STATUS_PRIORITAS", 8)
+    th_status_potensi = th.get("STATUS_POTENSI", 5)
+    th_status_review = th.get("STATUS_REVIEW", 3)
+    th_s2_score2_min = th.get("S2_SCORE2_MIN", 4)
+    th_s10_bom_min = th.get("S10_BOM_MIN", 0.10)
 
     non_handling = config.get("non_handling_list", [
         "Alat/ Mesin", "Cancel Nota", "Eksternal", "Internal", "Over Stock",
@@ -108,7 +126,7 @@ def compute_signals(
     # SIGNAL 2 — MAX / AVG AKTIF (TH_MAX_AVG_AKTIF) — score 1 atau 2
     # ============================================================
     s2_cond = (count_val >= 3) & (out["MAX / AVG AKTIF"] >= th_max_avg_aktif)
-    s2_score = np.where(s2_cond & (out["MAX / AVG AKTIF"] >= 4), 2,
+    s2_score = np.where(s2_cond & (out["MAX / AVG AKTIF"] >= th_s2_score2_min), 2,
                 np.where(s2_cond, 1, 0))
 
     # ============================================================
@@ -169,11 +187,11 @@ def compute_signals(
 
     # ============================================================
     # SIGNAL 10 — SINGLE DAY EVENT
-    # Count=1 AND (MaxBOMRatio >= 0.10 OR MaxPeerRatio >= TH_PEER_WARN)
+    # Count=1 AND (MaxBOMRatio >= S10_BOM_MIN OR MaxPeerRatio >= TH_PEER_WARN)
     # ============================================================
     s10 = np.where(
         (count_val == 1) & (
-            (out["_MaxBOMRatio"] >= 0.10) |
+            (out["_MaxBOMRatio"] >= th_s10_bom_min) |
             (out["_MaxPeerRatio"] >= th_peer_warn)
         ),
         1, 0,
@@ -198,34 +216,32 @@ def compute_signals(
         s1 + s2_score + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12
     )
     status = np.where(
-        score >= 8, "Prioritas Tinggi",
-        np.where(score >= 5, "Potensi Anomali",
-        np.where(score >= 3, "Perlu Review", "Normal")),
+        score >= th_status_prioritas, "Prioritas Tinggi",
+        np.where(score >= th_status_potensi, "Potensi Anomali",
+        np.where(score >= th_status_review, "Perlu Review", "Normal")),
     )
 
     # ============================================================
     # REASON TEXT (concat tiap sinyal yang triggered)
+    # NOTE (M14): dahulu df.apply(_build_reason, axis=1) row-wise — hotspot
+    # pada 26k baris. Diganti loop per-kolom (12 iterasi vektor) yang
+    # terbukti identik: part ditambah berurutan S1..S12 hanya bila skor > 0,
+    # disambung " | ", kosong bila tidak ada sinyal.
     # ============================================================
-    def _build_reason(row):
-        s1v, s2v, s3v, s4v, s5v, s6v, s7v, s8v, s9v, s10v, s11v, s12v = (
-            row["_s1"], row["_s2"], row["_s3"], row["_s4"], row["_s5"],
-            row["_s6"], row["_s7"], row["_s8"], row["_s9"], row["_s10"],
-            row["_s11"], row["_s12"],
-        )
-        parts = []
-        if s1v > 0: parts.append("Spike vs AVG")
-        if s2v > 0: parts.append("MAX jauh di atas AVG aktif")
-        if s3v > 0: parts.append("MAX jauh di atas MEDIAN aktif")
-        if s4v > 0: parts.append("Konsentrasi MAX tinggi")
-        if s5v > 0: parts.append("Gap MAX vs SECOND MAX")
-        if s6v > 0: parts.append("MAX terhadap BOM tinggi")
-        if s7v > 0: parts.append("TOTAL terhadap BOM tinggi")
-        if s8v > 0: parts.append("MAX outlier terhadap peer")
-        if s9v > 0: parts.append("TOTAL outlier terhadap peer")
-        if s10v > 0: parts.append("Single-day event")
-        if s11v > 0: parts.append("Dominasi hari terakhir")
-        if s12v > 0: parts.append("Potensi salah skala")
-        return " | ".join(parts)
+    signal_parts = [
+        ("_s1", "Spike vs AVG"),
+        ("_s2", "MAX jauh di atas AVG aktif"),
+        ("_s3", "MAX jauh di atas MEDIAN aktif"),
+        ("_s4", "Konsentrasi MAX tinggi"),
+        ("_s5", "Gap MAX vs SECOND MAX"),
+        ("_s6", "MAX terhadap BOM tinggi"),
+        ("_s7", "TOTAL terhadap BOM tinggi"),
+        ("_s8", "MAX outlier terhadap peer"),
+        ("_s9", "TOTAL outlier terhadap peer"),
+        ("_s10", "Single-day event"),
+        ("_s11", "Dominasi hari terakhir"),
+        ("_s12", "Potensi salah skala"),
+    ]
 
     out["_s1"] = s1
     out["_s2"] = s2_score
@@ -241,7 +257,16 @@ def compute_signals(
     out["_s12"] = s12
     out["ANOMALY SCORE"] = score
     out["ANOMALY STATUS"] = status
-    out["ANOMALY REASONS"] = out.apply(_build_reason, axis=1)
+    reasons = np.full(len(out), "", dtype=object)
+    for _scol, _label in signal_parts:
+        triggered = out[_scol].to_numpy() > 0
+        if not triggered.any():
+            continue
+        existing = reasons[triggered]
+        reasons[triggered] = np.where(
+            existing != "", existing + " | " + _label, _label
+        )
+    out["ANOMALY REASONS"] = reasons
 
     # ============================================================
     # KATEGORI ANOMALI
@@ -249,8 +274,10 @@ def compute_signals(
     # elif JENIS="WASTE" & KETERANGAN in NonHandlingList -> "Dominasi Non-Handling"
     # else "Normal"
     # ============================================================
-    jenis = out["JENIS"].astype(str)
-    ket = out["KETERANGAN"].astype(str)
+    # M17: fillna("") sebelum astype(str) supaya NaN tidak menjadi string "nan"
+    # (hasil perbandingan identik — "nan"/"" sama-sama tidak match WASTE/non_handling).
+    jenis = out["JENIS"].fillna("").astype(str)
+    ket = out["KETERANGAN"].fillna("").astype(str)
     is_non_handling = ket.isin(non_handling)
     is_waste = jenis == "WASTE"
     is_spike = out["MAX / AVG"] >= th_spike
@@ -266,6 +293,10 @@ def compute_signals(
 
     # ============================================================
     # RANKING WASTE — Top 3 Total & Top 3 % BOM
+    # NOTE (M14): sengaja TIDAK divectorize. Logika _compute_ranking bergantung
+    # pada list.index() per baris (TopTotal/TopBOM = list per-group), sehingga
+    # padanan groupby-transform tidak dapat dijamin identik — correctness
+    # diutamakan (RANGKING WASTE diverifikasi pada regression fixture).
     # ============================================================
     out["RANGKING WASTE"] = out.apply(_compute_ranking, axis=1)
 

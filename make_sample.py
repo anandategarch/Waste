@@ -51,8 +51,12 @@ def build_rekap():
             spike_day = str(rng.integers(1, 28))
             days[spike_day] = round(float(rng.uniform(10.0, 30.0)), 2)
             # Inject last day dominan untuk beberapa baris (S11)
+            # (dulu memakai variabel sisa loop `d` yang kebetulan = 31 — kini eksplisit)
             if rng.random() < 0.20:
-                days["31"] = round(float(days[str(d)] if days.get(str(d)) else 0) + rng.uniform(15.0, 40.0), 2)
+                last_day = 31
+                days[str(last_day)] = round(
+                    float(days.get(str(last_day)) or 0) + rng.uniform(15.0, 40.0), 2
+                )
             row = {
                 "KATEGORI": jenis,
                 "SOURCE DATA": src,
@@ -73,13 +77,16 @@ def build_rekap():
 
 
 def build_bom():
+    # rng dibuat SEKALI di luar loop — dulu di-seed ulang per baris sehingga
+    # semua TOTAL BOM identik (setiap baris = nilai uniform pertama rng(7)).
+    rng = np.random.default_rng(7)
     rows = []
     for cabang in CABANG:
         for item_name, _ in ITEMS:
             rows.append({
                 "Nomor #": cabang,
                 "Nama Barang": item_name,
-                "TOTAL BOM": float(np.random.default_rng(7).uniform(20, 80)),
+                "TOTAL BOM": float(rng.uniform(20, 80)),
             })
     return pd.DataFrame(rows)
 

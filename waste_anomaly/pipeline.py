@@ -7,9 +7,10 @@ Penggunaan dasar:
     summary = run_pipeline(
         workbook_path="data/rekap.xlsx",
         key_akhir=31,
-        output_path="output/Waste_Anomaly_Report.xlsx",
+        output_path="output/Waste_Anomaly_Report.xlsx",  # optional — lihat catatan di bawah
         progress_callback=lambda msg, pct: print(f"[{pct:.0f}%] {msg}"),
     )
+    df = summary["df"]  # hasil in-memory (tidak ada file Excel yang ditulis)
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from . import stages
@@ -42,35 +44,60 @@ def run_pipeline(
     Args:
         workbook_path: Path ke workbook Excel sumber.
         key_akhir: Hari terakhir periode (1..31). Default dari config (31).
-        output_path: Path output Excel. Default: 'output/Waste_Anomaly_Report.xlsx'.
+        output_path: accepted for backward-compat; in-memory result only —
+            use exporter.export_to_excel separately if needed. Sejak v2.2 pipeline
+            tidak menulis file Excel; folder output hanya dibuat bila param ini
+            diberikan secara eksplisit.
         config_path: Path ke config.json custom (optional).
         progress_callback: callable(msg: str, pct: float) untuk update UI.
+            pct SELALU numeric; baris log tanpa persentase (mis. dari loader)
+            mengirim ulang nilai pct terakhir (monotonic, tidak reset ke 0).
     """
     config = load_config(config_path)
     if key_akhir is None:
         key_akhir = config.get("default_key_akhir", 31)
     key_akhir = clamp(int(key_akhir), 1, 31)
 
+    # output_path diterima demi backward-compat API (v2.2+ hasil dikembalikan
+    # in-memory — tidak ada penulisan file dari pipeline).
+    output_path_provided = output_path is not None
     if output_path is None:
         output_path = Path("output") / config.get("output", {}).get(
             "default_filename", "Waste_Anomaly_Report.xlsx"
         )
     output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     log_lines: list[str] = []
 
+    # Callback contract: progress_callback(msg, pct) — pct selalu numeric.
+    # Baris log tanpa persentase (mis. logger dari loader) re-send pct terakhir
+    # supaya progress bar UI tidak reset/mundur.
+    last_pct = 0.0
+
     def _log(msg: str, pct: float | None = None):
+        nonlocal last_pct
         ts = datetime.now().strftime("%H:%M:%S")
         line = f"[{ts}] {msg}"
         log_lines.append(line)
         if progress_callback:
-            progress_callback(msg, pct if pct is not None else 0.0)
+            if pct is None:
+                pct = last_pct
+            else:
+                last_pct = pct
+            progress_callback(msg, pct)
 
     _log(f"=== Waste Anomaly Pipeline START ===", 0)
     _log(f"Workbook: {workbook_path}", 1)
     _log(f"Key Akhir: {key_akhir} (hanya hari 1..{key_akhir} dipakai)", 2)
-    _log(f"Output: {output_path}", 3)
+    _log(f"Output: {output_path} (in-memory result — file tidak ditulis otomatis)", 3)
+
+    # Hindari side-effect: folder output hanya dibuat bila caller eksplisit
+    # memberikan output_path (pipeline sendiri tidak menulis file apa pun).
+    if output_path_provided:
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            _log(f"WARNING: gagal membuat folder output '{output_path.parent}': {exc}")
 
     # ---- LOAD ----
     _log("Loading DATA_WASTE ...", 5)
@@ -100,9 +127,30 @@ def run_pipeline(
     df = stages.stage_02_stats(df, key_akhir, config)
     _log(f"  → {len(df)} baris valid (TOTAL not null)", 25)
 
+    if df.empty:
+        # M16: input dengan kolom hari 1-31 kosong/non-numeric menghasilkan 0 baris
+        # setelah filter TOTAL.notna() — kembalikan pesan ramah, jangan crash di
+        # stage 3+. (Guard serupa juga ada di stages.stage_10 — keduanya aman.)
+        _log("ERROR: Tidak ada baris valid setelah filter TOTAL — cek kolom hari 1-31 dan JENIS", 100)
+        return {
+            "success": False,
+            "error": "Tidak ada baris valid setelah filter TOTAL — cek kolom hari 1-31 dan JENIS",
+            "key_akhir": key_akhir,
+            "log": "\n".join(log_lines),
+        }
+
     # ---- STAGE 3: REASON SUMMARY ----
     _log("Stage 3 — Reason summary ...", 30)
     df = stages.stage_03_reason(df, key_akhir, config)
+
+    if df.empty:
+        _log("ERROR: Tidak ada baris tersisa setelah Stage 3 (reason summary)", 100)
+        return {
+            "success": False,
+            "error": "Tidak ada baris tersisa setelah Stage 3 (reason summary)",
+            "key_akhir": key_akhir,
+            "log": "\n".join(log_lines),
+        }
 
     # ---- STAGE 4: GROUP TOTALS ----
     _log("Stage 4 — Group totals ...", 35)
@@ -139,24 +187,24 @@ def run_pipeline(
     df = stages.stage_12_expand(df, key_akhir, config)
 
     # ---- STAGE 12.5: WASTE FINGERPRINT + SISTEMATIK FLAG (NEW v2.3.0) ----
-    _log("Stage 12.5 — Waste Fingerprint + Sistematik Flag ...", 86)
+    _log("Stage 12.5 — Waste Fingerprint + Sistematik Flag ...", 75)
     df = stages.stage_12_5_fingerprint(df, key_akhir, config)
 
     # ---- STAGE 12.6: QUADRANT CLASSIFICATION (NEW v2.3.0) ----
-    _log("Stage 12.6 — Quadrant Classification ...", 87)
+    _log("Stage 12.6 — Quadrant Classification ...", 78)
     df = stages.stage_12_6_quadrant(df, key_akhir, config)
 
     # ---- STAGE 13: CLEANUP ----
-    _log("Stage 13 — Cleanup temporary ...", 80)
+    _log("Stage 13 — Cleanup temporary ...", 81)
     df = stages.stage_13_cleanup(df, key_akhir, config)
 
     # ---- STAGE 14: FINAL ORDER ----
-    _log("Stage 14 — Final column order ...", 85)
+    _log("Stage 14 — Final column order ...", 84)
     df = stages.stage_14_final(df, key_akhir, config)
 
     # ---- BUILD SUMMARY (NO Excel export — display directly in UI) ----
     _log("Build summary statistics ...", 88)
-    summary = _build_summary(df, key_akhir, log_lines)
+    summary = _build_summary(df, key_akhir, log_lines, config=config)
 
     _log("=== Pipeline DONE ===", 100)
 
@@ -164,15 +212,18 @@ def run_pipeline(
         "success": True,
         "df": df,  # return DataFrame langsung untuk display di UI (no Excel file)
         "rows_processed": len(df),
-        "key_akhir": key_akhir,
         "log": "\n".join(log_lines),
     })
     return summary
 
 
-def _build_summary(df, key_akhir, log_lines):
-    """Build summary dict in-memory (no Excel export)."""
-    import numpy as np
+def _build_summary(df, key_akhir, log_lines, config: dict | None = None):
+    """Build summary dict in-memory (no Excel export).
+
+    v2.3.1 menambahkan field: ``key_akhir`` yang dipakai, ``config_load_error``
+    (pass-through dari load_config bila ada) dan ``timestamp`` (ISO, diambil
+    saat run selesai). UI membaca dict ini; key tambahan tidak mengganggu.
+    """
     total_rows = len(df)
     status_col = "ANOMALY STATUS"
     if status_col in df.columns:
@@ -194,4 +245,7 @@ def _build_summary(df, key_akhir, log_lines):
         "normal_count": normal_count,
         "cabang_count": cabang_count,
         "item_count": item_count,
+        "key_akhir": key_akhir,
+        "config_load_error": (config or {}).get("config_load_error"),
+        "timestamp": datetime.now().isoformat(),
     }

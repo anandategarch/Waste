@@ -28,6 +28,7 @@ Format JSON:
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -44,8 +45,29 @@ PROFILES_PATH = Path(__file__).resolve().parent.parent / "filters.json"
 # LOAD / SAVE
 # ============================================================
 
+def _backup_corrupt_file(p: Path) -> None:
+    """Rename file filters korup ke .bak (suffix timestamp bila .bak sudah ada).
+
+    Supaya file korup tidak menahan profile baru selamanya (sebelumnya load
+    terus gagal dan save berikutnya menimpanya — profile lama hilang tanpa
+    jejak). Best-effort: kegagalan rename diabaikan (load tetap return {}).
+    """
+    try:
+        bak = p.with_name(p.name + ".bak")
+        if bak.exists():
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            bak = p.with_name(f"{p.name}.bak.{stamp}")
+        os.replace(p, bak)
+    except OSError:
+        pass
+
+
 def load_profiles(path: Path | str | None = None) -> dict[str, dict]:
-    """Muat semua profiles dari JSON file. Return dict {name: profile_dict}."""
+    """Muat semua profiles dari JSON file. Return dict {name: profile_dict}.
+
+    File korup (JSONDecodeError) di-rename ke <name>.bak dulu — lihat
+    _backup_corrupt_file — lalu return {} (mulai bersih, tidak crash).
+    """
     p = Path(path) if path else PROFILES_PATH
     if not p.exists():
         return {}
@@ -53,19 +75,35 @@ def load_profiles(path: Path | str | None = None) -> dict[str, dict]:
         with open(p, "r", encoding="utf-8") as f:
             data = json.load(f)
             return data.get("profiles", {}) if isinstance(data, dict) else {}
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError:
+        _backup_corrupt_file(p)
+        return {}
+    except OSError:
         return {}
 
 
 def save_profiles(profiles: dict[str, dict], path: Path | str | None = None) -> bool:
-    """Simpan dict profiles ke JSON file."""
+    """Simpan dict profiles ke JSON file (atomic — M8).
+
+    Tulis ke ``filters.json.tmp`` lalu ``os.replace`` ke tujuan, sehingga
+    proses yang terputus di tengah menulis tidak meninggalkan filters.json
+    korup (profile lama tetap utuh sampai replace berhasil).
+    """
     p = Path(path) if path else PROFILES_PATH
+    tmp = p.with_name(p.name + ".tmp")
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
-        with open(p, "w", encoding="utf-8") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"profiles": profiles}, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, p)  # atomic pada filesystem yang sama
         return True
     except OSError:
+        # Bersihkan tmp yang tertinggal bila replace gagal (mis. file terkunci)
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
         return False
 
 
@@ -74,9 +112,13 @@ def save_profiles(profiles: dict[str, dict], path: Path | str | None = None) -> 
 # ============================================================
 
 def save_profile(name: str, profile: dict, path: Path | str | None = None) -> bool:
-    """Simpan 1 profile dengan nama tertentu. Update kalau sudah ada."""
+    """Simpan 1 profile dengan nama tertentu. Update kalau sudah ada.
+
+    Dict caller di-copy dulu (M8/L) — save_profile tidak lagi memutasi input.
+    """
     profiles = load_profiles(path)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    profile = dict(profile)  # jangan mutasi dict milik caller
     profile["updated"] = now
     if name not in profiles:
         profile["created"] = now

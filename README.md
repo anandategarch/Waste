@@ -1,6 +1,8 @@
 # Waste Anomaly Detection
 
-Python + Tkinter **professional dashboard** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif**, **filter profile persistence**, **comparison mode 2 cabang**, dan **22 grafik** matplotlib embedded.
+Python + Tkinter **professional dashboard** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif**, **filter profile persistence**, **comparison mode 2 cabang**, **analisa quadrant & rate league**, dan **22+ grafik** matplotlib embedded.
+
+> **v2.3.1** — hasil deep audit UI/UX + data pipeline (2025): **3 crash-path critical fixed**, memory leak chart dihilangkan, scroll mouse diperbaiki (Windows/macOS/Linux), search didebounce + divectorize, render lazy per-tab, idempotency HELPER/STATUS dipertahankan, kolom M-canonical (`KETERANGAN GABUNGAN`, `KONTRIBUSI TERBESAR`) 100% akurat, export Excel kini 3.5× lebih cepat. Detail di section **Changelog v2.3.1**.
 
 ## Cara Pakai
 
@@ -47,20 +49,24 @@ Query data → Olah di Excel → Save as DATA_WASTE.xlsx → Replace file lama �
 Kalau sheet BOM/DATABASE_SATUAN tidak ada, sinyal BOM (S6/S7) & STATUS (Sesuai/Tidak Sesuai) tidak akan trigger tapi pipeline tetap jalan.
 
 ### 3. Jalankan (setiap kali)
-Jalankan `MULAI.bat`. UI terbuka dengan **8 tab**:
+Jalankan `MULAI.bat`. UI terbuka dengan **10 tab**:
 
 | Tab | Fungsi |
 |-----|--------|
-| 📊 Dashboard | **PRO** — KPI cards + filter bar + 3 interactive charts + drill-down table |
-| ⚖ Compare Cabang | **NEW v2.1** — Side-by-side analysis 2 cabang dengan 4 chart + metrics |
-| 📋 Hasil | Preview tabel hasil (Detail/Anomali/Cabang/Top/Pareto) |
+| 📊 Dashboard | **PRO** — KPI cards + filter bar + interactive charts + drill-down table (search didebounce 300 ms) |
+| ⚖ Compare Cabang | Side-by-side analysis 2 cabang: 4 chart + metrics delta + small-multiples score |
+| 🎯 Quadrant | Scatter quadrant SISTEMIK/MUSIMAN/LOKAL-KRONIS/INSIDEN (pakai Key Akhir aktual) |
+| 🏆 Rate League | Ranking cabang by rate anomali + top-N item |
+| 📋 Hasil | Preview tabel hasil + **💾 Export Laporan Excel** (6 sheet, background thread) |
 | 📈 Visualisasi | 12 grafik matplotlib gallery + export PNG |
-| 🗂 Ringkasan | Summary run terakhir (total, cabang, item, count per status) |
-| ▶ Run Pipeline | Browse workbook + Key Akhir + Run |
+| 🗂 Ringkasan | Summary run terakhir (timestamp, key_akhir, warning config) |
+| ▶ Run Pipeline | Browse workbook + Key Akhir + Run + **⏹ Batalkan Run** |
 | ⚙ Konfigurasi | Editor threshold (simpan ke config.json) |
-| ❓ Bantuan | Instruksi pakai + 12 sinyal + drill-down workflow |
+| ❓ Bantuan | Instruksi pakai + 12 sinyal + drill-down workflow + shortcut keyboard |
 
-## Output Excel (6 Sheet)
+## Output Excel (6 Sheet) — via tombol "💾 Export Laporan Excel" di tab Hasil
+
+Pipeline berjalan **in-memory** (cepat, idempotent). Setelah selesai, klik **💾 Export Laporan Excel…** di tab Hasil untuk menyimpan laporan:
 
 | Sheet | Isi |
 |-------|-----|
@@ -70,6 +76,8 @@ Jalankan `MULAI.bat`. UI terbuka dengan **8 tab**:
 | Top Items | Top 20 item by TOTAL waste (rank, total, max, cabang terpengaruh, count prioritas) |
 | Pareto Alasan | Group by KETERANGAN — sum TOTAL, persentase, cumulative % |
 | Log Run | Timestamp, parameter, summary stats, log lines pipeline |
+
+> Export berjalan di background thread (UI tetap responsif) dengan penanganan `PermissionError` ramah: kalau file sedang dibuka di Excel, muncul pesan jelas "tutup dulu lalu ulangi". Perf: ~27 detik untuk 25.901 baris × 93 kolom (dulunya ~110 detik).
 
 ## Tab Dashboard — Drill-Down Interaktif (NEW v2.0)
 
@@ -290,7 +298,7 @@ print(summary)
 
 ## Custom Thresholds
 
-Edit `waste_anomaly/config.json` → section `thresholds`. Atau pakai tab "4. Konfigurasi" di UI.
+Edit `waste_anomaly/config.json` → section `thresholds`. Atau pakai tab "⚙ Konfigurasi" di UI.
 
 ```json
 {
@@ -298,10 +306,18 @@ Edit `waste_anomaly/config.json` → section `thresholds`. Atau pakai tab "4. Ko
     "TH_SPIKE": 3,
     "TH_MAX_AVG_AKTIF": 2.5,
     "TH_PEER_HIGH": 3,
+    "STATUS_PRIORITAS": 8,
+    "STATUS_POTENSI": 5,
+    "STATUS_REVIEW": 3,
+    "S2_SCORE2_MIN": 4,
+    "S10_BOM_MIN": 0.10,
+    "QUADRANT_THRESHOLD": 0.5,
     ...
   }
 }
 ```
+
+> Konfigurasi korup otomatis diperingatkan (warning di log + tab Ringkasan) dan pipeline lanjut dengan default — tidak lagi diam-diam mengganti threshold.
 
 ## Troubleshooting
 
@@ -309,11 +325,38 @@ Edit `waste_anomaly/config.json` → section `thresholds`. Atau pakai tab "4. Ko
 |-------|--------|
 | `Tidak menemukan sheet untuk 'rekap_mentah'` | Pastikan workbook punya sheet `DATA_WASTE` / `Sheet1` / `REKAP_MENTAH` / `DATA`. Atau edit `config.json` → `input_sheets.rekap_mentah` untuk tambah nama kandidat. |
 | `BOM sheet tidak ditemukan` | BOM join dilewati. Sinyal S6/S7 tidak trigger. Tambahkan sheet `BOM` / `MASTER BOM` untuk mengaktifkan. |
-| `DATABASE_SATUAN tidak ditemukan` | STATUS menjadi "Cek" untuk semua baris. Tambahkan sheet `DATABASE_SATUAN` untuk mengaktifkan. |
+| `DATABASE_SATUAN tidak ditemukan` | Kolom HELPER/STATUS dari input dipertahankan; kalau tidak ada sama sekali tidak bisa dihitung ulang. Tambahkan sheet `DATABASE_SATUAN` untuk mengaktifkan. |
+| `File .xls` | Tidak didukung — save-as `.xlsx` dulu. |
+| `File output sedang dibuka di Excel` | Tutup filenya di Excel, lalu klik Export ulang (pesan errornya sekarang jelas). |
 | `ModuleNotFoundError: pandas / matplotlib` | Jalankan `SETUP.bat` dulu. Atau manual: `pip install pandas numpy openpyxl matplotlib`. |
 | Tab Visualisasi kosong | Pastikan sudah run pipeline. Klik "⟳ Refresh Grafik" manual kalau tidak auto-load. |
 | Grafik matplotlib error di Linux headless | Set env: `export MPLBACKEND=TkAgg` sebelum jalankan `python ui_app.py`. |
 | UI tidak terbuka | Pastikan Python 3.10+ terpasang (`python --version`). |
+
+## Changelog v2.3.1 — Deep Audit & Fix
+
+### Critical (crash / korupsi data)
+- **UI freeze permanen**: exception apa pun di queue-drain loop mematikan polling → progress macet + tombol Run stuck disabled. Loop kini reschedule-first + tiap item di-guard.
+- **Crash log popup**: tombol X menghancurkan window tapi referensi tetap hidup → `TclError` berantai. Kini X = hide; popup auto-recreate; `append()` di-guard.
+- **Scroll mouse rusak total**: 5 binding `bind_all` saling menimpa → wheel menggerakkan canvas yang tersembunyi; tab Konfigurasi tak bisa di-wheel; tabel double-scroll. Kini satu dispatcher global (Windows ±120 / macOS ±small / Linux Button-4/5).
+- **Crash empty-data**: 0 baris valid setelah Stage 2 → `ValueError: Length mismatch`. Kini guard ramah + pesan jelas.
+- **Kolom hilang diam-diam**: merge DATABASE_SATUAN menimpa kolom bentrok (`SATUAN`, `NAMA BARANG` jadi `_x/_y`). Kini merge hanya kolom yang dibutuhkan + detektor bentrok.
+- **Bar chart menumpuk**: label ter-truncate duplikat → matplotlib menumpuk bar di posisi sama (data tersembunyi). Kini plot posisional + disambiguasi label.
+
+### High (UX & performa)
+- **Memory leak**: figure matplotlib tidak pernah di-dispose pada tiap re-render → RAM membengkak. Kini teardown penuh (disconnect cids → destroy widget → `fig.clf()`).
+- **Render storm**: ~18 figure digambar sinkron setelah pipeline selesai → UI membeku. Kini lazy per-tab (render saat tab dibuka) + refresh hanya tab aktif.
+- **Search lag**: tiap keystroke re-render 3 chart + 500 baris + `apply` row-wise. Kini debounce 300 ms + mask vectorized per-kolom.
+- **Kalkulasi M-fidelity**: `KONTRIBUSI TERBESAR` kini agregasi per-KETERANGAN (23% baris dulu salah); `KETERANGAN GABUNGAN` urutan per kontribusi; nama kolom kanonik (spasi, bukan underscore).
+- **Idempotency HELPER/STATUS**: re-run di output sendiri dulu menghancurkan 21.355 nilai HELPER/STATUS. Kini dipertahankan seperti TOTAL BOM.
+- **Dead Output-Excel UI** dihapus → diganti tombol **💾 Export Laporan Excel** (background thread, `PermissionError` friendly, 3.5× lebih cepat).
+- **Quadrant chart** kini pakai Key Akhir aktual (bukan hardcode /31) — titik tidak lagi mendarat di quadrant yang salah.
+- **Profil filter**: save kini konfirmasi overwrite; restore tidak lagi double-render; file `filters.json` atomic-save + auto-backup saat korup.
+- **Warna JENIS stabil** antar-run & antar-tab (dulu hash-based — bisa bentrok).
+- **Spinbox TclError**: input non-numerik tidak lagi crash handler.
+
+### Medium/Low
+- Window centering + clamp untuk layar 1366×768; font fallback cross-platform; sort kolom numeric-aware + indikator ▲/▼; label "Menampilkan N dari M baris"; chip label Indonesia; konfirmasi keluar saat pipeline jalan; tombol **⏹ Batalkan Run**; shortcut Ctrl+R/Ctrl+F; status `Timestamp`/`Key Akhir`/warning-config di Ringkasan; progress bar monotonic 0→100; make_sample rng fix; bersih-bersih dead code & duplikasi (helper `_format_cell`, `_apply_filters`, `_export_figures_png`).
 
 ## Reference
 

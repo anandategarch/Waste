@@ -11,6 +11,12 @@ Fix all UI/UX issues dari deep audit:
 - Pattern G: Chart ratio (dynamic figsize)
 - Pattern H: Text too small
 
+v2.4 fixer pass (FIX-CHARTS):
+- L17: apply_layout layout failure now warns once (was silent except: pass)
+- L4: place_legend_outside frameon unified to False (rcParams legend.frameon)
+- C1: new disambiguate_labels() — companion for positional bar plotting
+- M7: removed dead paginate_heatmap_data() helper (cap done inline in charts.py)
+
 Usage:
     from .chart_helpers import apply_layout, fmt_cabang, fmt_item, place_legend_outside, add_ylim_headroom
 """
@@ -18,11 +24,15 @@ Usage:
 from __future__ import annotations
 
 import textwrap
+import warnings
+from collections import Counter
 from typing import Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
+
+# L17: layout adjustment is best-effort — remember whether we already warned
+_LAYOUT_WARNED = False
 
 
 # ============================================================
@@ -102,6 +112,37 @@ def fmt_reason(text: str | Any, width: int = 25) -> str:
     return textwrap.fill(s, width=width)
 
 
+def disambiguate_labels(labels: list[str]) -> list[str]:
+    """Disambiguate duplicate (truncated/wrapped) axis labels.
+
+    C1 companion (Pattern C): fmt_cabang/fmt_item/fmt_reason can map several
+    DISTINCT categories onto the same display string. Charts now plot bars
+    positionally, so duplicate labels no longer collapse onto one tick —
+    but identical labels are still ambiguous to read. This helper appends an
+    occurrence suffix so every bar stays identifiable:
+
+    ['AB...', 'AB...', 'SHORT'] → ['AB... #1', 'AB... #2', 'SHORT']
+
+    Args:
+        labels: display labels (possibly containing duplicates)
+
+    Returns:
+        Labels with ' #k' suffix on duplicates (unique labels pass through)
+    """
+    counts = Counter(labels)
+    if all(v == 1 for v in counts.values()):
+        return list(labels)
+    seen: Counter = Counter()
+    out: list[str] = []
+    for lab in labels:
+        if counts[lab] > 1:
+            seen[lab] += 1
+            out.append(f"{lab} #{seen[lab]}")
+        else:
+            out.append(lab)
+    return out
+
+
 # ============================================================
 # LAYOUT HELPERS (Pattern A: Edge clipping)
 # ============================================================
@@ -143,14 +184,23 @@ def apply_layout(
         x_fontsize: minimum x-tick label font size
         y_fontsize: minimum y-tick label font size
     """
-    # Pattern A: Edge clipping — apply explicit margins
+    # Pattern A: Edge clipping — apply explicit margins.
+    # L17: layout is best-effort; warn ONCE if the backend rejects manual
+    # margins instead of failing silently (bare except: pass).
     try:
         fig.subplots_adjust(
             top=top_pad, bottom=bottom_pad,
             left=left_pad, right=right_pad,
         )
     except Exception:
-        pass  # fig might not support subplots_adjust in edge cases
+        global _LAYOUT_WARNED
+        if not _LAYOUT_WARNED:
+            _LAYOUT_WARNED = True
+            warnings.warn(
+                "apply_layout: subplots_adjust failed (layout best-effort; "
+                "figure falls back to default margins)",
+                stacklevel=2,
+            )
 
     # Pattern E: Rotation — rotate x-tick labels if requested
     if rotate_x:
@@ -178,28 +228,34 @@ def place_legend_outside(
     loc: str = 'upper left',
     bbox_to_anchor: tuple = (1.02, 1.0),
     fontsize: int = 8,
+    frameon: bool = False,
 ) -> None:
     """Move legend outside the plot area to avoid covering data.
-    
+
     Pattern B fix: legends inside plot area routinely cover high-value
     bars/scatter points. This helper standardizes the outside placement.
-    
+
+    L4 fix (style drift): frameon now defaults to False, unified with the
+    global rcParams (legend.frameon: False). Pass frameon=True to get the
+    light frame back when the legend floats over a busy background.
+
     Args:
         ax: Axes object
         loc: legend location relative to bbox_to_anchor
         bbox_to_anchor: (x, y) anchor point for legend
         fontsize: legend font size
+        frameon: draw a light frame around the legend (default False)
     """
     legend = ax.legend(
         loc=loc,
         bbox_to_anchor=bbox_to_anchor,
         fontsize=fontsize,
-        frameon=True,
+        frameon=frameon,
         edgecolor='#cbd5e1',
         facecolor='white',
         framealpha=0.95,
     )
-    if legend:
+    if legend is not None and frameon:
         legend.get_frame().set_linewidth(0.5)
 
 
@@ -289,37 +345,6 @@ def adaptive_text_color(value: float, threshold: float, cmap_max: float) -> str:
 
 
 # ============================================================
-# HEATMAP PAGINATION (Pattern G: Chart ratio for large datasets)
-# ============================================================
-
-def paginate_heatmap_data(
-    df_rows: int,
-    df_cols: int,
-    max_rows: int = 30,
-    max_cols: int = 20,
-) -> tuple[int, int, bool]:
-    """Determine if heatmap needs pagination.
-    
-    For large datasets (e.g., 173 items × 20 cabangs), the heatmap is
-    fundamentally unreadable. This helper decides whether to paginate
-    and how many rows/cols to show.
-    
-    Args:
-        df_rows: number of rows in pivot table (e.g., 173 items)
-        df_cols: number of columns (e.g., 20 cabangs)
-        max_rows: max rows before pagination kicks in
-        max_cols: max cols before truncation
-    
-    Returns:
-        (effective_rows, effective_cols, needs_pagination)
-    """
-    needs_pag = df_rows > max_rows or df_cols > max_cols
-    eff_rows = min(df_rows, max_rows) if needs_pag else df_rows
-    eff_cols = min(df_cols, max_cols) if needs_pag else df_cols
-    return (eff_rows, eff_cols, needs_pag)
-
-
-# ============================================================
 # NUMBER FORMATTERS
 # ============================================================
 
@@ -328,7 +353,8 @@ def fmt_number_short(val: float, decimals: int = 1) -> str:
     
     2958646.2 → '2.96M'
     80818 → '80.8K'
-    532.7 → '533'
+    532.7 → '532.7'   (decimals=1; only exact integers print without decimals)
+    533.0 → '533'
     
     Args:
         val: numeric value

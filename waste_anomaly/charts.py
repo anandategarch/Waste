@@ -5,6 +5,14 @@ Menggunakan matplotlib + FigureCanvasTkAgg untuk embed di Tkinter.
 Setiap fungsi return Figure yang siap di-embed.
 
 Dipanggil oleh ui_app.py saat user buka tab Visualisasi.
+
+NOTE (L14 dependency pin): modul ini membutuhkan matplotlib >= 3.9
+(chart_box_total_per_jenis memakai boxplot(tick_labels=...); kwarg
+"labels" dihapus di matplotlib 3.9). Tidak ada requirements.txt di repo —
+pin dicatat di sini sampai file dependency dibuat.
+
+Semua figure dibangun langsung dari matplotlib.figure.Figure — tidak ada
+pyplot global state (aman untuk multi-embed di Tkinter).
 """
 
 from __future__ import annotations
@@ -12,8 +20,8 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-import matplotlib
-# Lazy set backend — di-overridden ke TkAgg oleh ui_app.py saat dibutuhkan
+# Backend di-set oleh ui_app.py (TkAgg) SEBELUM import modul ini.
+# plt hanya dipakai untuk rcParams global, bukan untuk membuat figure.
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -22,6 +30,7 @@ from matplotlib.figure import Figure
 # v2.3.1 helpers — fix semua UI/UX issues (Pattern A-H)
 from .chart_helpers import (
     apply_layout,
+    disambiguate_labels,
     fmt_cabang,
     fmt_item,
     fmt_reason,
@@ -31,7 +40,6 @@ from .chart_helpers import (
     dynamic_figsize,
     adaptive_text_color,
     fmt_number_short,
-    fmt_number_comma,
 )
 
 # Lazy import FigureCanvasTkAgg — hanya ketika embed ke Tkinter (di UI).
@@ -61,6 +69,19 @@ PALETTE_STATUS = {
     "Normal":          "#16a34a",   # green-600
 }
 
+# Urutan kanonik status (dipakai pie, stacked bar, scatter)
+STATUS_ORDER = ["Prioritas Tinggi", "Potensi Anomali", "Perlu Review", "Normal"]
+
+# M11: marker berbeda per kelas status — encoding redundan untuk colorblind
+# (pasangan red-600/green-600 dan orange-600/amber-700 confusable by hue saja).
+# Status tak dikenal → marker "v" + PALETTE_NEUTRAL.
+STATUS_MARKERS = {
+    "Prioritas Tinggi": "D",
+    "Potensi Anomali": "s",
+    "Perlu Review": "^",
+    "Normal": "o",
+}
+
 PALETTE_KATEGORI = [
     "#0f766e", "#be185d", "#b45309", "#15803d",
     "#7c2d12", "#475569", "#9333ea", "#0891b2",
@@ -70,6 +91,53 @@ PALETTE_KATEGORI = [
 PALETTE_ACCENT = "#0f766e"   # teal-700 (utama)
 PALETTE_SECONDARY = "#be185d" # pink-700
 PALETTE_NEUTRAL = "#475569"
+
+# H5: mapping warna JENIS yang stabil — di-export untuk dashboard.py/ui_app.py.
+JENIS_COLORS = {
+    "WASTE": "#dc2626",    # red-600
+    "SUSUT": "#0f766e",    # teal-700
+    "TRIAL": "#b45309",    # amber-700
+    "LAINNYA": "#64748b",  # slate-500 — bucket "other"
+}
+
+# Warna bucket "Lainnya" — kategori/reason di luar kapasitas palette (M5/M6)
+COLOR_LAINNYA = JENIS_COLORS["LAINNYA"]
+
+# M1: threshold skor anomali untuk chart_score_per_cabang — nilai FALLBACK.
+# Nilai efektif dibaca dari config.json (thresholds.STATUS_PRIORITAS /
+# STATUS_POTENSI / STATUS_REVIEW, kini tersedia) via load_config; lihat
+# _load_status_thresholds() di bawah.
+STATUS_THRESHOLDS = (8, 5, 3)   # (Prioritas, Potensi, Review)
+
+# Cache threshold efektif (dibaca sekali; config jarang berubah saat runtime)
+_THRESHOLD_CACHE: tuple[int, int, int] | None = None
+
+
+def _load_status_thresholds() -> tuple[int, int, int]:
+    """Ambil threshold skor (prioritas, potensi, review).
+
+    Sumber: config.json → thresholds.STATUS_PRIORITAS / STATUS_POTENSI /
+    STATUS_REVIEW (via utils.load_config). Bila key hilang / config rusak /
+    nilai invalid, fallback ke literal STATUS_THRESHOLDS = (8, 5, 3).
+    """
+    global _THRESHOLD_CACHE
+    if _THRESHOLD_CACHE is None:
+        pri, pot, rev = STATUS_THRESHOLDS
+        try:
+            # Lazy import — hindari dependency import-time ke utils
+            from .utils import load_config
+            th = (load_config() or {}).get("thresholds", {}) or {}
+            pri = int(th.get("STATUS_PRIORITAS", pri))
+            pot = int(th.get("STATUS_POTENSI", pot))
+            rev = int(th.get("STATUS_REVIEW", rev))
+        except Exception:
+            pass  # best-effort: keep literals (load_config sudah warn-on-fail)
+        _THRESHOLD_CACHE = (pri, pot, rev)
+    return _THRESHOLD_CACHE
+
+
+# M6: jumlah maksimum reason yang ditampilkan; sisanya → bucket "Lainnya"
+MAX_REASONS = 14
 
 # Styling global matplotlib
 plt.rcParams.update({
@@ -98,7 +166,11 @@ plt.rcParams.update({
 
 
 def _restore_legend_title(ax, title: str | None) -> None:
-    """Set title on existing legend (place_legend_outside doesn't preserve it)."""
+    """Set title on existing legend (place_legend_outside doesn't preserve it).
+
+    NOTE (L3): dashboard.py punya salinan helper ini (file itu di-handle
+    agent lain) — jaga keduanya tetap sinkron bila perilaku berubah.
+    """
     if not title:
         return
     leg = ax.get_legend()
@@ -106,25 +178,43 @@ def _restore_legend_title(ax, title: str | None) -> None:
         leg.set_title(title)
 
 
+def _empty_figure(msg: str = "Tidak ada data", figsize: tuple = (7, 4.5)) -> Figure:
+    """Empty-state figure standar: satu pesan di tengah, axes off."""
+    fig = Figure(figsize=figsize, dpi=100)
+    ax = fig.add_subplot(111)
+    ax.text(0.5, 0.5, msg, ha="center", va="center",
+            color=PALETTE_NEUTRAL, fontsize=10)
+    ax.set_axis_off()
+    return fig
+
+
 # ============================================================
 # CHART 1 — PIE: Distribusi Status Anomali
 # ============================================================
 
 def chart_status_pie(df: pd.DataFrame) -> Figure:
-    """Pie chart distribusi ANOMALY STATUS."""
-    fig = Figure(figsize=(6, 4.2), dpi=100)
-    ax = fig.add_subplot(111)
+    """Pie chart distribusi ANOMALY STATUS.
 
+    H3 fix: status di luar 4 kanonik TETAP ditampilkan sebagai slice berwarna
+    netral + entri legend. Sebelumnya reindex() membuang status tak dikenal
+    secara diam-diam — input [Normal, UNKNOWN, UNKNOWN] salah tampil
+    "Normal 100%".
+    """
     if "ANOMALY STATUS" not in df.columns or df.empty:
-        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
-        ax.set_axis_off()
-        return fig
+        return _empty_figure("Tidak ada data", figsize=(6, 4.2))
 
     counts = df["ANOMALY STATUS"].value_counts()
-    # Urutan tetap: Prioritas Tinggi > Potensi Anomali > Perlu Review > Normal
-    order = ["Prioritas Tinggi", "Potensi Anomali", "Perlu Review", "Normal"]
-    counts = counts.reindex([s for s in order if s in counts.index])
+    # Urutan tetap: Prioritas Tinggi > Potensi Anomali > Perlu Review > Normal,
+    # lalu status tak dikenal (dijaga, tidak dibuang).
+    known = [s for s in STATUS_ORDER if s in counts.index]
+    unknown = [s for s in counts.index if s not in STATUS_ORDER]
+    counts = counts.reindex(known + unknown)
+    if counts.empty:
+        return _empty_figure("Tidak ada data", figsize=(6, 4.2))
     colors = [PALETTE_STATUS.get(s, PALETTE_NEUTRAL) for s in counts.index]
+
+    fig = Figure(figsize=(6, 4.2), dpi=100)
+    ax = fig.add_subplot(111)
 
     # Pattern D: pctdistance closer to center, labeldistance slightly outside
     # Pattern C: count moved to legend (less text inside the pie)
@@ -166,7 +256,13 @@ def chart_status_pie(df: pd.DataFrame) -> Figure:
 # ============================================================
 
 def chart_waste_per_cabang(df: pd.DataFrame) -> Figure:
-    """Bar chart total waste per NAMA RESTO."""
+    """Bar chart total waste per NAMA RESTO.
+
+    C1 fix: bar di-plot posisional (np.arange + set_xticklabels) — label
+    display hasil truncation fmt_cabang yang duplikat tidak lagi menumpuk
+    beberapa bar pada satu posisi x (dulu bar saling menimpa diam-diam).
+    Label duplikat juga diberi suffix "#k" agar tetap bisa dibedakan.
+    """
     # Pattern G: wider figure for many cabangs
     n_cabangs = df["NAMA RESTO"].nunique() if "NAMA RESTO" in df.columns else 5
     fig_w = max(7.0, min(14.0, 0.5 * n_cabangs + 3))
@@ -174,17 +270,24 @@ def chart_waste_per_cabang(df: pd.DataFrame) -> Figure:
     ax = fig.add_subplot(111)
 
     if "NAMA RESTO" not in df.columns or "TOTAL" not in df.columns or df.empty:
-        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
+        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center",
+                color=PALETTE_NEUTRAL, fontsize=10)
         ax.set_axis_off()
         return fig
 
     g = df.groupby("NAMA RESTO", dropna=False)["TOTAL"].sum().sort_values(ascending=False)
-    # Pattern C: abbreviate cabang codes on x-axis
-    cabang_labels = [fmt_cabang(c) for c in g.index.astype(str)]
-    bars = ax.bar(cabang_labels, g.values, color=PALETTE_ACCENT, edgecolor="white", linewidth=1.5)
-    # Pattern D: data labels using fmt_number_short, rotate 90° if >10 bars to prevent overlap
+    # Pattern C: abbreviate cabang codes on x-axis + disambiguate collisions
+    cabang_labels = disambiguate_labels([fmt_cabang(c) for c in g.index.astype(str)])
+    x = np.arange(len(g))
+    bars = ax.bar(x, g.values, color=PALETTE_ACCENT, edgecolor="white", linewidth=1.5)
+    ax.set_xticks(x)
+    ax.set_xticklabels(cabang_labels)
+    # Pattern D: data labels using fmt_number_short, rotate 90° if >10 bars
+    # L6: skip label untuk bar nol (konsisten di semua bar chart)
     label_rotation = 90 if len(bars) > 10 else 0
     for bar, val in zip(bars, g.values):
+        if val == 0 or pd.isna(val):
+            continue
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
                 fmt_number_short(val), ha="center", va="bottom",
                 fontsize=7, fontweight="bold", color="#0f172a",
@@ -204,28 +307,40 @@ def chart_waste_per_cabang(df: pd.DataFrame) -> Figure:
 # ============================================================
 
 def chart_top_items(df: pd.DataFrame, top_n: int = 10) -> Figure:
-    """Horizontal bar chart top N item by TOTAL waste."""
-    # Pattern G: dynamic figure height based on number of items
-    fig_w, fig_h = dynamic_figsize(top_n, base_w=7.0, per_item_h=0.4, min_h=4.0, max_h=10.0)
-    fig = Figure(figsize=(fig_w, fig_h), dpi=100)
-    ax = fig.add_subplot(111)
+    """Horizontal bar chart top N item by TOTAL waste.
 
+    M4 fix: tinggi figure dihitung dari jumlah item HASIL agregasi (len(g)),
+    bukan top_n yang diminta — dataset kecil tidak lagi mendapat figure
+    7-inch yang setengah kosong.
+    C1 fix: barh posisional — label ter-wrap yang identik tidak menimpa bar.
+    """
     if "NAMA BARANG" not in df.columns or "TOTAL" not in df.columns or df.empty:
-        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
-        ax.set_axis_off()
-        return fig
+        return _empty_figure("Tidak ada data", figsize=(7.0, 4.0))
 
     g = (df.groupby("NAMA BARANG", dropna=False)["TOTAL"].sum()
          .sort_values(ascending=True).tail(top_n))
-    # Pattern C: wrap long item names on y-axis
-    item_labels = [fmt_item(name) for name in g.index.astype(str)]
-    bars = ax.barh(item_labels, g.values, color=PALETTE_SECONDARY, edgecolor="white", linewidth=1.5)
-    # Pattern D: data labels with short format
+    if g.empty:
+        return _empty_figure("Tidak ada data", figsize=(7.0, 4.0))
+
+    # Pattern G: dynamic figure height based on ACTUAL item count (M4)
+    fig_w, fig_h = dynamic_figsize(len(g), base_w=7.0, per_item_h=0.4, min_h=4.0, max_h=10.0)
+    fig = Figure(figsize=(fig_w, fig_h), dpi=100)
+    ax = fig.add_subplot(111)
+
+    # Pattern C: wrap long item names on y-axis + disambiguate collisions
+    item_labels = disambiguate_labels([fmt_item(name) for name in g.index.astype(str)])
+    y = np.arange(len(g))
+    bars = ax.barh(y, g.values, color=PALETTE_SECONDARY, edgecolor="white", linewidth=1.5)
+    ax.set_yticks(y)
+    ax.set_yticklabels(item_labels)
+    # Pattern D: data labels with short format (L6: skip zero bars)
     for bar, val in zip(bars, g.values):
+        if val == 0 or pd.isna(val):
+            continue
         ax.text(bar.get_width(), bar.get_y() + bar.get_height()/2,
                 f" {fmt_number_short(val)}", ha="left", va="center",
                 fontsize=8, fontweight="bold", color="#0f172a")
-    ax.set_title(f"Top {top_n} Item dengan Waste Tertinggi", pad=12)
+    ax.set_title(f"Top {len(g)} Item dengan Waste Tertinggi", pad=12)
     ax.set_xlabel("Total Waste (qty)")
     ax.set_ylabel("")
     # Pattern D: add headroom for data labels
@@ -240,24 +355,33 @@ def chart_top_items(df: pd.DataFrame, top_n: int = 10) -> Figure:
 # ============================================================
 
 def chart_status_per_cabang(df: pd.DataFrame) -> Figure:
-    """Stacked bar: distribusi status anomali per cabang."""
-    fig = Figure(figsize=(7, 4.5), dpi=100)
-    ax = fig.add_subplot(111)
+    """Stacked bar: distribusi status anomali per cabang.
 
+    C3 fix: kolom pivot difilter ke urutan kanonik DULU, lalu status tak
+    dikenal DITAMBAHKAN kembali (warna PALETTE_NEUTRAL) — sebelumnya status
+    unknown dibuang diam-diam; input all-unknown → "TypeError: no numeric
+    data to plot". Kolom kosong total → empty-state "Tidak ada data".
+    M11: edge gelap tipis antar segmen (boundary luminance untuk pasangan
+    warna red-600/orange-600/amber-700/green-600 yang confusable).
+    """
     if "NAMA RESTO" not in df.columns or "ANOMALY STATUS" not in df.columns or df.empty:
-        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
-        ax.set_axis_off()
-        return fig
+        return _empty_figure("Tidak ada data", figsize=(7, 4.5))
 
     pivot = pd.crosstab(df["NAMA RESTO"], df["ANOMALY STATUS"])
-    order = ["Prioritas Tinggi", "Potensi Anomali", "Perlu Review", "Normal"]
-    cols = [c for c in order if c in pivot.columns]
+    # C3: canonical order first, unknown statuses appended (never dropped)
+    cols = [c for c in STATUS_ORDER if c in pivot.columns] + \
+           [c for c in pivot.columns if c not in STATUS_ORDER]
+    if pivot.empty or not cols:
+        return _empty_figure("Tidak ada data", figsize=(7, 4.5))
     pivot = pivot[cols]
     colors = [PALETTE_STATUS.get(c, PALETTE_NEUTRAL) for c in cols]
 
-    pivot.plot(kind="bar", stacked=True, ax=ax, color=colors, edgecolor="white", linewidth=1)
-    # Pattern C: abbreviate cabang codes
-    ax.set_xticklabels([fmt_cabang(str(idx)) for idx in pivot.index])
+    fig = Figure(figsize=(7, 4.5), dpi=100)
+    ax = fig.add_subplot(111)
+    pivot.plot(kind="bar", stacked=True, ax=ax, color=colors,
+               edgecolor="#1e293b", linewidth=0.5)
+    # Pattern C: abbreviate cabang codes (+ disambiguate collisions)
+    ax.set_xticklabels(disambiguate_labels([fmt_cabang(str(idx)) for idx in pivot.index]))
     ax.set_title("Distribusi Status Anomali per Cabang", pad=12)
     ax.set_ylabel("Jumlah Baris")
     ax.set_xlabel("Cabang")
@@ -276,27 +400,38 @@ def chart_status_per_cabang(df: pd.DataFrame) -> Figure:
 # ============================================================
 
 def chart_pareto_keterangan(df: pd.DataFrame) -> Figure:
-    """Pareto chart: bar TOTAL per KETERANGAN + cumulative line."""
+    """Pareto chart: bar TOTAL per KETERANGAN + cumulative line.
+
+    M3 fix: ax2 = ax.twinx() dibuat SETELAH empty-data guard — sebelumnya
+    dibuat sebelum guard, sehingga early-return menyisakan y-axis kedua
+    (orphan) yang tetap terlihat di figure empty-state.
+    """
     fig = Figure(figsize=(8, 4.5), dpi=100)
     ax = fig.add_subplot(111)
-    ax2 = ax.twinx()
 
     if "KETERANGAN" not in df.columns or "TOTAL" not in df.columns or df.empty:
-        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
+        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center",
+                color=PALETTE_NEUTRAL, fontsize=10)
         ax.set_axis_off()
         return fig
 
     g = df.groupby("KETERANGAN", dropna=False)["TOTAL"].sum().sort_values(ascending=False)
+    if g.empty:
+        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center",
+                color=PALETTE_NEUTRAL, fontsize=10)
+        ax.set_axis_off()
+        return fig
     cum = g.cumsum() / g.sum() * 100 if g.sum() > 0 else g * 0
 
     bars = ax.bar(range(len(g)), g.values, color=PALETTE_ACCENT, edgecolor="white", linewidth=1.5)
     ax.set_xticks(range(len(g)))
-    # Pattern C: wrap long KETERANGAN reasons
-    ax.set_xticklabels([fmt_reason(str(k)) for k in g.index])
+    # Pattern C: wrap long KETERANGAN reasons (+ disambiguate collisions)
+    ax.set_xticklabels(disambiguate_labels([fmt_reason(str(k)) for k in g.index]))
     ax.set_ylabel("Total Waste (qty)")
     ax.set_title("Pareto: Kontribusi Waste per KETERANGAN", pad=12)
 
-    # Cumulative line (twin axis)
+    # Cumulative line (twin axis) — dibuat setelah semua guard (M3)
+    ax2 = ax.twinx()
     ax2.plot(range(len(g)), cum.values, color=PALETTE_SECONDARY, marker="o", linewidth=2, markersize=5)
     # Pattern A: labelpad to give ax2.ylabel breathing room
     ax2.set_ylabel("Cumulative %", color=PALETTE_SECONDARY, labelpad=12)
@@ -305,8 +440,10 @@ def chart_pareto_keterangan(df: pd.DataFrame) -> Figure:
     ax2.axhline(80, color="#94a3b8", linestyle="--", linewidth=0.8, alpha=0.7)
     ax2.text(len(g) - 1, 82, "80%", ha="right", fontsize=8, color="#94a3b8")
 
-    # Label di atas bar (Pattern D: short format + headroom)
+    # Label di atas bar (Pattern D: short format + headroom; L6: skip bar nol)
     for i, v in enumerate(g.values):
+        if v == 0 or pd.isna(v):
+            continue
         ax.text(i, v, fmt_number_short(v), ha="center", va="bottom",
                 fontsize=7, color="#0f172a")
 
@@ -321,44 +458,63 @@ def chart_pareto_keterangan(df: pd.DataFrame) -> Figure:
 # ============================================================
 
 def chart_heatmap_cabang_item(df: pd.DataFrame) -> Figure:
-    """Heatmap matrix Cabang × Item, value = TOTAL waste."""
+    """Heatmap matrix Cabang × Item, value = TOTAL waste.
+
+    M2 fix: grid dimatikan untuk axes image (rcParams global axes.grid:True
+    menggambar gridline DI ATAS imshow); colorbar dibuat dengan fraction/pad
+    compact SETELAH layout final, dan grid colorbar juga dimatikan.
+    M7 fix: kolom (cabang) dibatasi top-20 by total waste selain cap baris
+    (top-30 item); truncasi dicatat di judul ("+N cabang lain").
+    L4: fontsize anotasi sel dinaikkan 6 → 8 (minimum Pattern H modul).
+    """
     # Validate input first (so we can size the figure dynamically based on data)
     if "NAMA RESTO" not in df.columns or "NAMA BARANG" not in df.columns or "TOTAL" not in df.columns or df.empty:
-        fig = Figure(figsize=(8, 5), dpi=100)
-        ax = fig.add_subplot(111)
-        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
-        ax.set_axis_off()
-        return fig
+        return _empty_figure("Tidak ada data", figsize=(8, 5))
 
     pivot = df.pivot_table(
         index="NAMA BARANG", columns="NAMA RESTO",
         values="TOTAL", aggfunc="sum", fill_value=0,
     )
     if pivot.empty:
-        fig = Figure(figsize=(8, 5), dpi=100)
-        ax = fig.add_subplot(111)
-        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
-        ax.set_axis_off()
-        return fig
+        return _empty_figure("Tidak ada data", figsize=(8, 5))
 
-    # Urutkan item by total desc + paginate to top 30 (Pattern G)
+    # Urutkan item by total desc + cap rows top-30 (Pattern G)
     pivot = pivot.loc[pivot.sum(axis=1).sort_values(ascending=False).index]
-    max_items = 30
+    max_items, max_cabangs = 30, 20
+    n_items_hidden = max(0, len(pivot) - max_items)
     pivot = pivot.head(max_items)
+    # M7: cap columns too — top cabangs by total waste
+    col_order = pivot.sum(axis=0).sort_values(ascending=False).index
+    n_cabangs_hidden = max(0, len(col_order) - max_cabangs)
+    pivot = pivot[col_order[:max_cabangs]]
     n_items = len(pivot)
-    # Pattern G: dynamic figsize based on items shown — wider + taller for readability
-    fig_w, fig_h = dynamic_figsize(n_items, base_w=10, per_item_h=0.45, min_h=6.0, max_h=16)
+    n_cols = len(pivot.columns)
+
+    title = "Heatmap Waste per Cabang × Item"
+    hidden_notes = []
+    if n_items_hidden:
+        hidden_notes.append(f"+{n_items_hidden} item lain")
+    if n_cabangs_hidden:
+        hidden_notes.append(f"+{n_cabangs_hidden} cabang lain")
+    if hidden_notes:
+        title += " (" + ", ".join(hidden_notes) + ")"
+
+    # Pattern G: dynamic figsize based on items/columns shown
+    base_w = max(10.0, min(16.0, 0.5 * n_cols + 2))
+    fig_w, fig_h = dynamic_figsize(n_items, base_w=base_w, per_item_h=0.45, min_h=6.0, max_h=16)
     fig = Figure(figsize=(fig_w, fig_h), dpi=100)
     ax = fig.add_subplot(111)
 
     im = ax.imshow(pivot.values, aspect="auto", cmap="YlOrRd")
-    ax.set_xticks(range(len(pivot.columns)))
+    # M2: global axes.grid:True → gridlines over the image; turn it off
+    ax.grid(False)
+    ax.set_xticks(range(n_cols))
     # Pattern C: abbreviate cabang codes
     ax.set_xticklabels([fmt_cabang(str(c)) for c in pivot.columns])
-    ax.set_yticks(range(len(pivot.index)))
+    ax.set_yticks(range(n_items))
     # Pattern C: wrap long item names — use shorter width for heatmap (15 chars, 2 lines max)
     ax.set_yticklabels([fmt_item(str(name), width=15, max_lines=2) for name in pivot.index])
-    ax.set_title("Heatmap Waste per Cabang × Item", pad=12)
+    ax.set_title(title, pad=12)
     ax.set_xlabel("Cabang")
     ax.set_ylabel("Item")
 
@@ -369,7 +525,7 @@ def chart_heatmap_cabang_item(df: pd.DataFrame) -> Figure:
     # Flatten values, find top 50 cells to annotate
     flat_vals = []
     for i in range(len(pivot.index)):
-        for j in range(len(pivot.columns)):
+        for j in range(n_cols):
             v = pivot.values[i, j]
             if v > 0:
                 flat_vals.append((v, i, j))
@@ -379,11 +535,16 @@ def chart_heatmap_cabang_item(df: pd.DataFrame) -> Figure:
         v = pivot.values[i, j]
         color = adaptive_text_color(v, text_threshold, max_val)
         ax.text(j, i, fmt_number_short(v, decimals=0), ha="center", va="center",
-                fontsize=6, color=color, fontweight="bold")
+                fontsize=8, color=color, fontweight="bold")
 
-    # Colorbar after apply_layout so it sits in the remaining right margin
-    apply_layout(fig, ax, rotate_x=True, rotation=90, bottom_pad=0.20, left_pad=0.28, right_pad=0.92, x_fontsize=7)
-    fig.colorbar(im, ax=ax, label="Total Waste (qty)", shrink=0.8)
+    # M2: layout final dulu, lalu colorbar compact (fraction/pad) — dibuat
+    # paling akhir sehingga shrink yang ditimbulkannya bersifat final dan
+    # kecil; tidak ada subplots_adjust usang setelahnya. Grid colorbar off.
+    apply_layout(fig, ax, rotate_x=True, rotation=90, bottom_pad=0.20,
+                 left_pad=0.28, right_pad=0.92, x_fontsize=8)
+    cbar = fig.colorbar(im, ax=ax, fraction=0.05, pad=0.03,
+                        label="Total Waste (qty)")
+    cbar.ax.grid(False)
     return fig
 
 
@@ -392,14 +553,15 @@ def chart_heatmap_cabang_item(df: pd.DataFrame) -> Figure:
 # ============================================================
 
 def chart_reasons_frequency(df: pd.DataFrame) -> Figure:
-    """Bar chart frekuensi ANOMALY REASONS (split by ' | ')."""
+    """Bar chart frekuensi ANOMALY REASONS (split by ' | ').
+
+    M6 fix: dibatasi top MAX_REASONS (14); sisanya diagregasi ke bucket
+    "Lainnya" (sum, bar warna netral) — ratusan reason berbeda dulu
+    menghasilkan figure 60-inch yang tidak terbaca.
+    C1 fix: barh posisional — label ter-wrap identik tidak menimpa bar.
+    """
     if "ANOMALY REASONS" not in df.columns or df.empty:
-        fig = Figure(figsize=(7, 4.5), dpi=100)
-        ax = fig.add_subplot(111)
-        ax.text(0.5, 0.5, "Tidak ada alasan anomali terdeteksi",
-                ha="center", va="center", color=PALETTE_NEUTRAL)
-        ax.set_axis_off()
-        return fig
+        return _empty_figure("Tidak ada alasan anomali terdeteksi", figsize=(7, 4.5))
 
     counter = Counter()
     for reasons in df["ANOMALY REASONS"].dropna():
@@ -410,27 +572,39 @@ def chart_reasons_frequency(df: pd.DataFrame) -> Figure:
                     counter[r] += 1
 
     if not counter:
-        fig = Figure(figsize=(7, 4.5), dpi=100)
-        ax = fig.add_subplot(111)
-        ax.text(0.5, 0.5, "Tidak ada alasan anomali terdeteksi",
-                ha="center", va="center", color=PALETTE_NEUTRAL)
-        ax.set_axis_off()
-        return fig
+        return _empty_figure("Tidak ada alasan anomali terdeteksi", figsize=(7, 4.5))
 
-    items = sorted(counter.items(), key=lambda x: x[1])
-    # Pattern C: wrap reason text on y-axis
+    items = sorted(counter.items(), key=lambda x: x[1])   # ascending
+    # M6: cap at top MAX_REASONS + "Lainnya" bucket (sum of the tail)
+    n_hidden = 0
+    if len(items) > MAX_REASONS:
+        keep = items[-(MAX_REASONS - 1):]
+        n_hidden = len(items) - len(keep)
+        lainnya_total = sum(v for _, v in items[:n_hidden])
+        items = [("Lainnya", lainnya_total)] + keep
+
+    # Pattern C: wrap reason text on y-axis (+ disambiguate collisions)
     labels = [fmt_reason(x[0]) for x in items]
     values = [x[1] for x in items]
-    # Pattern G: dynamic figsize based on number of reasons
+    # Pattern G: dynamic figsize based on number of reasons shown
     fig_w, fig_h = dynamic_figsize(len(items), base_w=7.0, per_item_h=0.4, min_h=4.0, max_h=14.0)
     fig = Figure(figsize=(fig_w, fig_h), dpi=100)
     ax = fig.add_subplot(111)
-    bars = ax.barh(labels, values, color=PALETTE_ACCENT, edgecolor="white", linewidth=1.5)
+    y = np.arange(len(items))
+    bar_colors = [COLOR_LAINNYA if lab == "Lainnya" else PALETTE_ACCENT for lab in labels]
+    bars = ax.barh(y, values, color=bar_colors, edgecolor="white", linewidth=1.5)
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels)
     for bar, val in zip(bars, values):
+        if val == 0 or pd.isna(val):
+            continue
         ax.text(bar.get_width(), bar.get_y() + bar.get_height()/2,
                 f" {val}", ha="left", va="center", fontsize=8,
                 fontweight="bold", color="#0f172a")
-    ax.set_title("Frekuensi Penyebab Anomali", pad=12)
+    title = "Frekuensi Penyebab Anomali"
+    if n_hidden:
+        title += f" (top {len(items) - 1} + {n_hidden} lainnya)"
+    ax.set_title(title, pad=12)
     ax.set_xlabel("Jumlah Baris")
     # Pattern D: headroom for data labels
     add_xlim_headroom(ax, factor=1.10, side="right")
@@ -444,27 +618,42 @@ def chart_reasons_frequency(df: pd.DataFrame) -> Figure:
 # ============================================================
 
 def chart_scatter_max_total(df: pd.DataFrame) -> Figure:
-    """Scatter plot MAX vs TOTAL, warna per ANOMALY STATUS."""
+    """Scatter plot MAX vs TOTAL, warna per ANOMALY STATUS.
+
+    M11 fix: setiap kelas status mendapat marker berbeda (o/s/^/D) sebagai
+    encoding redundan — pasangan warna red-600/green-600 dan
+    orange-600/amber-700 confusable untuk colorblind bila hue saja.
+    Status tak dikenal ikut diplot (marker "v", PALETTE_NEUTRAL).
+    """
     fig = Figure(figsize=(7, 4.5), dpi=100)
     ax = fig.add_subplot(111)
 
     if "MAX" not in df.columns or "TOTAL" not in df.columns or "ANOMALY STATUS" not in df.columns or df.empty:
-        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
+        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center",
+                color=PALETTE_NEUTRAL, fontsize=10)
         ax.set_axis_off()
         return fig
 
-    # Plot per status supaya legend muncul
+    # Plot per status supaya legend muncul.
+    # Urutan: kanonik dulu, lalu status tak dikenal dari data (tidak dibuang).
+    present = list(pd.unique(df["ANOMALY STATUS"].dropna()))
+    status_list = [s for s in STATUS_ORDER if s in present] + \
+                  [s for s in present if s not in STATUS_ORDER]
     plotted = False
-    for status, color in PALETTE_STATUS.items():
+    for status in status_list:
         sub = df[df["ANOMALY STATUS"] == status]
         if sub.empty:
             continue
-        ax.scatter(sub["TOTAL"], sub["MAX"], c=color, label=status,
+        ax.scatter(sub["TOTAL"], sub["MAX"],
+                   c=PALETTE_STATUS.get(status, PALETTE_NEUTRAL),
+                   label=str(status),
+                   marker=STATUS_MARKERS.get(status, "v"),
                    alpha=0.7, edgecolors="white", linewidth=0.5, s=60)
         plotted = True
 
     if not plotted:
-        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
+        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center",
+                color=PALETTE_NEUTRAL, fontsize=10)
         ax.set_axis_off()
         return fig
 
@@ -491,31 +680,50 @@ def chart_scatter_max_total(df: pd.DataFrame) -> Figure:
 # ============================================================
 
 def chart_box_total_per_jenis(df: pd.DataFrame) -> Figure:
-    """Box plot distribusi TOTAL per JENIS (SUSUT/TRIAL/WASTE)."""
-    fig = Figure(figsize=(6, 4.5), dpi=100)
-    ax = fig.add_subplot(111)
+    """Box plot distribusi TOTAL per JENIS.
 
+    M12 fix: kategori JENIS diderivasi dari data (kanonik WASTE/SUSUT/TRIAL
+    dulu, lalu JENIS lain yang benar-benar ada) — bukan hardcoded 3 item.
+    L14: memakai boxplot(tick_labels=...) → butuh matplotlib >= 3.9.
+    Warna box pakai JENIS_COLORS (H5); JENIS ekstra fallback ke
+    PALETTE_KATEGORI lalu netral — warna tidak pernah dipakai ulang (M5).
+    """
     if "JENIS" not in df.columns or "TOTAL" not in df.columns or df.empty:
-        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
-        ax.set_axis_off()
-        return fig
+        return _empty_figure("Tidak ada data", figsize=(6, 4.5))
+
+    present = [str(j) for j in df["JENIS"].dropna().unique()]
+    canonical = ["WASTE", "SUSUT", "TRIAL"]
+    # M12: canonical order first, then extra JENIS actually present in data
+    jenis_order = [j for j in canonical if j in present] + \
+                  sorted(j for j in present if j not in canonical)
 
     data = []
     labels = []
-    for jenis in ["WASTE", "SUSUT", "TRIAL"]:
+    for jenis in jenis_order:
         sub = df[df["JENIS"] == jenis]["TOTAL"].dropna()
         if not sub.empty:
             data.append(sub.values)
             labels.append(jenis)
 
     if not data:
-        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
-        ax.set_axis_off()
-        return fig
+        return _empty_figure("Tidak ada data", figsize=(6, 4.5))
+
+    fig = Figure(figsize=(6, 4.5), dpi=100)
+    ax = fig.add_subplot(111)
 
     bp = ax.boxplot(data, tick_labels=labels, patch_artist=True, widths=0.5,
                     medianprops=dict(color="#0f172a", linewidth=2))
-    for patch, color in zip(bp["boxes"], PALETTE_KATEGORI[:len(data)]):
+    # H5/M5: stable JENIS_COLORS mapping; extras cycle the kategori palette
+    extra = [c for c in PALETTE_KATEGORI if c not in set(JENIS_COLORS.values())]
+    box_colors = []
+    for i, j in enumerate(labels):
+        if j in JENIS_COLORS:
+            box_colors.append(JENIS_COLORS[j])
+        elif extra:
+            box_colors.append(extra[i % len(extra)])
+        else:
+            box_colors.append(PALETTE_NEUTRAL)
+    for patch, color in zip(bp["boxes"], box_colors):
         patch.set_facecolor(color)
         patch.set_alpha(0.7)
         patch.set_edgecolor("white")
@@ -533,12 +741,19 @@ def chart_box_total_per_jenis(df: pd.DataFrame) -> Figure:
 # ============================================================
 
 def chart_score_per_cabang(df: pd.DataFrame) -> Figure:
-    """Grouped bar: avg & max ANOMALY SCORE per cabang."""
+    """Grouped bar: avg & max ANOMALY SCORE per cabang.
+
+    M1 fix: threshold line (config: thresholds.STATUS_PRIORITAS /
+    STATUS_POTENSI / STATUS_REVIEW, fallback 8/5/3) kini punya label
+    ("≥ 8 Prioritas", "≥ 5 Potensi", "≥ 3 Review") sehingga muncul di
+    legend — sebelumnya magic number tanpa penjelasan.
+    """
     fig = Figure(figsize=(7, 4.5), dpi=100)
     ax = fig.add_subplot(111)
 
     if "NAMA RESTO" not in df.columns or "ANOMALY SCORE" not in df.columns or df.empty:
-        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
+        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center",
+                color=PALETTE_NEUTRAL, fontsize=10)
         ax.set_axis_off()
         return fig
 
@@ -549,19 +764,24 @@ def chart_score_per_cabang(df: pd.DataFrame) -> Figure:
     b1 = ax.bar(x - w/2, g["mean"], w, label="Rata-rata", color=PALETTE_ACCENT, edgecolor="white", linewidth=1.5)
     b2 = ax.bar(x + w/2, g["max"], w, label="Max", color=PALETTE_SECONDARY, edgecolor="white", linewidth=1.5)
     ax.set_xticks(x)
-    # Pattern C: abbreviate cabang codes
-    ax.set_xticklabels([fmt_cabang(str(c)) for c in g["NAMA RESTO"]])
+    # Pattern C: abbreviate cabang codes (+ disambiguate collisions)
+    ax.set_xticklabels(disambiguate_labels([fmt_cabang(str(c)) for c in g["NAMA RESTO"]]))
     ax.set_title("Anomali Score per Cabang (Avg vs Max)", pad=12)
     ax.set_ylabel("Anomali Score")
     ax.set_xlabel("Cabang")
-    ax.legend()
-    # Threshold lines
-    ax.axhline(8, color=PALETTE_STATUS["Prioritas Tinggi"], linestyle="--", linewidth=0.8, alpha=0.5)
-    ax.axhline(5, color=PALETTE_STATUS["Potensi Anomali"], linestyle="--", linewidth=0.8, alpha=0.5)
-    ax.axhline(3, color=PALETTE_STATUS["Perlu Review"], linestyle="--", linewidth=0.8, alpha=0.5)
+    # Threshold lines — M1: labeled so they show up in the legend.
+    # Values from config (STATUS_PRIORITAS/POTENSI/REVIEW), fallback 8/5/3.
+    t_pri, t_pot, t_rev = _load_status_thresholds()
+    ax.axhline(t_pri, color=PALETTE_STATUS["Prioritas Tinggi"], linestyle="--",
+               linewidth=0.8, alpha=0.5, label=f"≥ {t_pri} Prioritas")
+    ax.axhline(t_pot, color=PALETTE_STATUS["Potensi Anomali"], linestyle="--",
+               linewidth=0.8, alpha=0.5, label=f"≥ {t_pot} Potensi")
+    ax.axhline(t_rev, color=PALETTE_STATUS["Perlu Review"], linestyle="--",
+               linewidth=0.8, alpha=0.5, label=f"≥ {t_rev} Review")
     # Pattern D: headroom for tallest bar (Max)
     add_ylim_headroom(ax)
-    # Pattern A + B + E: margins, legend outside, rotation
+    # Pattern A + B + E: margins, legend outside, rotation.
+    # Legend dibuat di sini (place_legend_outside) — mencakup bar + threshold.
     apply_layout(fig, ax, rotate_x=True, legend_outside=True, bottom_pad=0.22, right_pad=0.75)
     return fig
 
@@ -571,21 +791,60 @@ def chart_score_per_cabang(df: pd.DataFrame) -> Figure:
 # ============================================================
 
 def chart_kategori_per_cabang(df: pd.DataFrame) -> Figure:
-    """Stacked bar KATEGORI ANOMALI per cabang."""
-    fig = Figure(figsize=(7, 4.5), dpi=100)
-    ax = fig.add_subplot(111)
+    """Stacked bar KATEGORI ANOMALI per cabang.
 
+    M5 fix: bila jumlah kategori melebihi kapasitas PALETTE_KATEGORI (12),
+    hanya top-(N-1) by total yang digambar individual; sisanya diagregasi
+    ke segmen "Lainnya" (warna netral) — warna tidak pernah dipakai ulang
+    secara diam-diam.
+    M11: edge gelap tipis antar segmen (redundant boundary).
+    """
     if "NAMA RESTO" not in df.columns or "KATEGORI ANOMALI" not in df.columns or df.empty:
-        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
-        ax.set_axis_off()
-        return fig
+        return _empty_figure("Tidak ada data", figsize=(7, 4.5))
 
     pivot = pd.crosstab(df["NAMA RESTO"], df["KATEGORI ANOMALI"])
-    colors = PALETTE_KATEGORI[:len(pivot.columns)]
-    pivot.plot(kind="bar", stacked=True, ax=ax, color=colors, edgecolor="white", linewidth=1)
-    # Pattern C: abbreviate cabang codes
-    ax.set_xticklabels([fmt_cabang(str(idx)) for idx in pivot.index])
-    ax.set_title("Kategori Anomali per Cabang", pad=12)
+    if pivot.empty:
+        return _empty_figure("Tidak ada data", figsize=(7, 4.5))
+
+    # M5: collapse tail categories into "Lainnya" beyond palette capacity
+    max_cols = len(PALETTE_KATEGORI)
+    collapsed = False
+    if pivot.shape[1] > max_cols:
+        collapsed = True
+        bucket = "Lainnya"
+        totals = pivot.sum(axis=0).sort_values(ascending=False)
+        keep = [c for c in totals.index[:max_cols - 1]]
+        if bucket in pivot.columns and bucket not in keep:
+            # kategori asli bernama "Lainnya" ada tapi tidak masuk top — sisakan
+            # slot agar bucket tetap satu kolom (tidak dobel)
+            keep = keep[:max_cols - 2]
+        rest = [c for c in pivot.columns if c not in keep]
+        out = pivot[keep].copy()
+        if rest:
+            bucket_vals = pivot[rest].sum(axis=1)
+            if bucket in out.columns:
+                out[bucket] = out[bucket] + bucket_vals
+            else:
+                out[bucket] = bucket_vals
+        pivot = out
+
+    cols = list(pivot.columns)
+    colors = [
+        COLOR_LAINNYA if c == "Lainnya"
+        else (PALETTE_KATEGORI[i] if i < len(PALETTE_KATEGORI) else COLOR_LAINNYA)
+        for i, c in enumerate(cols)
+    ]
+
+    fig = Figure(figsize=(7, 4.5), dpi=100)
+    ax = fig.add_subplot(111)
+    pivot.plot(kind="bar", stacked=True, ax=ax, color=colors,
+               edgecolor="#1e293b", linewidth=0.5)
+    # Pattern C: abbreviate cabang codes (+ disambiguate collisions)
+    ax.set_xticklabels(disambiguate_labels([fmt_cabang(str(idx)) for idx in pivot.index]))
+    title = "Kategori Anomali per Cabang"
+    if collapsed:
+        title += " (kategori lain digabung ke 'Lainnya')"
+    ax.set_title(title, pad=12)
     ax.set_ylabel("Jumlah Baris")
     ax.set_xlabel("Cabang")
     ax.legend(title="Kategori")
@@ -601,17 +860,42 @@ def chart_kategori_per_cabang(df: pd.DataFrame) -> Figure:
 # ============================================================
 
 def chart_jenis_donut(df: pd.DataFrame) -> Figure:
-    """Donut chart distribusi JENIS (count baris)."""
-    fig = Figure(figsize=(5, 4.2), dpi=100)
-    ax = fig.add_subplot(111)
+    """Donut chart distribusi JENIS (count baris).
 
+    H5 fix: warna slice memakai mapping JENIS_COLORS (stabil, di-export
+    untuk dashboard/UI) — bukan potongan PALETTE_KATEGORI posisional.
+    M5 (safety): bila JENIS unik melebihi kapasitas palette, slice ekstra
+    diagregasi ke bucket "Lainnya".
+    """
     if "JENIS" not in df.columns or df.empty:
-        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
-        ax.set_axis_off()
-        return fig
+        return _empty_figure("Tidak ada data", figsize=(5, 4.2))
 
     counts = df["JENIS"].value_counts()
-    colors = PALETTE_KATEGORI[:len(counts)]
+    # M5 (safety): collapse beyond palette capacity into a "Lainnya" slice
+    max_slices = len(PALETTE_KATEGORI)
+    if len(counts) > max_slices:
+        keep = counts.iloc[:max_slices - 1]
+        rest_sum = int(counts.iloc[max_slices - 1:].sum())
+        counts = pd.concat([keep, pd.Series({"Lainnya": rest_sum})])
+    if counts.empty:
+        return _empty_figure("Tidak ada data", figsize=(5, 4.2))
+
+    # H5: stable JENIS_COLORS; unknown JENIS fall back to kategori palette,
+    # then neutral — never silently reusing colors
+    extra = [c for c in PALETTE_KATEGORI if c not in set(JENIS_COLORS.values())]
+    colors = []
+    for i, j in enumerate(counts.index):
+        if j == "Lainnya":
+            colors.append(JENIS_COLORS["LAINNYA"])
+        elif j in JENIS_COLORS:
+            colors.append(JENIS_COLORS[j])
+        elif extra:
+            colors.append(extra[i % len(extra)])
+        else:
+            colors.append(PALETTE_NEUTRAL)
+
+    fig = Figure(figsize=(5, 4.2), dpi=100)
+    ax = fig.add_subplot(111)
     # Pattern D + C: closer pct, count moved to legend
     wedges, texts, autotexts = ax.pie(
         counts.values,
@@ -651,11 +935,42 @@ def chart_jenis_donut(df: pd.DataFrame) -> Figure:
 # ============================================================
 
 def embed_figure(parent: Any, fig: Figure):
-    """Embed Figure ke Tkinter parent. Return canvas widget."""
+    """Embed Figure ke Tkinter parent. Return canvas widget.
+
+    Contract: (parent, fig) → FigureCanvasTkAgg yang sudah di-draw.
+    Lifecycle canvas (destroy widget, dispose figure saat swap chart)
+    adalah tanggung jawab pemanggil (ui_app.py) — pasangkan dengan
+    dispose_figure(fig).
+    """
     canvas_cls = _get_canvas_class()
     canvas = canvas_cls(fig, master=parent)
     canvas.draw()
     return canvas
+
+
+def dispose_figure(fig: Figure | None) -> None:
+    """Bersihkan semua artist dari sebuah Figure (teardown aman, tanpa pyplot).
+
+    Dipakai ui_app.py saat mengganti chart embedded: panggil SETELAH canvas
+    widget lama di-destroy. fig.clf() melepas axes/legend/colorbar; tidak
+    ada pyplot global state yang terlibat (semua chart dibangun langsung
+    di atas objek Figure).
+    """
+    if fig is None:
+        return
+    try:
+        fig.clf()
+    except Exception:
+        pass  # best-effort cleanup — figure sudah tidak dipakai lagi
+
+
+# ============================================================
+# PUBLIC ALIASES — nama pendek yang stabil (dipakai test/wiring UI)
+# ============================================================
+
+chart_pareto_alasan = chart_pareto_keterangan
+chart_heatmap = chart_heatmap_cabang_item
+chart_box_total = chart_box_total_per_jenis
 
 
 # ============================================================
