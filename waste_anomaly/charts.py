@@ -346,8 +346,8 @@ def chart_heatmap_cabang_item(df: pd.DataFrame) -> Figure:
     max_items = 30
     pivot = pivot.head(max_items)
     n_items = len(pivot)
-    # Pattern G: dynamic figsize based on items shown
-    fig_w, fig_h = dynamic_figsize(n_items, base_w=8, per_item_h=0.35, min_h=4.0, max_h=14)
+    # Pattern G: dynamic figsize based on items shown — wider + taller for readability
+    fig_w, fig_h = dynamic_figsize(n_items, base_w=10, per_item_h=0.45, min_h=6.0, max_h=16)
     fig = Figure(figsize=(fig_w, fig_h), dpi=100)
     ax = fig.add_subplot(111)
 
@@ -363,17 +363,23 @@ def chart_heatmap_cabang_item(df: pd.DataFrame) -> Figure:
     ax.set_ylabel("Item")
 
     # Pattern F: adaptive text color (white on dark cells, black on light)
-    # Only annotate cells with significant values (> 20% of max) to avoid overlap
+    # Only annotate TOP 50 cells by value to avoid clutter
     max_val = float(pivot.values.max()) if pivot.values.size > 0 else 0.0
-    annotation_threshold = max_val * 0.20  # only show annotations for cells > 20% of max
     text_threshold = max_val * 0.6  # white text above 60% of max
+    # Flatten values, find top 50 cells to annotate
+    flat_vals = []
     for i in range(len(pivot.index)):
         for j in range(len(pivot.columns)):
             v = pivot.values[i, j]
-            if v > annotation_threshold:  # only annotate significant cells
-                color = adaptive_text_color(v, text_threshold, max_val)
-                ax.text(j, i, fmt_number_short(v, decimals=0), ha="center", va="center",
-                        fontsize=6, color=color, fontweight="bold")
+            if v > 0:
+                flat_vals.append((v, i, j))
+    flat_vals.sort(reverse=True)
+    cells_to_annotate = set((i, j) for _, i, j in flat_vals[:50])
+    for i, j in cells_to_annotate:
+        v = pivot.values[i, j]
+        color = adaptive_text_color(v, text_threshold, max_val)
+        ax.text(j, i, fmt_number_short(v, decimals=0), ha="center", va="center",
+                fontsize=6, color=color, fontweight="bold")
 
     # Colorbar after apply_layout so it sits in the remaining right margin
     apply_layout(fig, ax, rotate_x=True, rotation=90, bottom_pad=0.20, left_pad=0.28, right_pad=0.92, x_fontsize=7)

@@ -754,34 +754,14 @@ def chart_quadrant_scatter(
     ax.axvline(threshold * 100, color="#94a3b8", linestyle="--", linewidth=1, alpha=0.6)
     ax.axhline(threshold * 100, color="#94a3b8", linestyle="--", linewidth=1, alpha=0.6)
 
-    # Annotate top 5 items by totalWaste — very short labels, adjust position to stay in plot
-    if "NAMA BARANG" in item_df.columns and "totalWaste" in item_df.columns:
-        top_items = item_df.nlargest(5, "totalWaste")
-        for _, row in top_items.iterrows():
-            name = str(row["NAMA BARANG"])[:8]
-            x_pos = row["_prevalence"] * 100
-            y_pos = row["_persistence"] * 100
-            # If point is near right edge, place label to the LEFT; else to the right
-            if x_pos > 70:
-                xytext = (-25, 10)
-                ha = "right"
-            else:
-                xytext = (12, 10)
-                ha = "left"
-            ax.annotate(
-                name,
-                (x_pos, y_pos),
-                xytext=xytext, textcoords="offset points",
-                fontsize=6, color="#0f172a", fontweight="bold",
-                ha=ha,
-                arrowprops=dict(arrowstyle="-", color="#94a3b8", lw=0.5),
-            )
+    # No annotations on scatter — the table below already lists items per quadrant.
+    # Annotations on a 173-item scatter always overlap regardless of positioning.
 
     ax.set_xlabel("Prevalence (% cabang yang punya waste)", fontsize=9)
     ax.set_ylabel("Persistence (% hari aktif)", fontsize=9)
     ax.set_title("Quadrant: Sistemik vs Insiden", pad=10)
-    ax.set_xlim(-5, 115)  # extra right margin for annotations
-    ax.set_ylim(-5, 115)
+    ax.set_xlim(-5, 120)  # extra margin for annotations
+    ax.set_ylim(-5, 120)
     # Pattern B: legend truly outside, right side
     place_legend_outside(ax, loc="center left", bbox_to_anchor=(1.02, 0.5))
     apply_layout(fig, ax, left_pad=0.12, bottom_pad=0.12, right_pad=0.65, top_pad=0.88)
