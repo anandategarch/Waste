@@ -2,7 +2,7 @@
 
 Python + Tkinter **professional dashboard** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif**, **filter profile persistence**, **comparison mode 2 cabang**, **analisa quadrant & rate league**, dan **22+ grafik** matplotlib embedded.
 
-> **v2.3.2** — hasil audit profesional lanjutan (2025): **idempotency sejati** (normalisasi 15 digit signifikan — FP dust dari file Excel tidak lagi membuat skor anomali berubah antar-run, terverifikasi 44 test), **bug join BOM numerik diperbaiki** (outlet numerik 1049.0 kini match dengan "1049" — sebelumnya sinyal S6/S7 mati senyap), **test suite 44 test** (golden regression + unit), **requirements.txt pinned**, LICENSE, dan wiring config QUADRANT_THRESHOLD. Detail di section **Changelog v2.3.2**.
+> **v2.4.0** — hasil "kerjakan semua" (2025): **arsitektur modular** (god-object 3.256 baris / 102 metode dipecah jadi paket `ui/` — 14 file mixin, verbatim terverifikasi + 11 test struktural), **cancel run jujur** (hook antar-stage — CPU benar-benar berhenti), **validasi skema input** (anti degradasi senyap header lowercase), **exporter streaming** (anti OOM 100k baris), **logging framework** (rotating file + hook exception Tk), **140 test**, **CI GitHub Actions**, **packaging .exe** + ikon aplikasi. Detail di **Changelog v2.4.0**.
 
 ## Cara Pakai
 
@@ -220,7 +220,13 @@ Setelah run pipeline, tab "Visualisasi" auto-load 12 grafik matplotlib embedded:
 python -m pytest tests/ -v
 ```
 
-44 test — golden regression end-to-end (fixture `DATA_WASTE.xlsx` 25.901 baris), unit test normalisasi kunci join, unit test join BOM numerik, unit test presisi float, kontrak summary dict, dan test idempotency. Jalankan setiap kali mengubah `stages.py` / `signals.py` / `loader.py` atau setelah upgrade pandas — angka golden berubah tanpa alasan = regresi.
+**140 test** — golden regression end-to-end (fixture `DATA_WASTE.xlsx` 25.901 baris), **unit test 12 sinyal S1–S12** (trigger/non-trigger/boundary/NaN/config), unit test join BOM & normalisasi kunci, unit test presisi float, kontrak summary dict, **validasi skema**, **cancel hook antar-stage**, **exporter dual-mode** (paritas data + streaming 60k baris), logging framework, dan **11 test struktural paket ui/** (MRO, manifest 102 metode, dekorator, registry font). Jalankan setiap kali mengubah kode — angka golden berubah tanpa alasan = regresi.
+
+CI otomatis menjalankan test ini di setiap push/pull-request: matrix Python 3.10/3.12 × Linux/Windows (`.github/workflows/ci.yml`).
+
+## Packaging — EXE Standalone
+
+Jalankan `BUILD_EXE.bat` di Windows (butuh Python + SETUP.bat sekali). Hasil: `dist/WasteAnomalyDetection.exe` — aplikasi jalan **tanpa Python** di PC lain, lengkap dengan ikon (`assets/app_icon.ico`). PyInstaller di-install otomatis; konfigurasi build ada di `waste_anomaly.spec`.
 
 ## Struktur Project
 
@@ -228,32 +234,61 @@ python -m pytest tests/ -v
 Waste/
 ├── MULAI.bat                       ← ENTRY POINT (buka UI 10 tab)
 ├── SETUP.bat                       ← One-time install (pip install -r requirements.txt)
+├── BUILD_EXE.bat                   ← Build .exe standalone (PyInstaller)
+├── waste_anomaly.spec              ← Konfigurasi PyInstaller (icon, datas)
 ├── requirements.txt                ← Dependensi pinned (matplotlib >= 3.9, pandas 2.2.x)
 ├── README.md                       ← File ini
 ├── LICENSE                         ← MIT
 ├── .gitignore
-├── ui_app.py                       ← UI Tkinter professional dashboard (v2.3)
+├── ui_app.py                       ← LAUNCHER tipis (entry point lama tetap jalan)
+├── ui/                             ← PAKET UI (v2.4.0 — god-object dipecah)
+│   ├── __init__.py
+│   ├── shared.py                   ← Konstanta + registry font + helper murni
+│   ├── widgets.py                  ← SimpleLogPopup, KPICard, FilterChip
+│   ├── base.py                     ← Infrastruktur app (styling, tab, queue log)
+│   ├── app.py                      ← Komposisi WasteAnomalyApp (11 mixin) + main()
+│   ├── tab_dashboard.py            ← Tab 1 Dashboard (KPI + filter + drill-down)
+│   ├── tab_compare.py              ← Tab 2 Compare Cabang
+│   ├── tab_quadrant.py             ← Tab 3 Quadrant
+│   ├── tab_rate.py                 ← Tab 4 Rate League
+│   ├── tab_result.py               ← Tab 5 Hasil + Export Excel
+│   ├── tab_viz.py                  ← Tab 6 Visualisasi
+│   ├── tab_summary.py              ← Tab 7 Ringkasan
+│   ├── tab_run.py                  ← Tab 8 Run Pipeline (worker + cancel)
+│   ├── tab_config.py               ← Tab 9 Konfigurasi
+│   └── tab_help.py                 ← Tab 10 Bantuan
+├── assets/                         ← Ikon aplikasi (ico + png)
 ├── make_sample.py                  ← Generate sample workbook untuk testing
-├── tests/                          ← Test suite pytest (44 test — golden regression + unit)
+├── tests/                          ← Test suite pytest (140 test)
 │   ├── conftest.py
-│   ├── test_pipeline_regression.py
-│   ├── test_bom_join.py
-│   ├── test_key_normalization.py
-│   └── test_float_precision.py
+│   ├── fixtures/ui_methods_manifest.txt  ← Manifest 102 metode (kunci struktural)
+│   ├── test_pipeline_regression.py ← Golden regression 25.901 baris
+│   ├── test_signals.py             ← Unit test S1–S12 (54 test)
+│   ├── test_schema_and_cancel.py   ← Validasi skema + cancel hook
+│   ├── test_exporter.py            ← Exporter dual-mode (normal/streaming)
+│   ├── test_bom_join.py            ← Join BOM numerik
+│   ├── test_key_normalization.py   ← Normalisasi kunci join
+│   ├── test_float_precision.py     ← Presisi 15 digit (idempotency)
+│   ├── test_logging.py             ← Logging framework
+│   └── test_ui_structure.py        ← Struktur paket ui/ (MRO + manifest)
+├── .github/workflows/ci.yml        ← CI: matrix Python × OS, lint + 140 test
 ├── waste_anomaly/
-│   ├── __init__.py                 ← __version__ single-source (2.3.2)
+│   ├── __init__.py                 ← __version__ single-source (2.4.0)
 │   ├── config.json                 ← Thresholds + sheet name candidates
-│   ├── pipeline.py                 ← Orchestrator 14 stage
+│   ├── pipeline.py                 ← Orchestrator 14 stage + cancel_check
+│   ├── schema.py                   ← Validasi skema input (anti degradasi senyap)
+│   ├── logging_setup.py            ← Rotating file log + hook exception Tk
 │   ├── loader.py                   ← Excel loaders (auto-detect sheet + normalisasi 15 digit)
 │   ├── stages.py                   ← 14 stage replika M code (idempotent v2.3.2)
 │   ├── signals.py                  ← 12 sinyal anomali + composite score (max 19)
 │   ├── charts.py                   ← 12 static chart matplotlib
 │   ├── dashboard.py                ← 6 interactive chart + 4 comparison chart
 │   ├── filters.py                  ← Filter profile persistence
-│   ├── exporter.py                 ← Multi-sheet xlsx writer + formatting
+│   ├── exporter.py                 ← Multi-sheet xlsx writer + mode streaming
 │   └── utils.py                    ← Helper (Number.From, List.Sum, dll)
 ├── data/                           ← (opsional) letakkan DATA_WASTE.xlsx di sini
 │   └── README.md
+├── logs/                           ← (auto-generated) rotating file log
 ├── output/                         ← Output Excel tersimpan di sini
 │   └── .gitkeep
 └── filters.json                    ← (auto-generated) saved filter profiles
@@ -348,6 +383,36 @@ Edit `waste_anomaly/config.json` → section `thresholds`. Atau pakai tab "⚙ K
 | Tab Visualisasi kosong | Pastikan sudah run pipeline. Klik "⟳ Refresh Grafik" manual kalau tidak auto-load. |
 | Grafik matplotlib error di Linux headless | Set env: `export MPLBACKEND=TkAgg` sebelum jalankan `python ui_app.py`. |
 | UI tidak terbuka | Pastikan Python 3.10+ terpasang (`python --version`). |
+
+## Changelog v2.4.0 — "Kerjakan Semua": Arsitektur Modular + Infrastruktur Profesional Penuh
+
+### Arsitektur — god-object dipecah (audit UI #1)
+- **`ui_app.py` 3.256 baris / 102 metode → paket `ui/` 14 file**: 11 mixin (base + 10 tab) + shared + widgets + komposisi. Metode dipindah **VERBATIM via ekstraksi AST** (bukan tulis ulang) — terverifikasi: set 102 metode identik, 101/101 source identik byte-per-byte, 8 dekorator `@staticmethod`/`@classmethod` dipertahankan, MRO = 11 mixin + `tk.Tk`. Menambah tab ke-11 kini menyentuh **1 file baru + 1 baris komposisi** (dulu 5+ situs tersebar).
+- **Registry font** menggantikan pola `global` lama (yang hanya bekerja saat semua kode di satu file): `shared.rebind_fonts()` mem-propagasi nilai font ke semua modul mixin saat startup.
+- **`ui_app.py` tetap jadi entry point** — MULAI.bat & kebiasaan user tidak berubah.
+- **11 test struktural permanen** (`test_ui_structure.py`): manifest 102 metode, MRO, anti-duplikat antarmixin, dekorator, registry font, APP_DIR repo-root.
+
+### Cancel run yang jujur (audit UI #2)
+- **Hook `cancel_check` antar-stage di pipeline** — tombol "⏹ Batalkan Run" kini benar-benar menghentikan CPU di gate stage berikutnya (dulu: flag hanya dicek SETELAH pipeline selesai — hasil dihitung sampai tuntas lalu dibuang). Teruji: cancel setelah Stage 1 → log berhenti di Stage 2, Stage 11+ tidak pernah dijalankan.
+
+### Validasi skema input (audit data #5 — degradasi senyap)
+- **`waste_anomaly/schema.py`**: header lowercase/missing kini **gagal keras dengan pesan actionable** (dulu: `success=True` dengan analisa setengah mati — semua baris "Normal" padahal ada spike). Deteksi: kolom wajib hilang + saran near-miss case-insensitive, header duplikat, kolom hari kosong, nilai JENIS asing (warning).
+
+### Exporter streaming (audit data #2 — OOM 100k baris)
+- **Dual-mode otomatis**: ≤35.000 baris → mode normal (formatting penuh); di atasnya → **openpyxl `write_only`** (memori konstan; terverifikasi 60k baris sukses — dulu OOM-kill ~1,8 GB). Threshold bisa di-override via `config["output"]["streaming_threshold"]`. Handler `MemoryError` dengan pesan ramah.
+
+### Logging framework (audit UI #4)
+- **Rotating file log** `logs/waste_anomaly.log` (1 MB × 3 backup) + `report_callback_exception` hook Tk — exception di callback kini tercatat, tidak hilang di stderr.
+- **16 exception senyap (`except: pass`) diganti `_LOGGER.debug(...)`** — jejak audit penuh tanpa spam UI.
+
+### Test & CI
+- **140 test** (dari 44): +54 unit test S1–S12 (trigger/non-trigger/boundary persis di threshold/NaN/config-override), +13 skema & cancel, +13 exporter (paritas data antar-mode + streaming 60k), +5 logging, +11 struktural UI.
+- **CI GitHub Actions**: matrix Python 3.10/3.12 × Ubuntu/Windows — lint fatal (ruff E9,F63,F7,F82) + seluruh test + smoke import.
+
+### Packaging
+- **`BUILD_EXE.bat` + `waste_anomaly.spec`** (PyInstaller): .exe standalone tanpa Python di PC target, `console=False`, ikon multi-resolusi.
+- **Ikon aplikasi** (teal/coral, AI-generated) dipasang via `iconphoto` + `.ico` untuk exe.
+- Versi single-source 2.4.0 di semua situs (`__init__`, `APP_VERSION`, config.json, MULAI.bat, README).
 
 ## Changelog v2.3.2 — Audit Profesional Lanjutan
 

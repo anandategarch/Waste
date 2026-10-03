@@ -46,3 +46,7 @@ Thumbs.db
 
 # Config user (boleh di-commit untuk default, uncomment baris bawah kalau mau lokal)
 # config.local.json
+
+# Log aplikasi (F11 v2.4.0 — rotating file logs)
+logs/
+*.log.*

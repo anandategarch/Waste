@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from openpyxl import Workbook
+from openpyxl.cell import WriteOnlyCell
 from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
@@ -68,6 +69,21 @@ THIN_BORDER = Border(
     bottom=Side(style="thin", color="E5E7EB"),
 )
 
+# ============================================================
+# STREAMING MODE (F10 v2.4.0) — anti OOM untuk data besar
+# ============================================================
+# Audit terukur: openpyxl mode normal memakan ±947 MB pada 30k baris × 46
+# kolom, 1.56 GB pada 50k, dan proses di-OOM-KILL pada 100k (exit 137).
+# Mode streaming (write_only=True) menulis baris demi baris ke disk — memori
+# konstan berapa pun ukurannya.
+#
+# Trade-off yang disengaja & terdokumentasi: body cell pada mode streaming
+# TIDAK diberi border/font grid (hanya header, kolom status berwarna, format
+# persentase, freeze, auto-filter, lebar kolom). Data ≤ threshold tetap pakai
+# mode normal dengan formatting penuh — dataset user saat ini 25.9k baris.
+STREAMING_THRESHOLD_DEFAULT = 35_000
+
+
 
 # ============================================================
 # MAIN ENTRY
@@ -100,55 +116,87 @@ def export_to_excel(
             "output_path": str(output_path),
         }
 
-    wb = Workbook()
-    wb.remove(wb.active)  # hapus default sheet
-
-    sheet_cfg = config.get("output", {})
-    status_col = "ANOMALY STATUS"
-    has_status = status_col in df.columns
-
-    # ---- 1. Detail ----
-    detail_name = sheet_cfg.get("detail_sheet", "Detail")
-    _write_sheet(wb, detail_name, df, freeze="A2", status_col=status_col if has_status else None)
-
-    # ---- 2. Anomali Prioritas ---- (H8-c: guard kolom status/score)
-    anomali_name = sheet_cfg.get("anomali_sheet", "Anomali Prioritas")
-    if has_status:
-        df_anomali = df[df[status_col].isin(["Prioritas Tinggi", "Potensi Anomali"])]
-        if not df_anomali.empty and "ANOMALY SCORE" in df_anomali.columns:
-            df_anomali = df_anomali.sort_values("ANOMALY SCORE", ascending=False)
-    else:
-        df_anomali = df.iloc[0:0]
-    _write_sheet(wb, anomali_name, df_anomali, freeze="A2", status_col=status_col if has_status else None)
-
-    # ---- 3. Per Cabang ----
-    per_cabang_name = sheet_cfg.get("per_cabang_sheet", "Per Cabang")
-    df_cabang = _build_per_cabang(df)
-    _write_sheet(wb, per_cabang_name, df_cabang, freeze="A2")
-
-    # ---- 4. Top Items ----
-    top_items_name = sheet_cfg.get("top_items_sheet", "Top Items")
-    df_top = _build_top_items(df)
-    _write_sheet(wb, top_items_name, df_top, freeze="A2")
-
-    # ---- 5. Pareto Alasan ----
-    pareto_name = sheet_cfg.get("pareto_sheet", "Pareto Alasan")
-    df_pareto = _build_pareto(df)
-    _write_sheet(wb, pareto_name, df_pareto, freeze="A2")
-
-    # ---- 6. Log Run ----
-    log_name = sheet_cfg.get("log_sheet", "Log Run")
-    df_log = _build_log(df, key_akhir, log_lines)
-    _write_sheet(wb, log_name, df_log, freeze="A2")
-
-    # Save — H8: file yang sedang dibuka di Excel terkunci (PermissionError di
-    # Windows); kembalikan pesan ramah, jangan biarkan traceback ke caller.
+    # F10 (v2.4.0): pilih mode — normal (formatting penuh) vs streaming
+    # (memori konstan untuk data besar). Threshold bisa di-override via
+    # config["output"]["streaming_threshold"].
     try:
-        wb.save(output_path)
-    except PermissionError:
+        threshold = int(config.get("output", {}).get(
+            "streaming_threshold", STREAMING_THRESHOLD_DEFAULT))
+    except (TypeError, ValueError):
+        threshold = STREAMING_THRESHOLD_DEFAULT
+    use_streaming = len(df) > max(0, threshold)
+
+    try:
+        if use_streaming:
+            wb = Workbook(write_only=True)  # tidak ada default sheet
+            _write = _write_sheet_streaming
+        else:
+            wb = Workbook()
+            wb.remove(wb.active)  # hapus default sheet
+            _write = _write_sheet
+
+        sheet_cfg = config.get("output", {})
+        status_col = "ANOMALY STATUS"
+        has_status = status_col in df.columns
+
+        # ---- 1. Detail ----
+        detail_name = sheet_cfg.get("detail_sheet", "Detail")
+        _write(wb, detail_name, df, freeze="A2", status_col=status_col if has_status else None)
+
+        # ---- 2. Anomali Prioritas ---- (H8-c: guard kolom status/score)
+        anomali_name = sheet_cfg.get("anomali_sheet", "Anomali Prioritas")
+        if has_status:
+            df_anomali = df[df[status_col].isin(["Prioritas Tinggi", "Potensi Anomali"])]
+            if not df_anomali.empty and "ANOMALY SCORE" in df_anomali.columns:
+                df_anomali = df_anomali.sort_values("ANOMALY SCORE", ascending=False)
+        else:
+            df_anomali = df.iloc[0:0]
+        _write(wb, anomali_name, df_anomali, freeze="A2", status_col=status_col if has_status else None)
+
+        # ---- 3. Per Cabang ----
+        per_cabang_name = sheet_cfg.get("per_cabang_sheet", "Per Cabang")
+        df_cabang = _build_per_cabang(df)
+        _write(wb, per_cabang_name, df_cabang, freeze="A2")
+
+        # ---- 4. Top Items ----
+        top_items_name = sheet_cfg.get("top_items_sheet", "Top Items")
+        df_top = _build_top_items(df)
+        _write(wb, top_items_name, df_top, freeze="A2")
+
+        # ---- 5. Pareto Alasan ----
+        pareto_name = sheet_cfg.get("pareto_sheet", "Pareto Alasan")
+        df_pareto = _build_pareto(df)
+        _write(wb, pareto_name, df_pareto, freeze="A2")
+
+        # ---- 6. Log Run ----
+        log_name = sheet_cfg.get("log_sheet", "Log Run")
+        df_log = _build_log(df, key_akhir, log_lines)
+        _write(wb, log_name, df_log, freeze="A2")
+
+        # Save — H8: file yang sedang dibuka di Excel terkunci (PermissionError di
+        # Windows); kembalikan pesan ramah, jangan biarkan traceback ke caller.
+        # F10: MemoryError pada data ekstrem → pesan actionable (mode streaming
+        # sudah meminimalkan risiko ini, guard terakhir tetap disediakan).
+        try:
+            wb.save(output_path)
+        except PermissionError:
+            return {
+                "success": False,
+                "error": "File output sedang dibuka di Excel — tutup dulu lalu ulangi",
+                "output_path": str(output_path),
+            }
+        except MemoryError:
+            return {
+                "success": False,
+                "error": ("Memori tidak cukup saat menulis Excel. Tutup aplikasi lain "
+                          "lalu ulangi, atau pecah data menjadi beberapa bagian."),
+                "output_path": str(output_path),
+            }
+    except MemoryError:
         return {
             "success": False,
-            "error": "File output sedang dibuka di Excel — tutup dulu lalu ulangi",
+            "error": ("Memori tidak cukup saat menyiapkan laporan. Tutup aplikasi lain "
+                      "lalu ulangi, atau pecah data menjadi beberapa bagian."),
             "output_path": str(output_path),
         }
 
@@ -163,9 +211,11 @@ def export_to_excel(
     else:
         prioritas_count = potensi_count = review_count = normal_count = 0
 
+    # Streaming flag masuk summary supaya UI/log bisa menampilkan mode yang dipakai
     return {
         "success": True,
         "output_path": str(output_path),
+        "streaming": use_streaming,
         "total_rows": total_rows,
         "anomali_count": anomali_count,
         "prioritas_count": prioritas_count,
@@ -175,6 +225,107 @@ def export_to_excel(
         "cabang_count": int(df["NAMA RESTO"].nunique()) if "NAMA RESTO" in df.columns else 0,
         "item_count": int(df["NAMA BARANG"].nunique()) if "NAMA BARANG" in df.columns else 0,
     }
+
+
+# ============================================================
+# SHEET WRITER — STREAMING MODE (F10 v2.4.0)
+# ============================================================
+
+def _dedupe_sheet_name(sheet_name: str, existing: list[str]) -> str:
+    """Truncate 31 char + dedupe — dipakai kedua mode writer."""
+    sheet_name = sheet_name[:31]
+    if sheet_name not in existing:
+        return sheet_name
+    base = sheet_name[:27]  # sisakan ruang suffix " (n)" (27 + 4 = 31)
+    i = 2
+    while f"{base} ({i})" in existing:
+        i += 1
+    return f"{base} ({i})"
+
+
+def _write_sheet_streaming(
+    wb: Workbook,
+    sheet_name: str,
+    df: pd.DataFrame,
+    freeze: str | None = "A2",
+    status_col: str | None = None,
+):
+    """Tulis DataFrame ke sheet write-only — memori KONSTAN (F10 v2.4.0).
+
+    Sheet dibuat dengan workbook write_only=True: baris diserialisasi ke disk
+    saat di-append, tidak ditahan di RAM (mode normal: ~950 MB pada 30k baris;
+    mode ini: puluhan MB berapa pun jumlah barisnya).
+
+    Yang TETAP dipertahankan: header styled, kolom status berwarna, format
+    persentase, freeze panes, auto-filter, lebar kolom, tinggi header.
+    Yang disederhanakan (trade-off terdokumentasi): body cell tanpa grid
+    border/font per-cell — data ≤ threshold tetap pakai _write_sheet penuh.
+    """
+    sheet_name = _dedupe_sheet_name(sheet_name, wb.sheetnames)
+    ws = wb.create_sheet(title=sheet_name)
+
+    if df.empty:
+        cell = WriteOnlyCell(ws, value=f"(Tidak ada data untuk sheet '{sheet_name}')")
+        cell.font = EMPTY_NOTE_FONT
+        ws.append([cell])
+        return
+
+    cols = list(df.columns)
+    if status_col is not None and status_col not in cols:
+        status_col = None
+    status_idx = cols.index(status_col) if status_col is not None else None
+    pct_idx_set = {i for i, c in enumerate(cols) if c in PCT_FORMAT_COLUMNS}
+
+    # --- Dimensi harus di-set SEBELUM baris (kontrak write-only openpyxl) ---
+    for c_idx, col_name in enumerate(cols, start=1):
+        max_len = len(str(col_name))
+        sample = df[col_name].dropna().astype(str).head(100).tolist()
+        if sample:
+            sample_max = max(len(s) for s in sample)
+            max_len = max(max_len, min(sample_max, 60))
+        ws.column_dimensions[get_column_letter(c_idx)].width = min(max_len + 2, 40)
+    ws.row_dimensions[1].height = 28
+    if freeze:
+        ws.freeze_panes = freeze
+
+    # --- Header (styled, hanya len(cols) cell) ---
+    header_cells = []
+    for c in cols:
+        hc = WriteOnlyCell(ws, value=str(c))
+        hc.fill = HEADER_FILL
+        hc.font = HEADER_FONT
+        hc.alignment = HEADER_ALIGN
+        hc.border = THIN_BORDER
+        header_cells.append(hc)
+    ws.append(header_cells)
+
+    # --- Body: nilai plain (append cepat); hanya status & pct yang di-style ---
+    col_values = [_column_cell_values(df[c]) for c in cols]
+    for row in zip(*col_values):
+        if status_idx is not None:
+            v = row[status_idx]
+            fill = STATUS_FILLS.get(v) if isinstance(v, str) else None
+        else:
+            fill = None
+        cells = []
+        for i, v in enumerate(row):
+            if fill is not None and i == status_idx:
+                sc = WriteOnlyCell(ws, value=v)
+                sc.fill = fill
+                sc.font = STATUS_FONT
+                sc.alignment = STATUS_ALIGN
+                cells.append(sc)
+            elif i in pct_idx_set:
+                pc = WriteOnlyCell(ws, value=v)
+                pc.number_format = PCT_NUMBER_FORMAT
+                cells.append(pc)
+            else:
+                cells.append(v)  # nilai plain — tercepat, tetap ter-format angka default
+        ws.append(cells)
+
+    # Auto filter (row count diketahui: len(df) + header)
+    last_col = get_column_letter(len(cols))
+    ws.auto_filter.ref = f"A1:{last_col}{len(df) + 1}"
 
 
 # ============================================================
@@ -251,16 +402,8 @@ def _write_sheet(
     per-kolom. Conditional status coloring tetap HANYA pada kolom status —
     sama dengan perilaku lama, bukan satu baris penuh.
     """
-    # Truncate ke 31 char (limit sheet Excel) DULU, baru dedupe — kalau
-    # dibalik, nama hasil dedupe bisa kepanjangan lalu ter-truncate dan
-    # bertabrakan lagi dengan sheet existing.
-    sheet_name = sheet_name[:31]
-    if sheet_name in wb.sheetnames:
-        base = sheet_name[:27]  # sisakan ruang suffix " (n)" (27 + 4 = 31)
-        i = 2
-        while f"{base} ({i})" in wb.sheetnames:
-            i += 1
-        sheet_name = f"{base} ({i})"
+    # Truncate ke 31 char (limit sheet Excel) + dedupe via helper bersama
+    sheet_name = _dedupe_sheet_name(sheet_name, wb.sheetnames)
 
     ws = wb.create_sheet(title=sheet_name)
 
