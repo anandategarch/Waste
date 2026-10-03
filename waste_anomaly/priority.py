@@ -77,8 +77,13 @@ def _numeric(series: pd.Series) -> pd.Series:
 
 
 def _text(series: pd.Series) -> pd.Series:
-    """Koersi teks defensif: NaN → string kosong (bukan 'nan')."""
-    return series.fillna("").astype(str)
+    """Koersi teks defensif: NaN → string kosong (bukan 'nan').
+
+    v2.5.1 (DQ-M1): whitespace dinormalisasi (NBSP/zero-width/spasi ganda)
+    supaya kategori kembar-visual tidak terpecah di groupby/pivot.
+    """
+    from .utils import norm_text
+    return series.fillna("").astype(str).map(norm_text)
 
 
 # ============================================================
@@ -88,8 +93,14 @@ def _text(series: pd.Series) -> pd.Series:
 def focus_score(df: pd.DataFrame) -> pd.Series:
     """Skor prioritas gabungan 0..100 per BARIS: 60% magnitude + 40% anomali.
 
-    - magnitude_pct = percentile rank TOTAL (method='average', pct=True)
-      * 100; TOTAL NaN → 0.
+    - magnitude_pct = percentile rank TOTAL DI HITUNG DI SUBSET BARIS
+      AKTIF (TOTAL > 0) — v2.5.1 (MO-M2): dulu rank dihitung atas SEMUA
+      baris termasuk 23.470 baris nol (90,6% data), sehingga semua baris
+      aktif menempati percentile 90,6–100 dan komponen '60% magnitude'
+      hanya merentang 5,4 poin (54,4–60,0) — daya pembeda magnitudo antar
+      baris aktif nyaris nol. Kini baris nol → magnitude 0, baris aktif
+      → rank relatif di antara baris aktif (pembeda penuh 0–100).
+      method='average', pct=True; subset aktif kosong → semua 0.
     - anomaly_pct = clip(ANOMALY SCORE, 0, MAX_ANOMALY_SCORE)
       / MAX_ANOMALY_SCORE * 100; kolom hilang / NaN → 0.
 
@@ -105,7 +116,12 @@ def focus_score(df: pd.DataFrame) -> pd.Series:
 
     if "TOTAL" in df.columns:
         total = pd.to_numeric(df["TOTAL"], errors="coerce")
-        magnitude = (total.rank(method="average", pct=True) * 100.0).fillna(0.0)
+        magnitude = pd.Series(0.0, index=df.index)
+        active = total > 0
+        if bool(active.any()):
+            magnitude.loc[active] = (
+                total.loc[active].rank(method="average", pct=True) * 100.0
+            )
     else:
         magnitude = pd.Series(0.0, index=df.index)
 
@@ -147,12 +163,15 @@ def money_view(df: pd.DataFrame, top_n: int | None = None) -> pd.DataFrame:
     'Count Hari','ANOMALY SCORE','ANOMALY STATUS','Share %','Kumulatif %',
     'FOCUS SCORE','FOCUS CLASS'].
 
-    - Share % = TOTAL / sum(TOTAL seluruh df termasuk baris 0) * 100.
+    - Share % = TOTAL / sum(TOTAL seluruh df termasuk baris 0) * 100
+      (baris 0 menyumbang 0 — penyebut identik jumlah baris positif;
+      level agregasi = BARIS resto×item×jenis×keterangan).
     - Kumulatif % = cumsum Share % (prefix: identik dihitung sebelum /
       sesudah pemotongan top_n).
     - Sort TOTAL desc (stabil); top_n memotong (None = semua).
     - FOCUS SCORE dihitung focus_score(df) pada df PENUH (termasuk baris
-      TOTAL=0) supaya skor per baris stabil, tidak bergantung top_n.
+      TOTAL=0) supaya skor per baris stabil, tidak bergantung top_n;
+      rank magnitude dihitung di subset TOTAL>0 (lihat focus_score).
 
     Args:
         df: DataFrame detail dengan 10 kolom dasar MONEY_VIEW_COLUMNS.

@@ -405,24 +405,38 @@ def _check_split_source(df: pd.DataFrame, key_akhir) -> CheckResult | None:
     if count == 0:
         return None
 
+    # v2.5.1 (DQ-L1): total grup terpecah (>= 2 baris APA PUN, aktif atau
+    # tidak) — angka 'count' hanya menghitung grup dengan >= 2 baris AKTIF
+    # (subset actionable); tanpa konteks totalnya, fragmentasi tampak jauh
+    # lebih kecil dari kenyataannya (mis. 318 aktif dari 8.221 grup total).
+    all_sizes = df.groupby(list(_SPLIT_KEYS), dropna=False).size()
+    total_split_groups = int((all_sizes >= 2).sum())
+
     multi = multi.sort_values(ascending=False, kind="stable")
     sample = tuple(
         f"{_safe_str(r) or '-'} / {_safe_str(i) or '-'} / {_safe_str(k) or '-'} "
         f"→ {int(n)} baris aktif"
         for (r, i, _jenis, k), n in multi.head(_MAX_SAMPLE).items()
     )
+    detail = (
+        f"Terdapat {_fmt_num(count)} grup business key (NAMA RESTO, "
+        "NAMA BARANG, JENIS, KETERANGAN) dengan >= 2 baris aktif "
+        "(TOTAL > 0), umumnya karena satu business key terpecah antar "
+        "SOURCE DATA. Sinyal spike dan rasio BOM dihitung per baris "
+        "sehingga magnitudo terdilusi. Pertimbangkan agregasi ulang per "
+        "business key atau penyatuan SOURCE DATA yang sama."
+    )
+    if total_split_groups > count:
+        detail += (
+            f" ( {_fmt_num(count)} aktif dari {_fmt_num(total_split_groups)} "
+            "grup terpecah total — baris tidak-aktif tidak dihitung ganda "
+            "karena tidak berdampak ke sinyal.)"
+        )
     return CheckResult(
         code="DQ_SPLIT_SOURCE",
         severity="warning",
         title="Business key terpecah (banyak baris aktif)",
-        detail=(
-            f"Terdapat {_fmt_num(count)} grup business key (NAMA RESTO, "
-            "NAMA BARANG, JENIS, KETERANGAN) dengan >= 2 baris aktif "
-            "(TOTAL > 0), umumnya karena satu business key terpecah antar "
-            "SOURCE DATA. Sinyal spike dan rasio BOM dihitung per baris "
-            "sehingga magnitudo terdilusi. Pertimbangkan agregasi ulang per "
-            "business key atau penyatuan SOURCE DATA yang sama."
-        ),
+        detail=detail,
         count=count,
         sample=sample,
     )

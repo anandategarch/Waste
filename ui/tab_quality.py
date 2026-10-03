@@ -79,7 +79,30 @@ class QualityTabMixin:
     # ------------------------------------------------------------
 
     def _render_quality(self):
-        """Jalankan semua pemeriksaan pada Detail df terakhir → tabel."""
+        """Jalankan semua pemeriksaan pada Detail df terakhir → tabel.
+
+        v2.5.1 (DD-H1 amplifier): seluruh render dibungkus try/except —
+        jalur ini juga dipanggil tombol ⟳ Refresh (callback langsung,
+        tanpa wrapper _render_tab); exception kini meninggalkan pesan
+        error di tabel, bukan tab kosong + log global saja."""
+        try:
+            self._render_quality_inner()
+        except Exception as e:  # noqa: BLE001
+            from .shared import _LOGGER
+            _LOGGER.warning("Data Quality render gagal: %s", e, exc_info=True)
+            self.log(f"⚠ Data Quality gagal: {e}")
+            try:
+                tree = self.tree_quality
+                tree.delete(*tree.get_children(""))
+                tree["columns"] = ["info"]
+                tree.heading("info", text="info")
+                tree.insert("", "end", values=[f"(gagal render: {e})"])
+                self.lbl_quality_summary.configure(
+                    text=f"⚠ Gagal render — cek log (logs/ folder)")
+            except Exception:  # noqa: BLE001 — widget mungkin belum ada
+                pass
+
+    def _render_quality_inner(self):
         df = self._preview_dfs.get("Detail")
         tree = self.tree_quality
         tree.delete(*tree.get_children(""))

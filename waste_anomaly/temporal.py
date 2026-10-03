@@ -122,11 +122,19 @@ def _day_range(df: pd.DataFrame, key_akhir: int | None) -> list[int]:
 
 
 def _ket_series(df: pd.DataFrame) -> pd.Series | None:
-    """KETERANGAN sebagai Series string (NaN -> ''). None bila kolom hilang."""
+    """KETERANGAN sebagai Series string (NaN -> ''). None bila kolom hilang.
+
+    v2.5.1 (DQ-M1): whitespace dinormalisasi (NBSP/zero-width/spasi ganda
+    via utils.norm_text) supaya kategori kembar-visual tidak terpecah
+    jadi baris/heatmap-row terpisah. Prefix-fragment ('Kualitas' vs
+    'Kualitas Internal') TIDAK digabung — itu keputusan data user,
+    dibenderai oleh data_quality.DQ_KETERANGAN_PREFIX.
+    """
+    from .utils import norm_text
     raw = _col(df, "KETERANGAN")
     if raw is None:
         return None
-    return raw.fillna("").astype(str)
+    return raw.fillna("").astype(str).map(norm_text)
 
 
 def _empty_frame(columns: dict) -> pd.DataFrame:
@@ -357,6 +365,7 @@ def reason_weekday_ratio(
     df: pd.DataFrame,
     key_akhir: int | None = None,
     peak_classes: tuple[int, int] | None = None,
+    min_active: int = 30,
 ) -> pd.DataFrame:
     """Efek peak-day per KETERANGAN.
 
@@ -365,6 +374,13 @@ def reason_weekday_ratio(
         key_akhir: batas hari (lihat waste_per_day).
         peak_classes: pasangan kelas mod peak. None -> auto-detect dari
             weekday_effect() (bila gagal, semua hari dianggap offpeak).
+        min_active: v2.5.1 (TE-M3) — jumlah entri nilai-aktif minimum agar
+            kategori tampil di tabel rasio (default 30). Kategori kecil
+            menghasilkan rasio sampel-kecil yang tampak dramatis (mis.
+            fragment 'Kualitas' 97 baris dengan rasio ekstrem) — artefak,
+            bukan sinyal; disembunyikan dari tabel rasio (tetap ada di
+            heatmap reason_by_day + dibenderai DQ). min_active <= 0 →
+            semua kategori tampil (perilaku lama).
 
     Returns:
         DataFrame kolom 'KETERANGAN', 'peak_mean' (float), 'offpeak_mean'
@@ -406,6 +422,21 @@ def reason_weekday_ratio(
     active["is_peak"] = np.isin(active["day"].to_numpy() % 7, sorted(peak_set))
     means = active.groupby(["KETERANGAN", "is_peak"], sort=True)["val"].mean()
     means = means.unstack("is_peak")
+    # v2.5.1 (TE-M3): hitung jumlah entri aktif per kategori untuk filter
+    # min_active (rasio sampel-kecil = artefak, disembunyikan dari tabel).
+    active_counts = (
+        long[long["val"] > 0].groupby("KETERANGAN", sort=True).size()
+    )
+    try:
+        min_active_int = int(min_active)
+    except (TypeError, ValueError):
+        min_active_int = 0
+    if min_active_int > 0 and not active_counts.empty:
+        keep_cats = active_counts[active_counts >= min_active_int].index
+        totals = totals.reindex(keep_cats).dropna(how="all")
+        # means sudah di-unstack → index = KETERANGAN; reindex ke idx
+        # (kategori kecil → NaN → fillna(0.0) di bawah, aman).
+        means = means.loc[means.index.intersection(list(keep_cats))]
     idx = totals.index
     peak_mean = (
         means[True].reindex(idx).fillna(0.0).to_numpy(dtype=float)

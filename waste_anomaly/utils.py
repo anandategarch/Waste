@@ -422,3 +422,39 @@ def fillna_numeric(series: pd.Series, fill: float = 0.0) -> pd.Series:
     Contoh: fillna_numeric(pd.Series([1.0, np.nan])) → [1.0, 0.0].
     """
     return series.fillna(fill)
+
+
+# ============================================================
+# NORMALISASI TEKS KUNCI (v2.5.1 — fix DQ-M1/audit fragmentasi)
+# ============================================================
+
+_INVISIBLE_CHARS = ("\xa0", "\u200b", "\u200c", "\u200d", "\ufeff")
+
+
+def norm_text(value: object) -> str:
+    """Normalisasi kunci teks untuk filter/dropdown/agregat kategori.
+
+    V2.5.1 (audit DQ-M1): fragmentasi spasi tersembunyi ('PACK\\xa0' vs
+    'PACK', varian zero-width, spasi ganda) membuat nilai yang TAMPIL sama
+    dianggap berbeda oleh equality filter & groupby — dropdown punya entri
+    kembar-visual dan memilih satu tidak menangkap baris pasangannya.
+
+    Aturan (whitespace SAJA — TIDAK mengubah huruf/kata):
+      1. NBSP ('\xa0') → SPASI (NBSP = non-breaking space, pemisah kata
+         juga; menghapusnya menyatukan kata: 'Kualitas\xa0Internal' salah
+         jadi 'KualitasInternal').
+      2. zero-width/BOM → dihapus.
+      3. strip() di kedua ujung.
+      4. spasi berurutan → satu spasi.
+
+    Contoh: norm_text(' PACK\\xa0 ') → 'PACK';
+    norm_text('Kualitas\\xa0Internal') → 'Kualitas Internal'; None/NaN → ''.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, float) and math.isnan(value):
+        return ""
+    text = str(value).replace("\xa0", " ")
+    for ch in _INVISIBLE_CHARS:
+        text = text.replace(ch, "")
+    return " ".join(text.split())

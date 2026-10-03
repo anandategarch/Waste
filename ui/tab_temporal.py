@@ -115,6 +115,11 @@ class TemporalTabMixin:
             return
 
         # Info efek hari
+        # v2.5.1 (TE-M1): label netral + catatan asumsi — data hanya punya
+        # kolom hari '1'..'31' (tanggal), BUKAN hari-minggu kalender.
+        # Kelas mod 7 ≡ {5,6} memang spike (+35% di data sampel), tapi
+        # menyebutnya 'weekend' mengasumsikan posisi kalender hari-1;
+        # bila asumsi salah, insight = pasangan hari bersebelahan lain.
         effect = wa_temporal.weekday_effect(df, key_akhir=key_akhir)
         peak = effect.get("peak_classes")
         if peak:
@@ -129,8 +134,11 @@ class TemporalTabMixin:
                     f"Kelas hari peak: {peak[0]} & {peak[1]} (hari {days_str}) — "
                     f"rata-rata waste per baris aktif {ratio_txt} lebih tinggi "
                     f"({effect.get('peak_mean', 0):.1f} vs {effect.get('offpeak_mean', 0):.1f}). "
-                    f"Bar merah di chart = hari peak. HARI MAX/hari-9 spike juga "
-                    f"terlihat di chart per-hari."
+                    f"Bar merah di chart = hari peak. Catatan: kelas hari = "
+                    f"tanggal % 7, BUKAN hari-minggu kalender (tanggal-1 di "
+                    f"bulan mana tidak diketahui dari data) — 'pasangan hari "
+                    f"bersebelahan' adalah bacaan aman, 'weekend' butuh "
+                    f"konfirmasi kalender."
                 )
             )
         else:
@@ -154,7 +162,16 @@ class TemporalTabMixin:
                     row=0, column=0, sticky="nsew", padx=8, pady=8)
                 self.log(f"⚠ Temporal chart '{label}' gagal: {e}")
 
-        self._render_temporal_table(wa_temporal.reason_weekday_ratio(df, key_akhir=key_akhir))
+        # v2.5.1 (DD-H1 amplifier): analisa non-chart diberi isolasi ringan
+        # — modul temporal berkontrak 'tidak pernah raise', tapi kontrak
+        # itu tidak terkunci test untuk SEMUA jalur; tabel rasio jangan
+        # ikut mati bila analisa gagal.
+        try:
+            ratio_df = wa_temporal.reason_weekday_ratio(df, key_akhir=key_akhir)
+        except Exception as e:  # noqa: BLE001
+            self.log(f"⚠ Temporal rasio alasan gagal: {e}")
+            ratio_df = None
+        self._render_temporal_table(ratio_df)
 
     def _render_temporal_table(self, ratio_df):
         """Tabel alasan × efek peak (M24/M5 helper)."""
@@ -172,7 +189,11 @@ class TemporalTabMixin:
         )
         count = len(df)
         self.lbl_temporal_count.configure(
-            text=f"{count} alasan • ratio > 1 = alasan naik di hari peak"
+            text=(
+                f"{count} alasan • ratio > 1 = alasan naik di hari peak "
+                "• kategori < 30 entri aktif disembunyikan (rasio sampel-"
+                "kecil = artefak — lihat tab Data Quality)"
+            )
         )
 
     def _export_temporal_charts(self):

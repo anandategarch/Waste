@@ -100,3 +100,10 @@ _winfo_alive
 _wire_tree_sorting
 _worker_run
 log
+_apply_dashboard_filter_coalesced
+_set_day_vars
+_update_kpi_values
+_update_kpi_context
+_populate_filter_dropdowns
+_render_dashboard_table_inner
+_render_quality_inner

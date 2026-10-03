@@ -173,7 +173,12 @@ class ResultTabMixin:
         self._export_running = True
         self.btn_export_excel.configure(state="disabled")
         self._set_status("Menyimpan laporan Excel…", "running")
-        n_sheets = 6 + len(extra_sheets)
+        # v2.5.1: hitung frame non-kosong saja — exporter melewatkan sheet
+        # kosong, jadi len(dict) bisa melebih-lebihkan jumlah sheet aktual.
+        n_sheets = 6 + sum(
+            1 for d in extra_sheets.values()
+            if d is not None and not getattr(d, "empty", True)
+        )
         self.log(f"=== Export Excel → {path} ({n_sheets} sheet) ===")
 
         def _worker():

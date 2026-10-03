@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from waste_anomaly.period_compare import auto_key_akhir, compare_periods
 
@@ -192,12 +193,42 @@ class TestJenisDanDefensif:
 
     def test_df_kosong_kedua_sisi(self):
         res = compare_periods(pd.DataFrame(), pd.DataFrame())
-        assert res["summary"].shape[0] == 7  # 7 metrik tetap ada
+        # v2.5.1: 9 metrik (7 lama + Hari Data + Waste per Hari — PE-M1)
+        assert res["summary"].shape[0] == 9
         assert res["branch"].empty
         assert res["items"].empty
         assert res["new_items"].empty
         assert res["gone_items"].empty
         assert res["per_jenis"].empty
+
+    def test_normalisasi_panjang_periode(self):
+        """v2.5.1 (PE-M1): Hari Data + Waste per Hari ada di summary —
+        total mentah 30-hari vs 31-hari tidak boleh dibaca sebagai
+        perubahan performa (bias hingga ~1/30)."""
+        df_a = pd.DataFrame({
+            "NAMA RESTO": ["R1"], "NAMA BARANG": ["I1"], "TOTAL": [310.0],
+        })
+        df_b = pd.DataFrame({
+            "NAMA RESTO": ["R1"], "NAMA BARANG": ["I1"], "TOTAL": [310.0],
+        })
+        res = compare_periods(df_a, df_b, key_akhir_a=31, key_akhir_b=30)
+        s = res["summary"].set_index("Metrik")
+        assert int(s.loc["Hari Data", "Periode A"]) == 31
+        assert int(s.loc["Hari Data", "Periode B"]) == 30
+        # total sama, waste/hari berbeda karena panjang periode beda
+        assert s.loc["Waste per Hari", "Periode A"] == pytest.approx(310.0 / 31)
+        assert s.loc["Waste per Hari", "Periode B"] == pytest.approx(310.0 / 30)
+        assert res["key_akhir_a"] == 31 and res["key_akhir_b"] == 30
+
+    def test_key_akhir_auto_detect_tanpa_param(self):
+        """v2.5.1: tanpa parameter, key_akhir auto-detect dari masing df."""
+        df_a = pd.DataFrame({
+            "NAMA RESTO": ["R1"], "NAMA BARANG": ["I1"], "TOTAL": [10.0],
+            "1": [1.0], "2": [2.0],
+        })
+        res = compare_periods(df_a, df_a)
+        assert res["key_akhir_a"] == 2
+        assert res["key_akhir_b"] == 2
 
     def test_kolom_kunci_hilang(self):
         df = pd.DataFrame({"TOTAL": [10], "JENIS": ["WASTE"]})

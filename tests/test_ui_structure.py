@@ -86,9 +86,9 @@ class TestUiStructure:
         assert WasteAnomalyApp.__mro__[1 + n_mixins] is tkinter.Tk
 
     def test_set_metode_identik_dengan_manifest(self):
-        """102 metode asli god-object TIDAK BOLEH hilang satu pun."""
+        """109 metode (102 asli + 7 helper v2.5.1) TIDAK BOLEH hilang satu pun."""
         manifest = MANIFEST.read_text(encoding="utf-8").strip().splitlines()
-        assert len(manifest) == 102
+        assert len(manifest) == 109  # v2.5.1: +7 helper (DD-H1/DD-H2/DD-M3/DD-L2/DD-L3)
 
         composed = set()
         for cls in _mixin_classes():

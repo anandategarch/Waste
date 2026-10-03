@@ -17,6 +17,7 @@ pyplot global state (aman untuk multi-embed di Tkinter).
 
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from typing import Any, Callable
 
@@ -51,6 +52,32 @@ from . import priority as _priority
 # Drill-down click handler: (filter_key, value) -> None — kontrak sama
 # dengan dashboard.FilterCallback supaya satu handler dipakai lintas tab.
 DrillCallback = Callable[[str, "str | None"], None]
+
+_LOGGER = logging.getLogger("waste_anomaly.charts")
+
+
+def _dominant_unit_note(df: pd.DataFrame, top: int = 2) -> str:
+    """v2.5.1 (MO-M1): catatan satuan dominan untuk chart agregat TOTAL.
+
+    Agregat TOTAL mencampur SATUAN (GR 98,7% + PCS/PACK/ML/... di data
+    riil) — 1 PCS ≠ 1 GR. Catatan 'GR 98,7% • PCS 1,0%' di judul membuat
+    campuran eksplisit, bukan tersembunyi di label '(qty)'.
+    Return '' bila kolom SATUAN tidak ada / kosong (chart tetap jalan).
+    """
+    if "SATUAN" not in df.columns or "TOTAL" not in df.columns or df.empty:
+        return ""
+    try:
+        total = pd.to_numeric(df["TOTAL"], errors="coerce").fillna(0.0)
+        sat = df["SATUAN"].astype(str).str.replace("\xa0", "", regex=False).str.strip()
+        sat = sat.where(sat.ne("") & sat.ne("nan"), "(kosong)")
+        share = total.groupby(sat).sum().sort_values(ascending=False)
+        grand = float(share.sum())
+        if grand <= 0 or share.empty:
+            return ""
+        parts = [f"{u} {v / grand * 100:.1f}%" for u, v in share.head(top).items()]
+        return " • ".join(parts)
+    except Exception:  # noqa: BLE001 — catatan best-effort
+        return ""
 
 # Lazy import FigureCanvasTkAgg — hanya ketika embed ke Tkinter (di UI).
 # Di headless test environment, import ini bisa gagal karena tidak ada Tcl/Tk.
@@ -233,6 +260,12 @@ def _wire_patch_click(fig: Figure, patches, labels, on_click, key: str) -> None:
                     on_click(key, str(label))
                     return
             except Exception:  # noqa: BLE001 — event aneh diabaikan saja
+                # v2.5.1 (DD-M5): tetap tercatat — dulu ditelan senyap,
+                # klik mati tanpa jejak log sama sekali.
+                _LOGGER.warning(
+                    "_wire_patch_click key=%s label=%r gagal", key, label,
+                    exc_info=True,
+                )
                 return
 
     _connect_click(fig, _handler)
@@ -330,7 +363,9 @@ def chart_waste_per_cabang(df: pd.DataFrame, on_click: DrillCallback | None = No
         ax.set_axis_off()
         return fig
 
-    g = df.groupby("NAMA RESTO", dropna=False)["TOTAL"].sum().sort_values(ascending=False)
+    g = df.groupby("NAMA RESTO", dropna=True)["TOTAL"].sum().sort_values(ascending=False)
+    # v2.5.1 (DD-M5): dropna=True — grup NaN ('nan' via astype-str di label)
+    # tidak bisa difilter (equality vs NaN selalu False) → dead-end klik.
     # Pattern C: abbreviate cabang codes on x-axis + disambiguate collisions
     cabang_labels = disambiguate_labels([fmt_cabang(c) for c in g.index.astype(str)])
     x = np.arange(len(g))
@@ -377,8 +412,9 @@ def chart_top_items(df: pd.DataFrame, top_n: int = 10,
     if "NAMA BARANG" not in df.columns or "TOTAL" not in df.columns or df.empty:
         return _empty_figure("Tidak ada data", figsize=(7.0, 4.0))
 
-    g = (df.groupby("NAMA BARANG", dropna=False)["TOTAL"].sum()
+    g = (df.groupby("NAMA BARANG", dropna=True)["TOTAL"].sum()
          .sort_values(ascending=True).tail(top_n))
+    # v2.5.1 (DD-M5): dropna=True — grup NaN tidak bisa difilter (dead-end klik).
     if g.empty:
         return _empty_figure("Tidak ada data", figsize=(7.0, 4.0))
 
@@ -478,7 +514,8 @@ def chart_pareto_keterangan(df: pd.DataFrame, on_click: DrillCallback | None = N
         ax.set_axis_off()
         return fig
 
-    g = df.groupby("KETERANGAN", dropna=False)["TOTAL"].sum().sort_values(ascending=False)
+    g = df.groupby("KETERANGAN", dropna=True)["TOTAL"].sum().sort_values(ascending=False)
+    # v2.5.1 (DD-M5): dropna=True — grup NaN tidak bisa difilter (dead-end klik).
     if g.empty:
         ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center",
                 color=PALETTE_NEUTRAL, fontsize=10)
@@ -1035,6 +1072,11 @@ def chart_waste_per_day(df: pd.DataFrame, key_akhir: int | None = None) -> Figur
                 fontsize=6, color="#0f172a", rotation=90)
 
     title = "Total Waste per Hari (bulan)"
+    # v2.5.1 (MO-M1): satuan dominan eksplisit — agregat lintas satuan
+    # hanya indikatif; tanpa ini label '(qty)' menyembunyikan campuran.
+    unit_note = _dominant_unit_note(df)
+    if unit_note:
+        title += f"  [{unit_note}]"
     if peak:
         ratio = effect.get("ratio")
         days_str = ", ".join(
@@ -1093,6 +1135,13 @@ def chart_weekday_effect(df: pd.DataFrame, key_akhir: int | None = None) -> Figu
             ha="right", va="bottom", fontsize=8, color="#64748b")
     ax.set_title("Rata-rata Waste per Baris Aktif per Kelas Hari (mod 7)",
                  pad=12)
+    # v2.5.1 (MO-M1): satuan dominan eksplisit di judul.
+    unit_note = _dominant_unit_note(df)
+    if unit_note:
+        ax.set_title(
+            f"Rata-rata Waste per Baris Aktif per Kelas Hari (mod 7)  [{unit_note}]",
+            pad=12,
+        )
     ax.set_ylabel("Mean per baris aktif")
     ax.set_xlabel("Kelas hari (hari % 7)")
     add_ylim_headroom(ax, factor=1.15)
@@ -1238,9 +1287,12 @@ def chart_money_top(df: pd.DataFrame, top_n: int = 15) -> Figure:
         "Rutin": PALETTE_NEUTRAL,
     }
     labels = [
-        f"{fmt_item(str(it))} @ {fmt_cabang(str(cb))}"
-        for it, cb in zip(mv["NAMA BARANG"], mv["NAMA RESTO"])
+        f"{fmt_item(str(it))} @ {fmt_cabang(str(cb))} ({str(sat)})"
+        for it, cb, sat in zip(mv["NAMA BARANG"], mv["NAMA RESTO"], mv["SATUAN"])
     ]
+    # v2.5.1 (MO-M1): SATUAN per bar — panjang bar lintas satuan (1 PCS ≠
+    # 1 GR) tidak dibandingkan seolah satu skala; bar PCS kecil tetap
+    # terlihat konteksnya.
     n = len(mv)
     fig_w, fig_h = dynamic_figsize(n, base_w=8.0, per_item_h=0.42,
                                    min_h=4.0, max_h=10.0)
@@ -1259,7 +1311,9 @@ def chart_money_top(df: pd.DataFrame, top_n: int = 15) -> Figure:
                 f" {fmt_number_short(val)} (F{score:.0f})", ha="left",
                 va="center", fontsize=7, fontweight="bold", color="#0f172a")
     ax.set_title(f"Top {n} Waste Terbesar — warna = FOCUS CLASS", pad=12)
-    ax.set_xlabel("TOTAL waste (qty)")
+    # v2.5.1 (MO-M1): xlabel jujur — panjang bar = jumlah qty SATUAN masing-
+    # masing baris (satuan di label y), bukan satu skala nilai.
+    ax.set_xlabel("TOTAL waste (qty satuan masing-masing — satuan di label)")
     handles = [Patch(facecolor=c, edgecolor="white", label=l)
                for l, c in focus_colors.items()]
     ax.legend(handles=handles, loc="lower right", fontsize=8, frameon=False)

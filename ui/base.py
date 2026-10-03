@@ -653,12 +653,19 @@ class AppBase:
     def _format_cell(v, ndigits: int = 3):
         """M24: format satu nilai sel (dulu loop copy-paste 4×).
 
-        None/NaN-float → ""; float → dibulatkan; lainnya apa adanya.
+        None/NaN-float → ""; float → dibulatkan lalu diformat Indonesia
+        (v2.5.1 / IN-L1: ribuan '.', desimal ',' — sebelumnya raw float
+        '299855.0' bersebelahan dengan '9.333.117,5' dari Data Quality).
+        Sort tabel tetap aman: sorting memakai df mentah via
+        _sort_df_for_treeview, bukan teks sel.
         """
         if v is None or (isinstance(v, float) and pd.isna(v)):
             return ""
         if isinstance(v, float):
-            return round(v, ndigits)
+            from .shared import fmt_id
+            if v.is_integer() and abs(v) < 1e15:
+                return fmt_id(v, 0)
+            return fmt_id(v, ndigits)
         return v
 
 

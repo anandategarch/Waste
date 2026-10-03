@@ -13,6 +13,7 @@ from .shared import C_TEXT_MUTED
 from .shared import F_BODY
 from .shared import F_CARD
 from .shared import F_HINT
+from .shared import fmt_id
 from datetime import datetime
 from tkinter import filedialog
 from tkinter import messagebox
@@ -82,6 +83,15 @@ class MoneyTabMixin:
         h2.grid(row=2, column=0, sticky="ew", padx=8, pady=(8, 0))
         tk.Label(h2, text="📋 Top Waste Rows (semua status) — klik header sort ▼/▲",
                  font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(anchor="w", padx=16, pady=(12, 4))
+        # v2.5.1 (MO-L1): level agregasi + denominator eksplisit — Share %
+        # dihitung di level BARIS (resto×item×jenis×keterangan) atas total
+        # seluruh dataset (baris nol menyumbang 0); 80% kumulatif di level
+        # baris ≠ 80% di level ITEM (Pareto chart) — keduanya benar, beda unit.
+        tk.Label(h2,
+                 text="Level baris = resto×item×jenis×keterangan; Share % / Kumulatif % dihitung dari total waste seluruh dataset "
+                      "(baris nol menyumbang 0). 80% kumulatif di tabel BARIS ≠ 80% di chart Pareto ITEM — beda unit agregasi, keduanya benar.",
+                 font=F_HINT, fg=C_TEXT_MUTED, bg=C_CARD, wraplength=980,
+                 justify="left").pack(anchor="w", padx=16, pady=(0, 2))
         self.lbl_money_count = tk.Label(h2, text="(belum ada data)",
                                         font=F_HINT, fg=C_TEXT_MUTED, bg=C_CARD)
         self.lbl_money_count.pack(anchor="w", padx=16, pady=(0, 8))
@@ -156,10 +166,14 @@ class MoneyTabMixin:
             return
 
         # P5/P7: unit breakdown + caveat campuran satuan
-        units = wa_temporal.unit_summary(df)
-        if not units.empty:
+        try:
+            units = wa_temporal.unit_summary(df)
+        except Exception as e:  # noqa: BLE001 — v2.5.1 (DD-H1 amplifier)
+            self.log(f"⚠ Money unit breakdown gagal: {e}")
+            units = None
+        if units is not None and not units.empty:
             parts = [
-                f"{r['SATUAN']}: {r['total']:,.0f} ({r['share_pct']:.1f}%)"
+                f"{r['SATUAN']}: {fmt_id(r['total'])} ({r['share_pct']:.1f}%)"
                 for _, r in units.iterrows()
             ]
             n_raw = units["raw_values"].astype(str).str.contains(";", regex=False).sum()
@@ -190,10 +204,20 @@ class MoneyTabMixin:
                     row=0, column=0, sticky="nsew", padx=8, pady=8)
                 self.log(f"⚠ Money chart '{label}' gagal: {e}")
 
-        mv = wa_priority.money_view(df, top_n=100)
+        # v2.5.1 (DD-H1 amplifier): analisa non-chart terisolasi — tabel
+        # benchmark tetap render bila money_view gagal (dan sebaliknya).
+        try:
+            mv = wa_priority.money_view(df, top_n=100)
+        except Exception as e:  # noqa: BLE001
+            self.log(f"⚠ Money view gagal: {e}")
+            mv = None
         self._render_money_tree(mv)
-        bench = wa_priority.benchmark_items(df)
-        if len(bench) > 300:
+        try:
+            bench = wa_priority.benchmark_items(df)
+        except Exception as e:  # noqa: BLE001
+            self.log(f"⚠ Benchmark gagal: {e}")
+            bench = None
+        if bench is not None and len(bench) > 300:
             bench = bench.head(300)
         self._render_bench_tree(bench)
 

@@ -13,6 +13,7 @@ from .shared import C_TEXT_MUTED
 from .shared import F_BODY
 from .shared import F_CARD
 from .shared import F_HINT
+from .shared import fmt_id
 from .widgets import FilterChip
 from .widgets import KPICard
 from .shared import _LOGGER
@@ -349,7 +350,16 @@ class DashboardTabMixin:
 
         M9 (re-entrant): render dipanggil lewat after_idle supaya event handler
         matplotlib selesai PULANG sebelum canvas di-destroy oleh re-render —
-        klik chart yang sedang aktif tidak lagi TclError."""
+        klik chart yang sedang aktif tidak lagi TclError.
+        DD-L2 (v2.5.1): klik cepat dua kali mengantre dua after_idle → dua
+        re-render penuh; kini flag _filter_apply_pending meng-coalesce
+        (render kedua cukup sekali — state sudah terbaru).
+        DD-M4 (v2.5.1): chart JENIS (donut) memancarkan nilai SKALAR — guard
+        kontrak _apply_filters menerima keduanya, tapi state UI + profil
+        konsisten list; skalar dinormalisasi [v] + checkbox ikut sync.
+        """
+        if key == "jenis" and isinstance(value, str):
+            value = [value]
         self.active_filters[key] = value
         # Sync dropdown UI
         if key == "cabang":
@@ -358,11 +368,26 @@ class DashboardTabMixin:
             self.var_filter_status.set(value if value else "(Semua)")
         elif key == "keterangan" and hasattr(self, "var_filter_ket"):
             self.var_filter_ket.set(value if value else "(Semua)")
-        self.after_idle(lambda: self._apply_dashboard_filter())
+        elif key == "jenis":
+            # DD-M4: sinkronkan checkbox JENIS dengan nilai list baru
+            for j, v in self._jenis_vars.items():
+                v.set(j in (value or []))
+        if not getattr(self, "_filter_apply_pending", False):
+            self._filter_apply_pending = True
+            self.after_idle(self._apply_dashboard_filter_coalesced)
+
+    def _apply_dashboard_filter_coalesced(self):
+        """DD-L2: titik masuk after_idle — reset flag lalu render sekali."""
+        self._filter_apply_pending = False
+        self._apply_dashboard_filter()
 
 
     def _reset_filters_state(self):
-        """H5: reset SEMUA state filter TANPA render (untuk restore programmatic)."""
+        """H5: reset SEMUA state filter TANPA render (untuk restore programmatic).
+
+        DD-H2 (v2.5.1): dropdown KETERANGAN ikut direset — dulu var_filter_ket
+        tertinggal nilai lama sementara state sudah None (chip hilang tapi
+        dropdown masih menampilkan filter)."""
         self._suppress_trace = True
         try:
             for k in self.active_filters:
@@ -375,8 +400,9 @@ class DashboardTabMixin:
             self.var_search.set("")
             self.var_filter_cabang.set("(Semua)")
             self.var_filter_status.set("(Semua)")
-            self.var_day_min.set("1")
-            self.var_day_max.set("31")
+            if hasattr(self, "var_filter_ket"):
+                self.var_filter_ket.set("(Semua)")
+            self._set_day_vars("1", "31")
             # M3: checkbox rentang hari ikut di-reset (spinbox kembali mati)
             self.var_day_enabled.set(False)
             self._set_day_spinbox_state(False)
@@ -384,6 +410,23 @@ class DashboardTabMixin:
                 v.set(False)
         finally:
             self._suppress_trace = False
+
+    def _set_day_vars(self, lo: str, hi: str):
+        """DD-L3 (v2.5.1): set var spinbox hari + REKONFIGURASI validate.
+
+        Gotcha Tk: textvariable.set() programatik dapat mematikan
+        validate='key' diam-diam. Nilai yang di-set selalu digit sehingga
+        _safe_int tetap meng-clamp, tapi validasi digit-only berhenti bekerja
+        — reconfigure validate setelah set() menjaga kontrak."""
+        self.var_day_min.set(str(lo))
+        self.var_day_max.set(str(hi))
+        for sb in (getattr(self, "_sb_day_min", None),
+                   getattr(self, "_sb_day_max", None)):
+            if sb is not None:
+                try:
+                    sb.configure(validate="key")
+                except Exception:  # noqa: BLE001 — widget sudah mati
+                    _LOGGER.debug("Suppressed: reconfigure validate", exc_info=True)
 
 
     def _clear_all_filters(self):
@@ -407,15 +450,27 @@ class DashboardTabMixin:
 
 
     def _apply_dashboard_filter(self):
-        """Apply semua filter aktif + re-render chart & tabel Dashboard."""
+        """Apply semua filter aktif + re-render chart & tabel Dashboard.
+
+        DD-H1 (v2.5.1): render chart/tabel kini terisolasi per-tahap —
+        dulu satu exception di satu chart meninggalkan chip filter BARU,
+        chart kosong (registry sudah di-dispose tapi tidak dibangun ulang),
+        dan tabel STALE dari filter lama; klik-ganda baris stale memasang
+        filter dari baris yang sudah tidak cocok. Kini chart gagal → label
+        error per-frame, tabel tetap berjalan, state konsisten.
+        DD-M3 (v2.5.1): KPI mengikuti filter (nilai KPI = hasil filter,
+        baris konteks 'X dari N' di label breakdown satuan)."""
         filtered = self._compute_filtered_df()
         if filtered is None:
             return
         # Update chips
         self._update_filter_chips()
-        # Re-render charts & table
+        # Re-render charts & table (DD-H1: terisolasi per-tahap)
         self._render_dashboard_charts(filtered)
         self._render_dashboard_table(filtered)
+        # DD-M3: KPI ikut filter — konsisten dengan tabel yang tampil
+        self._update_kpi_values(filtered)
+        self._update_kpi_context(filtered)
 
 
     def _update_filter_chips(self):
@@ -430,9 +485,13 @@ class DashboardTabMixin:
             else:
                 active_items.append((k, v))
         # Add day range chip (M6: key "hari" → label "Rentang Hari"; chip hanya
-        # muncul saat rentang aktif — day_min None = tanpa filter)
+        # muncul saat rentang aktif — day_min None = tanpa filter).
+        # v2.5.1 (DD-M1): rentang hari kini ketat (baris HARI MAX null/
+        # baris nol dibuang) — suffix "(baris aktif)" menjelaskan semantik.
         if self.day_min is not None and self.day_max is not None:
-            active_items.append(("hari", f"{self.day_min}-{self.day_max}"))
+            active_items.append(
+                ("hari", f"{self.day_min}-{self.day_max} (baris aktif)")
+            )
         # Add search chip
         search = self.var_search.get().strip()
         if search:
@@ -460,8 +519,7 @@ class DashboardTabMixin:
         elif key in ("hari", "Hari MAX"):  # "Hari MAX": key lama (compat)
             self.day_min = None
             self.day_max = None
-            self.var_day_min.set("1")
-            self.var_day_max.set("31")
+            self._set_day_vars("1", "31")
             # M3: uncheck checkbox + matikan spinbox
             self.var_day_enabled.set(False)
             self._set_day_spinbox_state(False)
@@ -530,6 +588,9 @@ class DashboardTabMixin:
         # H5: suppress trace selama restore — SEMUA var dipulihkan dulu,
         # SATU render eksplisit di akhir (sebelumnya trace search men-trigger
         # apply di tengah restore → double render + flash state salah).
+        # DD-H2 (v2.5.1): dropdown KETERANGAN ikut dipulihkan — dulu state
+        # active_filters['keterangan'] terisi tapi var dropdown tetap
+        # '(Semua)' (chip tampil, dropdown bohong).
         self._suppress_trace = True
         try:
             self.var_search.set(profile.get("search", ""))
@@ -537,29 +598,32 @@ class DashboardTabMixin:
             self.var_filter_cabang.set(cabang if cabang else "(Semua)")
             status = profile.get("status")
             self.var_filter_status.set(status if status else "(Semua)")
+            keterangan = profile.get("keterangan")
+            if hasattr(self, "var_filter_ket"):
+                self.var_filter_ket.set(keterangan if keterangan else "(Semua)")
             jenis = profile.get("jenis", [])
+            if isinstance(jenis, str):  # DD-M4: profil lama bisa skalar
+                jenis = [jenis]
             for j, v in self._jenis_vars.items():
                 v.set(j in jenis)
             self.active_filters = {
                 "cabang": cabang,
                 "item": profile.get("item"),
                 "jenis": jenis,
-                "keterangan": profile.get("keterangan"),
+                "keterangan": keterangan,
                 "status": status,
             }
             self.day_min = profile.get("day_min")
             self.day_max = profile.get("day_max")
             if self.day_min and self.day_max:
-                self.var_day_min.set(str(self.day_min))
-                self.var_day_max.set(str(self.day_max))
+                self._set_day_vars(str(self.day_min), str(self.day_max))
                 # M3: profil dengan rentang hari → aktifkan checkbox + spinbox
                 self.var_day_enabled.set(True)
                 self._set_day_spinbox_state(True)
             else:
                 self.day_min = None
                 self.day_max = None
-                self.var_day_min.set("1")
-                self.var_day_max.set("31")
+                self._set_day_vars("1", "31")
                 self.var_day_enabled.set(False)
                 self._set_day_spinbox_state(False)
         finally:
@@ -609,32 +673,49 @@ class DashboardTabMixin:
         def _fig_of(result):
             return result[0] if isinstance(result, tuple) else result
 
-        # Chart 1: Status bar (interactive)
-        f0 = self._dash_chart_frames[0]
-        fig0 = _fig_of(wa_dash.chart_status_bar_interactive(df, on_click=self._on_chart_click, active_filter=_af("status")))
-        c0 = wa_charts.embed_figure(f0, fig0)
-        c0.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
-        self._dash_canvases.append(("status", fig0, c0))
-
-        # Chart 2: Cabang bar (interactive)
-        f1 = self._dash_chart_frames[1]
-        fig1 = _fig_of(wa_dash.chart_cabang_bar_interactive(df, on_click=self._on_chart_click, active_filter=_af("cabang")))
-        c1 = wa_charts.embed_figure(f1, fig1)
-        c1.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
-        self._dash_canvases.append(("cabang", fig1, c1))
-
-        # Chart 3: Top items (interactive)
-        f2 = self._dash_chart_frames[2]
-        fig2 = _fig_of(wa_dash.chart_top_items_interactive(df, on_click=self._on_chart_click, active_filter=_af("item")))
-        c2 = wa_charts.embed_figure(f2, fig2)
-        c2.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
-        self._dash_canvases.append(("item", fig2, c2))
+        # DD-H1 (v2.5.1): tiap chart dibangun terisolasi — satu chart gagal
+        # → label error di frame ITU, dua lainnya + tabel tetap jalan.
+        # (Sebelumnya: exception di chart manapun membiarkan SEMUA frame
+        # kosong + tabel stale + chip sudah ter-update — state mustahil;
+        # pola ini disalin dari tab_temporal yang sudah terbukti.)
+        builds = [
+            ("status", wa_dash.chart_status_bar_interactive, _af("status")),
+            ("cabang", wa_dash.chart_cabang_bar_interactive, _af("cabang")),
+            ("item", wa_dash.chart_top_items_interactive, _af("item")),
+        ]
+        for (key, fn, af), f in zip(builds, self._dash_chart_frames):
+            try:
+                fig = _fig_of(fn(df, on_click=self._on_chart_click, active_filter=af))
+                canvas = wa_charts.embed_figure(f, fig)
+                canvas.get_tk_widget().grid(
+                    row=0, column=0, sticky="nsew", padx=4, pady=4)
+                self._dash_canvases.append((key, fig, canvas))
+            except Exception as e:  # noqa: BLE001 — satu chart ≠ jatuhkan tab
+                _LOGGER.warning("Dashboard chart '%s' gagal render: %s", key, e)
+                tk.Label(f, text=f"Gagal render:\n{e}",
+                         font=F_BODY, fg="#dc2626", bg=C_CARD,
+                         justify="center").grid(
+                    row=0, column=0, sticky="nsew", padx=20, pady=20)
 
 
     def _render_dashboard_table(self, df: pd.DataFrame):
         """Populate drill-down table — M24: format+insert via _populate_tree,
         M5: sort per-kolom dengan indikator ▼/▲, L3: tag fiktif
-        status_<idx> yang langsung ditimpa dihapus."""
+        status_<idx> yang langsung ditimpa dihapus.
+        DD-H1 (v2.5.1): populasi dibungkus try/except — exception format
+        tidak lagi meninggalkan tabel stale dari filter sebelumnya."""
+        try:
+            self._render_dashboard_table_inner(df)
+        except Exception as e:  # noqa: BLE001
+            _LOGGER.warning("Dashboard table gagal render: %s", e)
+            tree = self.tree_dashboard
+            tree.delete(*tree.get_children(""))
+            tree["columns"] = ["info"]
+            tree.heading("info", text="info")
+            tree.insert("", "end", values=[f"(gagal render tabel: {e})"])
+            self.lbl_detail_count.configure(text="0 baris")
+
+    def _render_dashboard_table_inner(self, df: pd.DataFrame):
         tree = self.tree_dashboard
         tree.delete(*tree.get_children(""))
         if df is None or df.empty:
@@ -704,10 +785,22 @@ class DashboardTabMixin:
 
 
     def _export_filtered_csv(self):
-        """Export current filtered rows to CSV (lightweight, no Excel dependency)."""
+        """Export current filtered rows to CSV (lightweight, no Excel dependency).
+
+        DD-L1 (v2.5.1): pesan dibedakan — 'belum ada data' (belum run
+        pipeline) vs 'filter 0 baris' (filter terlalu sempit; longgarkan
+        atau hapus chip)."""
+        no_data = self._preview_dfs.get("Detail") is None
         filtered = self._compute_filtered_df()
-        if filtered is None or filtered.empty:
+        if no_data or filtered is None:
             messagebox.showinfo("Export", "Belum ada data. Run pipeline dulu.")
+            return
+        if filtered.empty:
+            messagebox.showinfo(
+                "Export",
+                "Filter menghasilkan 0 baris — longgarkan filter "
+                "atau hapus chip filter, lalu coba lagi.",
+            )
             return
 
         path = filedialog.asksaveasfilename(
@@ -726,6 +819,22 @@ class DashboardTabMixin:
 
 
     def _update_kpi_cards(self, df: pd.DataFrame, summary: dict):
+        """Pipeline-done/Refresh: update KPI dari df PENUH + populate dropdown.
+
+        DD-M3 (v2.5.1): fungsi dipecah — nilai KPI (_update_kpi_values,
+        mengikuti filter saat drill-down) dan populate dropdown
+        (_populate_filter_dropdowns, selalu dari df PENUH supaya nilai
+        pilihan tidak menyusut saat memfilter)."""
+        self._update_kpi_values(df)
+        self._populate_filter_dropdowns(df)
+
+    def _update_kpi_values(self, df: pd.DataFrame):
+        """DD-M3 (v2.5.1): nilai 6 KPI + breakdown satuan dari df yang
+        diberikan (df penuh saat pipeline-done, df TERFILTER saat
+        drill-down) — KPI tidak lagi menampilkan angka dataset penuh
+        sementara tabel menampilkan hasil filter."""
+        if df is None:
+            return
         total = len(df)
         if "ANOMALY STATUS" in df.columns:
             prioritas = int((df["ANOMALY STATUS"] == "Prioritas Tinggi").sum())
@@ -740,12 +849,13 @@ class DashboardTabMixin:
             total_waste = 0
         cabang = df["NAMA RESTO"].nunique() if "NAMA RESTO" in df.columns else 0
 
-        self.kpi_total.set_value(f"{total:,}")
-        self.kpi_prioritas.set_value(f"{prioritas:,}")
-        self.kpi_potensi.set_value(f"{potensi:,}")
-        self.kpi_review.set_value(f"{review:,}")
-        self.kpi_waste.set_value(f"{total_waste:,.1f}")
-        self.kpi_cabang.set_value(f"{cabang:,}")
+        # IN-L1 (v2.5.1): format angka Indonesia (dulu EN '9,333,117.5')
+        self.kpi_total.set_value(fmt_id(total))
+        self.kpi_prioritas.set_value(fmt_id(prioritas))
+        self.kpi_potensi.set_value(fmt_id(potensi))
+        self.kpi_review.set_value(fmt_id(review))
+        self.kpi_waste.set_value(fmt_id(total_waste, 1))
+        self.kpi_cabang.set_value(fmt_id(cabang))
 
         # P5 (v2.5.0): breakdown satuan di bawah KPI waste
         try:
@@ -753,7 +863,7 @@ class DashboardTabMixin:
             units = _wa_temporal.unit_summary(df)
             if not units.empty:
                 parts = [
-                    f"{r['SATUAN']} {r['total']:,.0f} ({r['share_pct']:.0f}%)"
+                    f"{r['SATUAN']} {fmt_id(r['total'])} ({r['share_pct']:.0f}%)"
                     for _, r in units.iterrows()
                 ]
                 self.lbl_kpi_units.configure(
@@ -765,6 +875,28 @@ class DashboardTabMixin:
         except Exception:  # noqa: BLE001 — breakdown best-effort
             self.lbl_kpi_units.configure(text="")
 
+    def _update_kpi_context(self, filtered: pd.DataFrame):
+        """DD-M3 (v2.5.1): baris konteks 'X dari N baris' saat KPI terfilter
+        (prefix di label breakdown satuan; hilang saat tidak ada filter)."""
+        try:
+            full = self._preview_dfs.get("Detail")
+            base = self.lbl_kpi_units.cget("text") or ""
+            if (full is not None and not full.empty
+                    and filtered is not None and len(filtered) < len(full)):
+                prefix = f"[KPI terfilter: {fmt_id(len(filtered))} dari {fmt_id(len(full))} baris] "
+                # Hindari dobel-prefix bila render berulang
+                if base.startswith("["):
+                    base = base.split("] ", 1)[-1]
+                self.lbl_kpi_units.configure(text=prefix + base)
+        except Exception:  # noqa: BLE001 — best-effort konteks
+            _LOGGER.debug("Suppressed: kpi context", exc_info=True)
+
+    def _populate_filter_dropdowns(self, df: pd.DataFrame):
+        """Populate cabang + keterangan + compare dropdown dari df PENUH.
+
+        DQ-M1 (v2.5.1): nilai KETERANGAN dinormalisasi (NBSP/zero-width/
+        spasi ganda) — dropdown tidak lagi punya entri kembar-visual yang
+        diam-diam mengecualikan pasangannya saat difilter."""
         # Populate cabang dropdown — M10: JANGAN reset pilihan saat refresh;
         # pertahankan bila nilai masih ada di daftar baru (dulu selalu kembali
         # ke "(Semua)" setiap refresh/re-render).
@@ -777,10 +909,15 @@ class DashboardTabMixin:
                 self.var_filter_cabang.set(cur if cur in new_vals else "(Semua)")
             # P8 (v2.5.0): isi dropdown KETERANGAN juga (preserve-or-Semua)
             if "KETERANGAN" in df.columns and hasattr(self, "_cb_ket"):
-                kets = sorted(df["KETERANGAN"].dropna().astype(str).unique().tolist())
+                from waste_anomaly.utils import norm_text as _nt
+                kets = sorted({
+                    _nt(v) for v in df["KETERANGAN"].dropna().unique().tolist()
+                })
+                kets = [k for k in kets if k]
                 cur_k = self.var_filter_ket.get()
                 new_k = ["(Semua)"] + kets
                 self._cb_ket["values"] = new_k
+                # nilai filter aktif tetap terpilih bila var masih valid
                 self.var_filter_ket.set(cur_k if cur_k in new_k else "(Semua)")
             # Update dropdown tab Compare juga (M10: preserve-or-empty)
             if hasattr(self, "_cb_compare_a"):

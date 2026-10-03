@@ -337,8 +337,13 @@ def _ratio_fixture() -> pd.DataFrame:
 
 
 class TestReasonWeekdayRatio:
+    # v2.5.1: default min_active=30 menyembunyikan kategori sampel-kecil
+    # (rasio artefak); test matemika rasio di bawah memakai min_active=0
+    # (perilaku lama) supaya tetap menguji rumus, bukan filter.
+
     def test_peak_eksplisit(self):
-        res = reason_weekday_ratio(_ratio_fixture(), peak_classes=(5, 6))
+        res = reason_weekday_ratio(
+            _ratio_fixture(), peak_classes=(5, 6), min_active=0)
         assert list(res.columns) == COLS_RWR
         # A: peak (100+100)/2, offpeak (50+50)/2 -> ratio 2.0
         a = res.iloc[0]
@@ -349,7 +354,8 @@ class TestReasonWeekdayRatio:
         assert a["total"] == pytest.approx(300.0)
 
     def test_ratio_nan_bila_offpeak_nol_dan_sort_desc(self):
-        res = reason_weekday_ratio(_ratio_fixture(), peak_classes=(5, 6))
+        res = reason_weekday_ratio(
+            _ratio_fixture(), peak_classes=(5, 6), min_active=0)
         # B aktif hanya di hari peak -> offpeak 0 -> NaN; C tanpa waste -> NaN
         assert res["KETERANGAN"].tolist() == ["A", "B", "C"]
         assert np.isnan(res.iloc[1]["ratio"])  # B
@@ -360,8 +366,9 @@ class TestReasonWeekdayRatio:
 
     def test_auto_detect_sama_dengan_eksplisit(self):
         # weekday_effect pada fixture ini menemukan (5, 6) secara otomatis
-        eksplisit = reason_weekday_ratio(_ratio_fixture(), peak_classes=(5, 6))
-        otomatis = reason_weekday_ratio(_ratio_fixture())
+        eksplisit = reason_weekday_ratio(
+            _ratio_fixture(), peak_classes=(5, 6), min_active=0)
+        otomatis = reason_weekday_ratio(_ratio_fixture(), min_active=0)
         assert_frame_equal(eksplisit, otomatis)
 
     def test_urutan_ratio_desc(self):
@@ -370,9 +377,30 @@ class TestReasonWeekdayRatio:
             "5": [30.0, 90.0, 60.0],  # kelas 5 = peak
             "7": [30.0, 30.0, 30.0],  # kelas 0 = offpeak
         })
-        res = reason_weekday_ratio(df, peak_classes=(5, 6))
+        res = reason_weekday_ratio(df, peak_classes=(5, 6), min_active=0)
         assert res["KETERANGAN"].tolist() == ["Y", "Z", "X"]  # 3.0, 2.0, 1.0
         assert res["ratio"].tolist() == pytest.approx([3.0, 2.0, 1.0])
+
+    def test_min_active_default_menyembunyikan_kategori_kecil(self):
+        """v2.5.1 (TE-M3): kategori < 30 entri aktif disembunyikan dari tabel
+        rasio (rasio sampel-kecil = artefak) — kategori besar tetap tampil."""
+        rows = []
+        # 'Besar': 40 baris × 2 hari aktif = 80 entri aktif (>= 30)
+        for _ in range(40):
+            rows.append({"KETERANGAN": "Besar", "5": 100.0, "7": 50.0})
+        # 'Kecil': 3 baris × 2 hari aktif = 6 entri aktif (< 30)
+        for _ in range(3):
+            rows.append({"KETERANGAN": "Kecil", "5": 100.0, "7": 50.0})
+        df = pd.DataFrame(rows)
+
+        res_default = reason_weekday_ratio(df, peak_classes=(5, 6))
+        assert res_default["KETERANGAN"].tolist() == ["Besar"]
+
+        res_all = reason_weekday_ratio(df, peak_classes=(5, 6), min_active=0)
+        assert res_all["KETERANGAN"].tolist() == ["Besar", "Kecil"]
+        # rasio kategori kecil identik dengan yang besar (data sama) —
+        # artefak inilah yang disembunyikan default
+        assert res_all["ratio"].tolist() == pytest.approx([2.0, 2.0])
 
     def test_df_kosong_tanpa_keterangan_tanpa_hari(self):
         frames = [
@@ -388,7 +416,7 @@ class TestReasonWeekdayRatio:
     def test_auto_detect_gagal_semua_hari_offpeak(self):
         # 1 kelas saja -> peak None -> semua hari dianggap offpeak, ratio 0
         df = make_frame(**{"KETERANGAN": ["A"], "7": [10.0]})
-        res = reason_weekday_ratio(df)
+        res = reason_weekday_ratio(df, min_active=0)
         assert res["KETERANGAN"].tolist() == ["A"]
         assert res["peak_mean"].iloc[0] == 0.0
         assert res["offpeak_mean"].iloc[0] == pytest.approx(10.0)

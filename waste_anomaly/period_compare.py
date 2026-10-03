@@ -91,17 +91,29 @@ def compare_periods(
     label_a: str = "Periode A",
     label_b: str = "Periode B",
     top_n: int = 100,
+    key_akhir_a: int | None = None,
+    key_akhir_b: int | None = None,
 ) -> dict:
     """Bandingkan dua run pipeline (df Detail).
 
+    v2.5.1 (PE-M1): parameter key_akhir_a/key_akhir_b (None → auto-detect
+    via auto_key_akhir). Summary kini memuat baris 'Hari Data' (jumlah
+    hari periode masing-masing) dan 'Waste per Hari' (total/hari) supaya
+    perbandingan 30-hari vs 31-hari tidak dibaca sebagai perubahan
+    performa (bias sistematis hingga +3,3% bila total mentah saja).
+
     Return dict:
       summary   — Metrik × (A, B, Delta %): Total Waste, Baris Aktif,
-                  Cabang Aktif, Item Aktif, Prioritas, Potensi, Review.
+                  Cabang Aktif, Item Aktif, Prioritas, Potensi, Review,
+                  Hari Data, Waste per Hari.
       per_jenis — TOTAL per JENIS A vs B + Delta.
       branch    — per NAMA RESTO (Total A/B, Delta) sort |Delta| desc, cap top_n.
       items     — per (resto, item) sort |Delta| desc, cap top_n.
       new_items — pasangan hanya muncul di B (Total B > 0).
       gone_items— pasangan hanya muncul di A (Total A > 0).
+      key_akhir_a / key_akhir_b — hari terakhir yang dipakai (int, hasil
+                  auto-detect bila parameter None) — UI dapat menampilkan
+                  caveat saat keduanya berbeda.
     Semua tabel memakai konstanta *_COLS di atas.
     """
     empty_jenis = pd.DataFrame(columns=JENIS_COLS)
@@ -123,6 +135,19 @@ def compare_periods(
 
     total_a = float(ta["TOTAL"].sum()) if not ta.empty else 0.0
     total_b = float(tb["TOTAL"].sum()) if not tb.empty else 0.0
+
+    # v2.5.1 (PE-M1): hari data tiap periode (parameter eksplisit atau
+    # auto-detect) — dasar normalisasi Waste/Hari + caveat beda panjang.
+    ka_a = key_akhir_a if key_akhir_a else auto_key_akhir(df_a if df_a is not None else pd.DataFrame())
+    ka_b = key_akhir_b if key_akhir_b else auto_key_akhir(df_b if df_b is not None else pd.DataFrame())
+    try:
+        ka_a = int(ka_a)
+    except (TypeError, ValueError):
+        ka_a = 31
+    try:
+        ka_b = int(ka_b)
+    except (TypeError, ValueError):
+        ka_b = 31
 
     # ---- summary metrik ----
     def _active_rows(df: pd.DataFrame) -> int:
@@ -147,6 +172,11 @@ def compare_periods(
          _status_count(df_b, "Potensi Anomali")),
         ("Perlu Review", _status_count(df_a, "Perlu Review"),
          _status_count(df_b, "Perlu Review")),
+        # v2.5.1 (PE-M1): normalisasi panjang periode — total mentah antar
+        # file dengan jumlah hari berbeda membawa bias hingga ~1/30.
+        ("Hari Data", ka_a, ka_b),
+        ("Waste per Hari", total_a / ka_a if ka_a > 0 else 0.0,
+         total_b / ka_b if ka_b > 0 else 0.0),
     ]
     summary = pd.DataFrame(
         [
@@ -234,6 +264,8 @@ def compare_periods(
     return {
         "label_a": label_a,
         "label_b": label_b,
+        "key_akhir_a": ka_a,
+        "key_akhir_b": ka_b,
         "summary": summary,
         "per_jenis": per_jenis,
         "branch": branch,

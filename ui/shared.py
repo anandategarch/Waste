@@ -25,6 +25,7 @@ import pandas as pd
 
 from waste_anomaly.frozen import bundle_dir as _bundle_dir
 from waste_anomaly.frozen import exe_dir as _exe_dir
+from waste_anomaly.utils import norm_text as _norm_text
 
 # ============================================================
 # APP META — dev: repo root (parent paket ui/). Frozen exe: folder EXE
@@ -45,7 +46,7 @@ def bundle_res_dir() -> Path:
     return _bundle_dir()
 
 
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.5.1"
 APP_TITLE = "Waste Anomaly Detection — Pro Dashboard"
 
 # F11 (v2.4.0): logger UI bersama — exception senyap kini tercatat ke file.
@@ -148,9 +149,16 @@ def _apply_filters(df: pd.DataFrame, filters: dict | None,
     filters: dict key → nilai; None / list kosong di-skip.
       cabang→NAMA RESTO, item→NAMA BARANG, jenis→JENIS (list → isin),
       keterangan→KETERANGAN, status→ANOMALY STATUS.
-    day_min/day_max: rentang HARI MAX (inklusif; baris HARI MAX null tetap
-    lolos — konsisten perilaku lama).
-    search: substring case-insensitive di SEMUA kolom (mask OR, vectorized).
+    day_min/day_max: rentang HARI MAX (inklusif). v2.5.1 (DD-M1): baris
+      HARI MAX null (≈ semua baris Kosong TOTAL=0) TIDAK lagi lolos —
+      rentang hari aktif = fokus baris ber-waste; dulu 23.470 baris nol
+      ikut lolos dan tabel tampak 'filter tidak bekerja'.
+    search: substring case-insensitive di kolom (mask OR, vectorized).
+      v2.5.1 (DD-L4): sel NaN dikecualikan — cari 'nan'/'<NA>' tidak lagi
+      'menemukan' baris ber-NaN.
+    v2.5.1 (DQ-M1): nilai keterangan dibandingkan dengan normalisasi
+      whitespace (NBSP/zero-width/spasi ganda) supaya varian kembar-visual
+      tetap tertangkap satu filter.
     """
     filtered = df.copy()
     col_map = {
@@ -164,25 +172,44 @@ def _apply_filters(df: pd.DataFrame, filters: dict | None,
         if not col or col not in filtered.columns:
             continue
         if isinstance(val, list):
-            filtered = filtered[filtered[col].isin(val)]
+            if key == "keterangan":
+                wanted = {_norm_text(v) for v in val}
+                filtered = filtered[
+                    filtered[col].astype(str).map(_norm_text).isin(wanted)
+                ]
+            else:
+                filtered = filtered[filtered[col].isin(val)]
+        elif key == "keterangan":
+            target = _norm_text(val)
+            filtered = filtered[
+                filtered[col].astype(str).map(_norm_text) == target
+            ]
         else:
             filtered = filtered[filtered[col] == val]
 
     # Rentang hari (HARI MAX in [day_min, day_max])
+    # v2.5.1 (DD-M1): ketat — HARI MAX null TIDAK lolos. Baris tanpa waste
+    # (TOTAL=0 → HARI MAX null, 90,6% data) tidak ada artinya di bawah
+    # lensa 'hari kejadian peak'; mempertahankannya membuat tabel 25.901
+    # → 23.5xx baris (filter tampak rusak).
     if (day_min is not None and day_max is not None
             and "HARI MAX" in filtered.columns):
         hari_max = pd.to_numeric(filtered["HARI MAX"], errors="coerce")
         filtered = filtered[
             hari_max.between(day_min, day_max, inclusive="both")
-            | hari_max.isna()  # baris HARI MAX null tetap lolos
+            & hari_max.notna()
         ]
 
     # Search — vectorized per-column OR mask (H1)
+    # v2.5.1 (DD-L4): notna() gate — sel NaN/pd.NA tidak di-str-kan.
     search = (search or "").strip().lower()
     if search:
         mask = pd.Series(False, index=filtered.index)
         for col in filtered.columns:
-            mask |= filtered[col].astype(str).str.lower().str.contains(
+            sub = filtered[col]
+            if not sub.notna().any():
+                continue
+            mask |= sub.notna() & sub.astype(str).str.lower().str.contains(
                 search, regex=False, na=False
             )
         filtered = filtered[mask]
@@ -196,3 +223,27 @@ CHIP_LABELS = {
     "jenis": "Jenis", "keterangan": "Keterangan", "hari": "Rentang Hari",
     "top": "Top",
 }
+
+
+# ============================================================
+# FORMAT ANGKA (v2.5.1 — fix IN-L1: satu konvensi Indonesia app-wide)
+# ============================================================
+
+def fmt_id(value: float, decimals: int = 0) -> str:
+    """Format angka gaya Indonesia: ribuan '.', desimal ','.
+
+    v2.5.1 (audit IN-L1): app dulunya mencampur tiga konvensi (KPI EN
+    '9,333,117.5', tabel raw float, Data Quality Indonesia '9.333.117,5').
+    Konvensi tunggal sekarang: Indonesia — dipakai KPI, label breakdown
+    satuan, status periode, dan sel tabel (via _format_cell).
+
+    Contoh: fmt_id(9333117.5, 1) → '9.333.117,5'; fmt_id(25901) → '25.901'.
+    """
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if f != f:  # NaN
+        return ""
+    s = f"{f:,.{decimals}f}"  # EN sementara: '9,333,117.5'
+    return s.replace(",", "X").replace(".", ",").replace("X", ".")

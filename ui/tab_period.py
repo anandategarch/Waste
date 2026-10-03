@@ -14,6 +14,7 @@ from .shared import C_TEXT_MUTED
 from .shared import F_BODY
 from .shared import F_CARD
 from .shared import F_HINT
+from .shared import fmt_id
 from tkinter import filedialog
 from tkinter import messagebox
 import pandas as pd
@@ -173,7 +174,14 @@ class PeriodTabMixin:
                     ))
                     return
                 df_b = summary_b.get("df")
-                result = compare_periods(df_a, df_b, label_a=label_a, label_b=label_b)
+                # v2.5.1 (PE-M1): teruskan key_akhir kedua periode supaya
+                # summary memuat Hari Data + Waste/Hari (normalisasi panjang
+                # periode) — ka_b sudah auto-detect; ka_a dari run saat ini.
+                ka_a = getattr(self, "_last_key_akhir", 31)
+                result = compare_periods(
+                    df_a, df_b, label_a=label_a, label_b=label_b,
+                    key_akhir_a=ka_a, key_akhir_b=ka_b,
+                )
                 result["success"] = True
                 result["key_akhir_b"] = ka_b
                 self.ui_queue.put(("period_done", result, None))
@@ -220,16 +228,30 @@ class PeriodTabMixin:
         self.lbl_period_a.configure(
             text=f"{result.get('label_a', '?')} (run saat ini)")
         total = result["summary"]
+        # v2.5.1 (PE-M1): status menyebut jumlah hari + waste/hari bila
+        # panjang periode berbeda (30 vs 31 hari) — total mentah membawa
+        # bias hingga ~1/30 yang tidak boleh dibaca sebagai perubahan
+        # performa.
         try:
             s = total.set_index("Metrik")
             ta = float(s.loc["Total Waste", "Periode A"])
             tb_ = float(s.loc["Total Waste", "Periode B"])
             dp = s.loc["Total Waste", "Delta %"]
             dp_txt = "∞" if pd.isna(dp) else f"{dp:+.1f}%"
-            self.lbl_period_status.configure(
-                text=f"✓ Selesai — Total waste {ta:,.0f} → {tb_:,.0f} ({dp_txt})",
-                fg="#16a34a",
+            ka_a = int(s.loc["Hari Data", "Periode A"])
+            ka_b = int(s.loc["Hari Data", "Periode B"])
+            wph_a = float(s.loc["Waste per Hari", "Periode A"])
+            wph_b = float(s.loc["Waste per Hari", "Periode B"])
+            status = (
+                f"✓ Selesai — Total waste {fmt_id(ta)} → {fmt_id(tb_)} ({dp_txt})"
             )
+            if ka_a != ka_b:
+                status += (
+                    f"  ⚠ periode beda panjang ({ka_a} vs {ka_b} hari) — "
+                    f"waste/hari {fmt_id(wph_a, 1)} → {fmt_id(wph_b, 1)} "
+                    "(bandingkan ini, bukan total mentah)"
+                )
+            self.lbl_period_status.configure(text=status, fg="#16a34a")
         except Exception:  # noqa: BLE001 — status best-effort
             self.lbl_period_status.configure(text="✓ Selesai", fg="#16a34a")
 
@@ -248,7 +270,20 @@ class PeriodTabMixin:
             return
         for key in ("summary", "per_jenis", "branch", "items",
                     "new_items", "gone_items"):
-            self._render_period_tree(key, result.get(key))
+            # v2.5.1 (DD-H1 amplifier): satu tabel gagal ≠ lima lainnya
+            # stale — pola per-item dari tab_temporal.
+            try:
+                self._render_period_tree(key, result.get(key))
+            except Exception as e:  # noqa: BLE001
+                self.log(f"⚠ Periode tabel '{key}' gagal: {e}")
+                try:
+                    tree = self._period_trees[key]
+                    tree.delete(*tree.get_children(""))
+                    tree["columns"] = ["info"]
+                    tree.heading("info", text="info")
+                    tree.insert("", "end", values=[f"(gagal render: {e})"])
+                except Exception:  # noqa: BLE001
+                    pass
 
     def _render_period_tree(self, key: str, df: pd.DataFrame | None):
         tree = self._period_trees[key]
@@ -266,7 +301,13 @@ class PeriodTabMixin:
             anchor = "e" if c not in ("Metrik", "NAMA RESTO", "NAMA BARANG", "JENIS") else "w"
             tree.column(c, width=110 if anchor == "e" else 150, anchor=anchor)
         for _, row in df.iterrows():
-            tree.insert("", "end", values=[self._format_cell(row[c]) for c in cols])
+            tree.insert("", "end", values=[
+                # v2.5.1 (PE-M1 caveat): Delta % ∞ (old=0) dirender eksplisit
+                # — NaN → '' menyembunyikan informasi 'baru muncul dari 0'.
+                ("∞" if c == "Delta %" and isinstance(row[c], float)
+                  and row[c] != row[c] else self._format_cell(row[c]))
+                for c in cols
+            ])
 
 
 # Registry font (v2.4.0): _init_fonts me-rebind F_*/FONT_NAME/MONO_NAME di

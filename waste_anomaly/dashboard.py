@@ -17,6 +17,7 @@ Kontrak return (FIX-DASH):
 
 from __future__ import annotations
 
+import logging
 from typing import Callable
 
 # NOTE: backend diset di ui_app.py (matplotlib.use("TkAgg")) sebelum import dashboard
@@ -54,6 +55,21 @@ from .chart_helpers import (
 
 FilterCallback = Callable[[str, str | None], None]
 """Callback signature: (filter_key, value) -> None. value=None artinya clear filter."""
+
+_LOGGER = logging.getLogger("waste_anomaly.dashboard")
+
+
+def _safe_on_click(on_click: FilterCallback, key: str, val) -> None:
+    """v2.5.1 (DD-M5 hardening): panggil on_click terlindungi.
+
+    Dulu exception di callback UI (mis. widget sudah di-destroy) merambat
+    ke handler event matplotlib → callback Tk global (log saja, klik mati
+    senyap tanpa jejak di module ini). Kini tercatat dengan konteks key.
+    """
+    try:
+        on_click(key, val)
+    except Exception:  # noqa: BLE001 — handler event tidak boleh raise
+        _LOGGER.warning("on_click('%s', %r) gagal", key, val, exc_info=True)
 
 
 # ============================================================
@@ -211,7 +227,7 @@ def chart_status_bar_interactive(
                 if bar.contains(event)[0]:
                     val = counts.index[i]
                     new_val = None if active_val == val else val
-                    on_click("status", new_val)
+                    _safe_on_click(on_click, "status", new_val)
                     return
         _connect_click(fig, _on_pick)
 
@@ -288,7 +304,7 @@ def chart_cabang_bar_interactive(
                 if bar.contains(event)[0]:
                     val = g.index[i]
                     new_val = None if active_val == val else val
-                    on_click("cabang", new_val)
+                    _safe_on_click(on_click, "cabang", new_val)
                     return
         _connect_click(fig, _on_pick)
     return fig, on_click
@@ -364,7 +380,7 @@ def chart_top_items_interactive(
                 if bar.contains(event)[0]:
                     val = g.index[i]
                     new_val = None if active_val == val else val
-                    on_click("item", new_val)
+                    _safe_on_click(on_click, "item", new_val)
                     return
         _connect_click(fig, _on_pick)
     return fig, on_click
@@ -432,7 +448,7 @@ def chart_keterangan_bar_interactive(
                 if bar.contains(event)[0]:
                     val = g.index[i]
                     new_val = None if active_val == val else val
-                    on_click("keterangan", new_val)
+                    _safe_on_click(on_click, "keterangan", new_val)
                     return
         _connect_click(fig, _on_pick)
     return fig, on_click
@@ -511,7 +527,7 @@ def chart_jenis_donut_interactive(
                     if contains:
                         val = counts.index[i]
                         new_val = None if active_val == val else val
-                        on_click("jenis", new_val)
+                        _safe_on_click(on_click, "jenis", new_val)
                         return
         _connect_click(fig, _on_pick)
     return fig, on_click
@@ -574,7 +590,7 @@ def chart_score_per_cabang_interactive(
                 if bar.contains(event)[0] or b2[i].contains(event)[0]:
                     val = g["NAMA RESTO"].iloc[i]
                     new_val = None if active_val == val else val
-                    on_click("cabang", new_val)
+                    _safe_on_click(on_click, "cabang", new_val)
                     return
         _connect_click(fig, _on_pick)
     return fig, on_click

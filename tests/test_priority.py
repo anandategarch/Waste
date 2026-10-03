@@ -71,7 +71,9 @@ def reason_frame(rows: list[tuple]) -> pd.DataFrame:
 
 class TestFocusScore:
     def test_nilai_known_4_baris(self):
-        # TOTAL [100, 50, 25, 0] → rank pct [100, 75, 50, 25]
+        # v2.5.1 (MO-M2): rank dihitung di SUBSET aktif (TOTAL > 0).
+        # TOTAL [100, 50, 25, 0] → subset [100, 50, 25]: pct [100, 66.7, 33.3];
+        # baris 0 → magnitude 0 (bukan percentile 25 seperti dulu).
         # skor  [19, 0, 9, nan]  → anomaly pct [100, 0, 900/19, 0]
         df = detail([
             {"TOTAL": 100.0, "ANOMALY SCORE": 19},
@@ -83,9 +85,29 @@ class TestFocusScore:
         assert list(got.index) == list(df.index)
         assert pd.api.types.is_float_dtype(got)
         assert got.iloc[0] == pytest.approx(0.6 * 100.0 + 0.4 * 100.0)
-        assert got.iloc[1] == pytest.approx(0.6 * 75.0 + 0.0)
-        assert got.iloc[2] == pytest.approx(0.6 * 50.0 + 0.4 * (9.0 / 19.0 * 100.0))
-        assert got.iloc[3] == pytest.approx(0.6 * 25.0 + 0.0)
+        assert got.iloc[1] == pytest.approx(0.6 * (2.0 / 3.0 * 100.0) + 0.0)
+        assert got.iloc[2] == pytest.approx(
+            0.6 * (1.0 / 3.0 * 100.0) + 0.4 * (9.0 / 19.0 * 100.0))
+        # baris nol: magnitude 0 (rank subset aktif) + anomali 0 = 0
+        assert got.iloc[3] == pytest.approx(0.0)
+
+    def test_rank_subset_aktif_vs_full(self):
+        """v2.5.1 (MO-M2): komponen magnitude berdaya-pembeda PENUH di antara
+        baris aktif — dulu 23.470 baris nol mengkompresi semua baris aktif ke
+        percentile 90,6–100 (rentang efektif 5,4 poin dari budget 60)."""
+        # 100 baris nol + 10 baris aktif bernilai berbeda
+        rows = [{"TOTAL": 0.0, "ANOMALY SCORE": 0} for _ in range(100)]
+        rows += [{"TOTAL": float(v), "ANOMALY SCORE": 0}
+                 for v in range(1, 11)]
+        df = detail(rows)
+        got = focus_score(df)
+        active_scores = got.iloc[100:]
+        # baris aktif terkecil (TOTAL=1) → magnitude ~0 (bukan 90,6!)
+        assert active_scores.iloc[0] < 10.0
+        # baris aktif terbesar → magnitude 60 penuh
+        assert active_scores.iloc[-1] == pytest.approx(60.0)
+        # rentang magnitude efektif ~54 dari 60 (dulu hanya 5,4 poin)
+        assert (active_scores.max() - active_scores.min()) > 50.0
 
     def test_skor_melebihi_max_diklip(self):
         # ANOMALY SCORE di luar 0..MAX tetap menghasilkan komponen 0..100
@@ -201,10 +223,11 @@ class TestMoneyView:
         assert mv["ANOMALY STATUS"].tolist() == ["Prioritas Tinggi", "Normal"]
 
     def test_focus_score_df_penuh(self, frame):
-        # FOCUS dihitung pada df PENUH (rank 100 → 1.0, 50 → 2/3 di antara
-        # nilai non-NaN) — bukan pada subset view
+        # FOCUS dihitung pada df PENUH; rank magnitude di subset aktif
+        # (v2.5.1): TOTAL [100, 50] → pct [100, 50] (bukan [100, 66,7]
+        # yang menghitung baris 0/NaN ke dalam denominator rank).
         mv = money_view(frame)
-        assert mv["FOCUS SCORE"].tolist() == pytest.approx([100.0, 40.0])
+        assert mv["FOCUS SCORE"].tolist() == pytest.approx([100.0, 30.0])
         assert mv["FOCUS CLASS"].tolist() == ["Fokus Utama", "Rutin"]
 
     def test_top_n(self, frame):
