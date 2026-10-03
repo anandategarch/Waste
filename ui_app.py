@@ -58,7 +58,7 @@ from waste_anomaly import dashboard as wa_dash
 from waste_anomaly import filters as wa_filters
 from waste_anomaly.exporter import export_to_excel  # H6: export Excel on-demand dari tab Hasil
 
-APP_VERSION = "2.3.1"  # L2: selaras dengan config.json + docstring
+APP_VERSION = "2.3.2"  # L2: selaras dengan __init__.py + README changelog
 APP_TITLE = "Waste Anomaly Detection — Pro Dashboard"
 APP_DIR = Path(__file__).resolve().parent
 # (H6) DEFAULT_OUTPUT dihapus — pipeline IN-MEMORY; file Excel dibuat on-demand
@@ -2061,8 +2061,12 @@ class WasteAnomalyApp(tk.Tk):
 
         # Chart 1: Quadrant scatter — key_akhir ASLI dari run terakhir (C4-fix:
         # persistence = daysActive/key_akhir; default 31 hanya sebelum run pertama)
+        # F4 v2.3.2: threshold kini dari config user (QUADRANT_THRESHOLD) —
+        # sebelumnya hardcoded 0.5 di dashboard.py → chart & tabel bisa beda.
         try:
-            fig1 = wa_dash.chart_quadrant_scatter(df, key_akhir=self._last_key_akhir)
+            _quad_th = float(self.config.get("thresholds", {}).get("QUADRANT_THRESHOLD", 0.5))
+            fig1 = wa_dash.chart_quadrant_scatter(
+                df, key_akhir=self._last_key_akhir, threshold=_quad_th)
             c1 = wa_charts.embed_figure(self._quadrant_chart_frame, fig1)
             c1.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
             self._quadrant_canvases.append(("quadrant_scatter", fig1, c1))
@@ -2612,6 +2616,9 @@ class WasteAnomalyApp(tk.Tk):
         ttk.Button(btn_frame, text="Reset Default", command=self._reset_config).pack(side="left", padx=4)
 
     def _save_config(self):
+        """Simpan config.json — ATOMIC (tmp + os.replace, pola filters.py) +
+        validasi rentang: threshold numerik negatif/0 ditolak (mengubah
+        perilaku sinyal diam-diam)."""
         try:
             new_th = {}
             for k, var in self._config_vars.items():
@@ -2624,14 +2631,24 @@ class WasteAnomalyApp(tk.Tk):
                     except ValueError:
                         messagebox.showerror("Config Error", f"Nilai untuk {k} tidak valid: {raw}")
                         return
+                # F2 v2.3.2: validasi rentang — mencegah nilai invalid tersimpan
+                if isinstance(new_th[k], (int, float)) and new_th[k] <= 0:
+                    messagebox.showerror("Config Error", f"Nilai {k} harus > 0 (dapat: {raw})")
+                    return
             self.config["thresholds"] = new_th
-            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            # F2 v2.3.2: atomic save — crash/kill mid-write tidak lagi mengorupsi
+            # config.json (sebelumnya open("w") + json.dump langsung).
+            tmp_path = CONFIG_PATH.with_suffix(".json.tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(self.config, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, CONFIG_PATH)
             messagebox.showinfo("Config", f"Disimpan ke {CONFIG_PATH}")
         except Exception as e:
             messagebox.showerror("Config Error", str(e))
 
     def _reset_config(self):
+        # F3 v2.3.2: kini 20/20 key (sebelumnya 14 — 6 key baru v2.3.1 tidak
+        # pernah di-reset: STATUS_*, S2_SCORE2_MIN, S10_BOM_MIN, QUADRANT_THRESHOLD)
         default_cfg = {
             "thresholds": {
                 "TH_SPIKE": 3, "TH_MAX_AVG_AKTIF": 2.5, "TH_MAX_MEDIAN": 3,
@@ -2640,6 +2657,8 @@ class WasteAnomalyApp(tk.Tk):
                 "TH_MAX_BOM_HIGH": 0.50, "TH_TOTAL_BOM_WARN": 0.50,
                 "TH_TOTAL_BOM_HIGH": 1.00, "TH_PEER_MIN": 3,
                 "TH_PEER_WARN": 2, "TH_PEER_HIGH": 3, "TH_LAST_SHARE": 0.70,
+                "STATUS_PRIORITAS": 8, "STATUS_POTENSI": 5, "STATUS_REVIEW": 3,
+                "S2_SCORE2_MIN": 4, "S10_BOM_MIN": 0.10, "QUADRANT_THRESHOLD": 0.50,
             }
         }
         for k, var in self._config_vars.items():

@@ -51,11 +51,53 @@ from .utils import load_config
 _log = logging.getLogger(__name__)
 
 
+def _float15(x: Any) -> Any:
+    """Bulatkan satu float ke 15 digit signifikan (semantik penyimpanan Excel).
+
+    Excel menyimpan/menampilkan maksimal 15 digit signifikan. File hasil
+    ekspor tool lain bisa mengandung 'FP dust' (mis. 21.299999999999997) yang
+    secara visual = 21.3 di Excel tapi TIDAK sama sebagai double — rasio di
+    ambang threshold (21.3/7.1 = 3.0) bisa flip tanpa alasan. Normalisasi ini
+    membuat nilai pipeline = nilai yang user lihat di Excel.
+    """
+    try:
+        if pd.isna(x):  # NaN / NaT / pd.NA — lewat apa adanya
+            return x
+        x_f = float(x)
+        if math.isinf(x_f):
+            return x
+        return float(f"{x_f:.15g}")
+    except (TypeError, ValueError):
+        return x  # bukan float murni — biarkan
+
+
+def _normalize_float_precision(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalisasi semua kolom float ke 15 digit signifikan (in-place safe).
+
+    Fix idempotency F7 (v2.3.2): tanpa ini, run-1 vs run-ulang bisa menghasilkan
+    skor anomali BERBEDA untuk data yang sama ( nilai dust 21.299999999999997
+    ditulis ulang oleh openpyxl sebagai "21.3" → run kedua baca nilai bersih →
+    sinyal S3/S5 flip di boundary ). Terkonfirmasi: 402 → 403 anomali.
+    """
+    for col in df.columns:
+        s = df[col]
+        if pd.api.types.is_float_dtype(s):
+            df[col] = s.map(_float15)
+    return df
+
+
 def _read_excel_fast(path, sheet_name, **kwargs):
-    """Wrapper untuk pd.read_excel dengan engine optimal (calamine jika ada)."""
+    """Wrapper untuk pd.read_excel dengan engine optimal (calamine jika ada).
+
+    F7 (v2.3.2): semua hasil baca dinormalisasi ke 15 digit signifikan supaya
+    konsisten antar engine (calamine vs openpyxl) dan idempotent terhadap
+    round-trip tulis-ulang Excel.
+    """
     if _EXCEL_ENGINE:
-        return pd.read_excel(path, sheet_name=sheet_name, engine=_EXCEL_ENGINE, **kwargs)
-    return pd.read_excel(path, sheet_name=sheet_name, **kwargs)
+        df = pd.read_excel(path, sheet_name=sheet_name, engine=_EXCEL_ENGINE, **kwargs)
+    else:
+        df = pd.read_excel(path, sheet_name=sheet_name, **kwargs)
+    return _normalize_float_precision(df)
 
 
 def _guard_xls(workbook_path: str | os.PathLike) -> None:

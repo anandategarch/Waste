@@ -32,6 +32,7 @@ import pandas as pd
 # safe_max, safe_mean, safe_median, second_max, position_of, to_text) — tidak
 # ada call site di file ini (verifikasi grep sebelum removal). `warnings`
 # (stdlib) ditambahkan untuk suppress RuntimeWarning np.nanmean (M4).
+from .loader import _key_str
 from .utils import clamp, day_columns
 
 
@@ -536,17 +537,25 @@ def stage_05_bom(
         df["Rill % to BOM"] = 0.0
         return df
 
-    # Siapkan BOM untuk join (strip whitespace untuk match robust)
+    # Siapkan BOM untuk join — normalisasi kunci via _key_str (F1 v2.3.2):
+    # float integral dari cell numerik (1049.0) → "1049" (bukan "1049.0");
+    # None/NaN → None (bukan "nan") supaya tidak join palsu. Kedua sisi join
+    # memakai normalisasi identik — sebelumnya outlet numerik TIDAK PERNAH
+    # match → sinyal S6/S7 mati diam-diam.
     bom = bom_df.copy()
-    bom["Nomor #"] = bom["Nomor #"].astype(str).str.strip()
-    bom["Nama Barang"] = bom["Nama Barang"].astype(str).str.strip()
+    bom["Nomor #"] = bom["Nomor #"].map(_key_str)
+    bom["Nama Barang"] = bom["Nama Barang"].map(_key_str)
+    bom = bom.dropna(subset=["Nomor #", "Nama Barang"])
 
     df_join = df.copy()
     # Defensive: drop TOTAL BOM dari df kalau sudah ada (idempotent), supaya merge tidak buat _x/_y
     if "TOTAL BOM" in df_join.columns:
         df_join = df_join.drop(columns=["TOTAL BOM"])
-    df_join["NAMA RESTO"] = df_join["NAMA RESTO"].astype(str).str.strip()
-    df_join["NAMA BARANG"] = df_join["NAMA BARANG"].astype(str).str.strip()
+    # Normalisasi kunci sisi data — None untuk sel kosong: pandas merge TIDAK
+    # akan match-kan None (TOTAL BOM tetap NaN, sinyal S6/S7 off) — dan barisnya
+    # TETAP dipertahankan di output (tidak ada dropna di sisi data!).
+    df_join["NAMA RESTO"] = df_join["NAMA RESTO"].map(_key_str)
+    df_join["NAMA BARANG"] = df_join["NAMA BARANG"].map(_key_str)
 
     out = df_join.merge(
         # M5 (v2.3.1): lookup merge many_to_one — kunci join sisi BOM di-dedupe

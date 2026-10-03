@@ -21,7 +21,9 @@ pause >nul
 echo.
 echo [1/2] Install Python packages...
 python -m pip install --upgrade pip
-python -m pip install pandas numpy openpyxl python-calamine matplotlib
+REM F5 v2.3.2: install dari requirements.txt (pinned) — konsisten dengan README,
+REM matplotlib >= 3.9 dijamin (tick_labels), bukan versi acak dari PyPI.
+python -m pip install -r requirements.txt
 if errorlevel 1 (
     echo [ERROR] Gagal install Python packages. Cek instalasi Python Anda.
     echo         Pastikan Python 3.10+ terpasang: python --version

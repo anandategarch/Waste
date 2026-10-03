@@ -1,0 +1,18 @@
+# Waste Anomaly Detection — pinned dependencies (v2.3.2)
+#
+# Instalasi:  pip install -r requirements.txt
+# (SETUP.bat juga memanggil file ini)
+#
+# PIN RASIONAL (diuji end-to-end, bukan sekadar versi terbaru):
+# - matplotlib >= 3.9 WAJIB: charts.py boxplot pakai parameter `tick_labels`
+#   (pengganti `labels` yang deprecated di 3.9). Versi < 3.9 → TypeError.
+# - pandas 2.2.x: pipeline diuji penuh di 2.2.3; pandas 3.x belum diverifikasi
+#   (copy-on-write jadi default = breaking change).
+# - python-calamine OPSIONAL: loader punya fallback openpyxl otomatis — kalau
+#   installnya gagal di platform tertentu, aplikasi tetap jalan (lebih lambat).
+
+pandas>=2.2,<3
+numpy>=1.26
+openpyxl>=3.1
+matplotlib>=3.9
+python-calamine>=0.2

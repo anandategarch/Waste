@@ -2,7 +2,7 @@
 
 Python + Tkinter **professional dashboard** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif**, **filter profile persistence**, **comparison mode 2 cabang**, **analisa quadrant & rate league**, dan **22+ grafik** matplotlib embedded.
 
-> **v2.3.1** — hasil deep audit UI/UX + data pipeline (2025): **3 crash-path critical fixed**, memory leak chart dihilangkan, scroll mouse diperbaiki (Windows/macOS/Linux), search didebounce + divectorize, render lazy per-tab, idempotency HELPER/STATUS dipertahankan, kolom M-canonical (`KETERANGAN GABUNGAN`, `KONTRIBUSI TERBESAR`) 100% akurat, export Excel kini 3.5× lebih cepat. Detail di section **Changelog v2.3.1**.
+> **v2.3.2** — hasil audit profesional lanjutan (2025): **idempotency sejati** (normalisasi 15 digit signifikan — FP dust dari file Excel tidak lagi membuat skor anomali berubah antar-run, terverifikasi 44 test), **bug join BOM numerik diperbaiki** (outlet numerik 1049.0 kini match dengan "1049" — sebelumnya sinyal S6/S7 mati senyap), **test suite 44 test** (golden regression + unit), **requirements.txt pinned**, LICENSE, dan wiring config QUADRANT_THRESHOLD. Detail di section **Changelog v2.3.2**.
 
 ## Cara Pakai
 
@@ -214,22 +214,38 @@ Setelah run pipeline, tab "Visualisasi" auto-load 12 grafik matplotlib embedded:
 - `≥ 3` → **Perlu Review**
 - `else` → **Normal**
 
+## Testing
+
+```bash
+python -m pytest tests/ -v
+```
+
+44 test — golden regression end-to-end (fixture `DATA_WASTE.xlsx` 25.901 baris), unit test normalisasi kunci join, unit test join BOM numerik, unit test presisi float, kontrak summary dict, dan test idempotency. Jalankan setiap kali mengubah `stages.py` / `signals.py` / `loader.py` atau setelah upgrade pandas — angka golden berubah tanpa alasan = regresi.
+
 ## Struktur Project
 
 ```
 Waste/
-├── MULAI.bat                       ← ENTRY POINT (buka UI 8 tab)
-├── SETUP.bat                       ← One-time install (pandas, numpy, openpyxl, matplotlib)
+├── MULAI.bat                       ← ENTRY POINT (buka UI 10 tab)
+├── SETUP.bat                       ← One-time install (pip install -r requirements.txt)
+├── requirements.txt                ← Dependensi pinned (matplotlib >= 3.9, pandas 2.2.x)
 ├── README.md                       ← File ini
+├── LICENSE                         ← MIT
 ├── .gitignore
-├── ui_app.py                       ← UI Tkinter professional dashboard (v2.1)
+├── ui_app.py                       ← UI Tkinter professional dashboard (v2.3)
 ├── make_sample.py                  ← Generate sample workbook untuk testing
+├── tests/                          ← Test suite pytest (44 test — golden regression + unit)
+│   ├── conftest.py
+│   ├── test_pipeline_regression.py
+│   ├── test_bom_join.py
+│   ├── test_key_normalization.py
+│   └── test_float_precision.py
 ├── waste_anomaly/
-│   ├── __init__.py
+│   ├── __init__.py                 ← __version__ single-source (2.3.2)
 │   ├── config.json                 ← Thresholds + sheet name candidates
 │   ├── pipeline.py                 ← Orchestrator 14 stage
-│   ├── loader.py                   ← Excel loaders (auto-detect sheet name)
-│   ├── stages.py                   ← 14 stage replika M code (idempotent v2.1.1)
+│   ├── loader.py                   ← Excel loaders (auto-detect sheet + normalisasi 15 digit)
+│   ├── stages.py                   ← 14 stage replika M code (idempotent v2.3.2)
 │   ├── signals.py                  ← 12 sinyal anomali + composite score (max 19)
 │   ├── charts.py                   ← 12 static chart matplotlib
 │   ├── dashboard.py                ← 6 interactive chart + 4 comparison chart
@@ -332,6 +348,22 @@ Edit `waste_anomaly/config.json` → section `thresholds`. Atau pakai tab "⚙ K
 | Tab Visualisasi kosong | Pastikan sudah run pipeline. Klik "⟳ Refresh Grafik" manual kalau tidak auto-load. |
 | Grafik matplotlib error di Linux headless | Set env: `export MPLBACKEND=TkAgg` sebelum jalankan `python ui_app.py`. |
 | UI tidak terbuka | Pastikan Python 3.10+ terpasang (`python --version`). |
+
+## Changelog v2.3.2 — Audit Profesional Lanjutan
+
+### Critical / High
+- **Idempotency sejati (F7)**: file Excel bisa mengandung *FP dust* (mis. `21.299999999999997` yang visually = `21.3`). Sebelumnya: run-1 vs run-ulang memberi **skor anomali berbeda** untuk data yang sama (402 → 403 — 5 baris di boundary threshold S3/S5 flip; terverifikasi test). Kini semua nilai float dinormalisasi ke **15 digit signifikan** (semantik penyimpanan Excel) saat load — konsisten dengan apa yang user & Power Query lihat. Golden: 399 anomali (41 prioritas, 358 potensi) — 4 dust-false-positive kini Normal, 1 dust-false-negative konsisten terdeteksi.
+- **Join BOM numerik (F1)**: `stages.py` memakai normalisasi `_key_str` (loader) — outlet numerik `1049.0` kini **match** dengan `"1049"` di sheet BOM. Sebelumnya: join gagal diam-diam → TOTAL BOM semua NaN → sinyal S6/S7 tidak pernah trigger.
+- **Test suite (44 test)**: `tests/` — golden regression end-to-end pada fixture `DATA_WASTE.xlsx` (25.901 baris), unit test normalisasi kunci, unit test join BOM, unit test presisi float, kontrak summary dict, validasi domain status, dan **test idempotency** (re-run pada output sendiri). Run: `python -m pytest tests/ -v` (~60 s).
+- **requirements.txt (F5)**: dependensi di-pin dengan alasan (matplotlib ≥ 3.9 untuk `tick_labels`, pandas 2.2.x teruji, calamine opsional). SETUP.bat kini install dari file ini.
+
+### Medium
+- **LICENSE (MIT)** ditambahkan (README sudah mengklaim sejak awal).
+- **QUADRANT_THRESHOLD (F4)** kini benar-benar dibaca dari config user oleh chart quadrant — sebelumnya hardcode 0.5, chart & tabel bisa tidak sinkron.
+- **Reset Default config (F3)** kini mencakup 20/20 key (sebelumnya 6 key baru tidak pernah di-reset).
+- **Save config atomic (F2)**: tmp + `os.replace` (pola `filters.py`) + validasi nilai > 0.
+- **Single-source version (L2)**: `__init__.py`, `APP_VERSION`, MULAI.bat, README — semua 2.3.2.
+- **MULAI.bat** banner diperbarui (10 tab, bukan 8).
 
 ## Changelog v2.3.1 — Deep Audit & Fix
 

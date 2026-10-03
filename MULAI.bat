@@ -5,18 +5,20 @@ title Waste Anomaly Detection
 color 0A
 cls
 echo ============================================================
-echo   WASTE ANOMALY DETECTION - v2.1.0
+echo   WASTE ANOMALY DETECTION - v2.3.2
 echo ============================================================
 echo.
-echo  Membuka aplikasi dengan 8 tab (PRO Dashboard v2.1):
+echo  Membuka aplikasi dengan 10 tab (PRO Dashboard v2.3):
 echo    1. Dashboard       - KPI + filter + interactive charts + drill-down
-echo    2. Compare Cabang - NEW: side-by-side 2 cabang (4 chart + metrics)
-echo    3. Hasil         - preview tabel hasil (Detail/Anomali/Cabang/Top/Pareto)
-echo    4. Visualisasi   - 12 grafik matplotlib + export PNG
-echo    5. Ringkasan    - ringkasan run terakhir
-echo    6. Run Pipeline  - pilih workbook + Key Akhir + jalankan
-echo    7. Konfigurasi  - editor threshold (simpan ke config.json)
-echo    8. Bantuan      - instruksi pakai + 12 sinyal + drill-down workflow
+echo    2. Compare Cabang - side-by-side 2 cabang (4 chart + metrics)
+echo    3. Quadrant       - scatter SISTEMIK/MUSIMAN/LOKAL-KRONIS/INSIDEN
+echo    4. Rate League    - ranking cabang by rate anomali
+echo    5. Hasil          - preview tabel + Export Laporan Excel (6 sheet)
+echo    6. Visualisasi    - 12 grafik matplotlib + export PNG
+echo    7. Ringkasan      - ringkasan run terakhir
+echo    8. Run Pipeline   - pilih workbook + Key Akhir + jalankan + batal
+echo    9. Konfigurasi    - editor threshold (simpan ke config.json)
+echo   10. Bantuan      - instruksi pakai + 12 sinyal + drill-down workflow
 echo.
 echo  Pastikan SETUP.bat sudah dijalankan minimal sekali.
 echo.
