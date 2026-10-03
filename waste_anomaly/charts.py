@@ -19,6 +19,21 @@ import numpy as np
 import pandas as pd
 from matplotlib.figure import Figure
 
+# v2.3.1 helpers — fix semua UI/UX issues (Pattern A-H)
+from .chart_helpers import (
+    apply_layout,
+    fmt_cabang,
+    fmt_item,
+    fmt_reason,
+    place_legend_outside,
+    add_ylim_headroom,
+    add_xlim_headroom,
+    dynamic_figsize,
+    adaptive_text_color,
+    fmt_number_short,
+    fmt_number_comma,
+)
+
 # Lazy import FigureCanvasTkAgg — hanya ketika embed ke Tkinter (di UI).
 # Di headless test environment, import ini bisa gagal karena tidak ada Tcl/Tk.
 _FigureCanvasTkAgg = None
@@ -82,6 +97,15 @@ plt.rcParams.update({
 })
 
 
+def _restore_legend_title(ax, title: str | None) -> None:
+    """Set title on existing legend (place_legend_outside doesn't preserve it)."""
+    if not title:
+        return
+    leg = ax.get_legend()
+    if leg is not None:
+        leg.set_title(title)
+
+
 # ============================================================
 # CHART 1 — PIE: Distribusi Status Anomali
 # ============================================================
@@ -102,12 +126,16 @@ def chart_status_pie(df: pd.DataFrame) -> Figure:
     counts = counts.reindex([s for s in order if s in counts.index])
     colors = [PALETTE_STATUS.get(s, PALETTE_NEUTRAL) for s in counts.index]
 
+    # Pattern D: pctdistance closer to center, labeldistance slightly outside
+    # Pattern C: count moved to legend (less text inside the pie)
     wedges, texts, autotexts = ax.pie(
         counts.values,
         labels=counts.index,
         colors=colors,
-        autopct=lambda pct: f"{pct:.1f}%\n({int(round(pct/100*counts.sum()))})",  # round to avoid off-by-one
+        autopct=lambda pct: f"{pct:.1f}%",
         startangle=90,
+        pctdistance=0.72,
+        labeldistance=1.08,
         wedgeprops=dict(width=0.45, edgecolor="white", linewidth=2),
         textprops=dict(fontsize=9, color="#1e293b", fontweight="bold"),
     )
@@ -115,7 +143,21 @@ def chart_status_pie(df: pd.DataFrame) -> Figure:
         at.set_color("white")
         at.set_fontsize(8)
     ax.set_title("Distribusi Status Anomali", pad=12)
-    fig.tight_layout()
+    # Pattern B: legend outside with counts
+    ax.legend(
+        wedges,
+        [f"{s} ({c})" for s, c in zip(counts.index, counts.values)],
+        loc="center left",
+        bbox_to_anchor=(0.92, 0.5),
+        fontsize=8,
+        frameon=True,
+        edgecolor="#cbd5e1",
+        facecolor="white",
+        framealpha=0.95,
+    )
+    # Pie charts: keep tight_layout (rule 6) + manual margins for legend
+    fig.tight_layout(pad=2.0)
+    fig.subplots_adjust(top=0.92, right=0.70)
     return fig
 
 
@@ -125,7 +167,10 @@ def chart_status_pie(df: pd.DataFrame) -> Figure:
 
 def chart_waste_per_cabang(df: pd.DataFrame) -> Figure:
     """Bar chart total waste per NAMA RESTO."""
-    fig = Figure(figsize=(7, 4.2), dpi=100)
+    # Pattern G: wider figure for many cabangs
+    n_cabangs = df["NAMA RESTO"].nunique() if "NAMA RESTO" in df.columns else 5
+    fig_w = max(7.0, min(14.0, 0.5 * n_cabangs + 3))
+    fig = Figure(figsize=(fig_w, 4.5), dpi=100)
     ax = fig.add_subplot(111)
 
     if "NAMA RESTO" not in df.columns or "TOTAL" not in df.columns or df.empty:
@@ -134,15 +179,23 @@ def chart_waste_per_cabang(df: pd.DataFrame) -> Figure:
         return fig
 
     g = df.groupby("NAMA RESTO", dropna=False)["TOTAL"].sum().sort_values(ascending=False)
-    bars = ax.bar(g.index.astype(str), g.values, color=PALETTE_ACCENT, edgecolor="white", linewidth=1.5)
+    # Pattern C: abbreviate cabang codes on x-axis
+    cabang_labels = [fmt_cabang(c) for c in g.index.astype(str)]
+    bars = ax.bar(cabang_labels, g.values, color=PALETTE_ACCENT, edgecolor="white", linewidth=1.5)
+    # Pattern D: data labels using fmt_number_short, rotate 90° if >10 bars to prevent overlap
+    label_rotation = 90 if len(bars) > 10 else 0
     for bar, val in zip(bars, g.values):
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
-                f"{val:.1f}", ha="center", va="bottom", fontsize=8, fontweight="bold", color="#0f172a")
+                fmt_number_short(val), ha="center", va="bottom",
+                fontsize=7, fontweight="bold", color="#0f172a",
+                rotation=label_rotation)
     ax.set_title("Total Waste per Cabang", pad=12)
     ax.set_ylabel("Total Waste (qty)")
     ax.set_xlabel("Cabang")
-    ax.tick_params(axis="x", rotation=20)
-    fig.tight_layout()
+    # Pattern D: add 20% headroom so rotated data labels don't clip
+    add_ylim_headroom(ax, factor=1.20)
+    # Pattern A + E: margins + rotation
+    apply_layout(fig, ax, rotate_x=True, bottom_pad=0.22)
     return fig
 
 
@@ -152,7 +205,9 @@ def chart_waste_per_cabang(df: pd.DataFrame) -> Figure:
 
 def chart_top_items(df: pd.DataFrame, top_n: int = 10) -> Figure:
     """Horizontal bar chart top N item by TOTAL waste."""
-    fig = Figure(figsize=(7, 5), dpi=100)
+    # Pattern G: dynamic figure height based on number of items
+    fig_w, fig_h = dynamic_figsize(top_n, base_w=7.0, per_item_h=0.4, min_h=4.0, max_h=10.0)
+    fig = Figure(figsize=(fig_w, fig_h), dpi=100)
     ax = fig.add_subplot(111)
 
     if "NAMA BARANG" not in df.columns or "TOTAL" not in df.columns or df.empty:
@@ -162,14 +217,21 @@ def chart_top_items(df: pd.DataFrame, top_n: int = 10) -> Figure:
 
     g = (df.groupby("NAMA BARANG", dropna=False)["TOTAL"].sum()
          .sort_values(ascending=True).tail(top_n))
-    bars = ax.barh(g.index.astype(str), g.values, color=PALETTE_SECONDARY, edgecolor="white", linewidth=1.5)
+    # Pattern C: wrap long item names on y-axis
+    item_labels = [fmt_item(name) for name in g.index.astype(str)]
+    bars = ax.barh(item_labels, g.values, color=PALETTE_SECONDARY, edgecolor="white", linewidth=1.5)
+    # Pattern D: data labels with short format
     for bar, val in zip(bars, g.values):
         ax.text(bar.get_width(), bar.get_y() + bar.get_height()/2,
-                f" {val:.1f}", ha="left", va="center", fontsize=8, fontweight="bold", color="#0f172a")
+                f" {fmt_number_short(val)}", ha="left", va="center",
+                fontsize=8, fontweight="bold", color="#0f172a")
     ax.set_title(f"Top {top_n} Item dengan Waste Tertinggi", pad=12)
     ax.set_xlabel("Total Waste (qty)")
     ax.set_ylabel("")
-    fig.tight_layout()
+    # Pattern D: add headroom for data labels
+    add_xlim_headroom(ax, factor=1.10, side="right")
+    # Pattern A: more left padding for wrapped multi-line item labels
+    apply_layout(fig, ax, left_pad=0.30, bottom_pad=0.12)
     return fig
 
 
@@ -194,12 +256,18 @@ def chart_status_per_cabang(df: pd.DataFrame) -> Figure:
     colors = [PALETTE_STATUS.get(c, PALETTE_NEUTRAL) for c in cols]
 
     pivot.plot(kind="bar", stacked=True, ax=ax, color=colors, edgecolor="white", linewidth=1)
+    # Pattern C: abbreviate cabang codes
+    ax.set_xticklabels([fmt_cabang(str(idx)) for idx in pivot.index])
     ax.set_title("Distribusi Status Anomali per Cabang", pad=12)
     ax.set_ylabel("Jumlah Baris")
     ax.set_xlabel("Cabang")
-    ax.legend(title="Status", loc="upper right", bbox_to_anchor=(1.0, 1.0))
-    ax.tick_params(axis="x", rotation=20)
-    fig.tight_layout()
+    ax.legend(title="Status")
+    # Pattern D: headroom for stacked totals
+    add_ylim_headroom(ax)
+    # Pattern A + B + E: margins, legend outside, rotation
+    apply_layout(fig, ax, rotate_x=True, legend_outside=True, bottom_pad=0.22, right_pad=0.75)
+    # Restore legend title (place_legend_outside doesn't preserve it)
+    _restore_legend_title(ax, "Status")
     return fig
 
 
@@ -223,23 +291,28 @@ def chart_pareto_keterangan(df: pd.DataFrame) -> Figure:
 
     bars = ax.bar(range(len(g)), g.values, color=PALETTE_ACCENT, edgecolor="white", linewidth=1.5)
     ax.set_xticks(range(len(g)))
-    ax.set_xticklabels(g.index.astype(str), rotation=30, ha="right")
+    # Pattern C: wrap long KETERANGAN reasons
+    ax.set_xticklabels([fmt_reason(str(k)) for k in g.index])
     ax.set_ylabel("Total Waste (qty)")
     ax.set_title("Pareto: Kontribusi Waste per KETERANGAN", pad=12)
 
-    # Cumulative line
+    # Cumulative line (twin axis)
     ax2.plot(range(len(g)), cum.values, color=PALETTE_SECONDARY, marker="o", linewidth=2, markersize=5)
-    ax2.set_ylabel("Cumulative %", color=PALETTE_SECONDARY)
+    # Pattern A: labelpad to give ax2.ylabel breathing room
+    ax2.set_ylabel("Cumulative %", color=PALETTE_SECONDARY, labelpad=12)
     ax2.set_ylim(0, 105)
-    ax2.tick_params(axis="y", colors=PALETTE_SECONDARY)
+    ax2.tick_params(axis="y", colors=PALETTE_SECONDARY, labelsize=8)
     ax2.axhline(80, color="#94a3b8", linestyle="--", linewidth=0.8, alpha=0.7)
     ax2.text(len(g) - 1, 82, "80%", ha="right", fontsize=8, color="#94a3b8")
 
-    # Label di atas bar
+    # Label di atas bar (Pattern D: short format + headroom)
     for i, v in enumerate(g.values):
-        ax.text(i, v, f"{v:.0f}", ha="center", va="bottom", fontsize=7, color="#0f172a")
+        ax.text(i, v, fmt_number_short(v), ha="center", va="bottom",
+                fontsize=7, color="#0f172a")
 
-    fig.tight_layout()
+    add_ylim_headroom(ax)
+    # Pattern A + E: rotation 30 (less than 45 because labels are wrapped to 2 lines)
+    apply_layout(fig, ax, rotate_x=True, rotation=30, bottom_pad=0.20)
     return fig
 
 
@@ -249,10 +322,10 @@ def chart_pareto_keterangan(df: pd.DataFrame) -> Figure:
 
 def chart_heatmap_cabang_item(df: pd.DataFrame) -> Figure:
     """Heatmap matrix Cabang × Item, value = TOTAL waste."""
-    fig = Figure(figsize=(8, 5), dpi=100)
-    ax = fig.add_subplot(111)
-
+    # Validate input first (so we can size the figure dynamically based on data)
     if "NAMA RESTO" not in df.columns or "NAMA BARANG" not in df.columns or "TOTAL" not in df.columns or df.empty:
+        fig = Figure(figsize=(8, 5), dpi=100)
+        ax = fig.add_subplot(111)
         ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
         ax.set_axis_off()
         return fig
@@ -262,33 +335,49 @@ def chart_heatmap_cabang_item(df: pd.DataFrame) -> Figure:
         values="TOTAL", aggfunc="sum", fill_value=0,
     )
     if pivot.empty:
+        fig = Figure(figsize=(8, 5), dpi=100)
+        ax = fig.add_subplot(111)
         ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
         ax.set_axis_off()
         return fig
 
-    # Urutkan item by total desc
+    # Urutkan item by total desc + paginate to top 30 (Pattern G)
     pivot = pivot.loc[pivot.sum(axis=1).sort_values(ascending=False).index]
+    max_items = 30
+    pivot = pivot.head(max_items)
+    n_items = len(pivot)
+    # Pattern G: dynamic figsize based on items shown
+    fig_w, fig_h = dynamic_figsize(n_items, base_w=8, per_item_h=0.35, min_h=4.0, max_h=14)
+    fig = Figure(figsize=(fig_w, fig_h), dpi=100)
+    ax = fig.add_subplot(111)
 
     im = ax.imshow(pivot.values, aspect="auto", cmap="YlOrRd")
     ax.set_xticks(range(len(pivot.columns)))
-    ax.set_xticklabels(pivot.columns.astype(str), rotation=30, ha="right")
+    # Pattern C: abbreviate cabang codes
+    ax.set_xticklabels([fmt_cabang(str(c)) for c in pivot.columns])
     ax.set_yticks(range(len(pivot.index)))
-    ax.set_yticklabels(pivot.index.astype(str))
+    # Pattern C: wrap long item names — use shorter width for heatmap (15 chars, 2 lines max)
+    ax.set_yticklabels([fmt_item(str(name), width=15, max_lines=2) for name in pivot.index])
     ax.set_title("Heatmap Waste per Cabang × Item", pad=12)
     ax.set_xlabel("Cabang")
     ax.set_ylabel("Item")
 
-    # Annotate
+    # Pattern F: adaptive text color (white on dark cells, black on light)
+    # Only annotate cells with significant values (> 20% of max) to avoid overlap
+    max_val = float(pivot.values.max()) if pivot.values.size > 0 else 0.0
+    annotation_threshold = max_val * 0.20  # only show annotations for cells > 20% of max
+    text_threshold = max_val * 0.6  # white text above 60% of max
     for i in range(len(pivot.index)):
         for j in range(len(pivot.columns)):
             v = pivot.values[i, j]
-            if v > 0:
-                color = "white" if v > pivot.values.max() * 0.6 else "#0f172a"
-                ax.text(j, i, f"{v:.0f}", ha="center", va="center",
-                        fontsize=7, color=color, fontweight="bold")
+            if v > annotation_threshold:  # only annotate significant cells
+                color = adaptive_text_color(v, text_threshold, max_val)
+                ax.text(j, i, fmt_number_short(v, decimals=0), ha="center", va="center",
+                        fontsize=6, color=color, fontweight="bold")
 
+    # Colorbar after apply_layout so it sits in the remaining right margin
+    apply_layout(fig, ax, rotate_x=True, rotation=90, bottom_pad=0.20, left_pad=0.28, right_pad=0.92, x_fontsize=7)
     fig.colorbar(im, ax=ax, label="Total Waste (qty)", shrink=0.8)
-    fig.tight_layout()
     return fig
 
 
@@ -298,11 +387,11 @@ def chart_heatmap_cabang_item(df: pd.DataFrame) -> Figure:
 
 def chart_reasons_frequency(df: pd.DataFrame) -> Figure:
     """Bar chart frekuensi ANOMALY REASONS (split by ' | ')."""
-    fig = Figure(figsize=(7, 4.5), dpi=100)
-    ax = fig.add_subplot(111)
-
     if "ANOMALY REASONS" not in df.columns or df.empty:
-        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center", color=PALETTE_NEUTRAL)
+        fig = Figure(figsize=(7, 4.5), dpi=100)
+        ax = fig.add_subplot(111)
+        ax.text(0.5, 0.5, "Tidak ada alasan anomali terdeteksi",
+                ha="center", va="center", color=PALETTE_NEUTRAL)
         ax.set_axis_off()
         return fig
 
@@ -315,20 +404,32 @@ def chart_reasons_frequency(df: pd.DataFrame) -> Figure:
                     counter[r] += 1
 
     if not counter:
-        ax.text(0.5, 0.5, "Tidak ada alasan anomali terdeteksi", ha="center", va="center", color=PALETTE_NEUTRAL)
+        fig = Figure(figsize=(7, 4.5), dpi=100)
+        ax = fig.add_subplot(111)
+        ax.text(0.5, 0.5, "Tidak ada alasan anomali terdeteksi",
+                ha="center", va="center", color=PALETTE_NEUTRAL)
         ax.set_axis_off()
         return fig
 
     items = sorted(counter.items(), key=lambda x: x[1])
-    labels = [x[0] for x in items]
+    # Pattern C: wrap reason text on y-axis
+    labels = [fmt_reason(x[0]) for x in items]
     values = [x[1] for x in items]
+    # Pattern G: dynamic figsize based on number of reasons
+    fig_w, fig_h = dynamic_figsize(len(items), base_w=7.0, per_item_h=0.4, min_h=4.0, max_h=14.0)
+    fig = Figure(figsize=(fig_w, fig_h), dpi=100)
+    ax = fig.add_subplot(111)
     bars = ax.barh(labels, values, color=PALETTE_ACCENT, edgecolor="white", linewidth=1.5)
     for bar, val in zip(bars, values):
         ax.text(bar.get_width(), bar.get_y() + bar.get_height()/2,
-                f" {val}", ha="left", va="center", fontsize=8, fontweight="bold", color="#0f172a")
+                f" {val}", ha="left", va="center", fontsize=8,
+                fontweight="bold", color="#0f172a")
     ax.set_title("Frekuensi Penyebab Anomali", pad=12)
     ax.set_xlabel("Jumlah Baris")
-    fig.tight_layout()
+    # Pattern D: headroom for data labels
+    add_xlim_headroom(ax, factor=1.10, side="right")
+    # Pattern A: extra left padding for wrapped reason labels
+    apply_layout(fig, ax, left_pad=0.30, bottom_pad=0.12)
     return fig
 
 
@@ -367,13 +468,15 @@ def chart_scatter_max_total(df: pd.DataFrame) -> Figure:
         max_xy = 1.0
     else:
         max_xy = float(max_val) * 1.05
-    ax.plot([0, max_xy], [0, max_xy], "--", color="#94a3b8", linewidth=0.8, alpha=0.7, label="MAX = TOTAL (single-day)")
+    ax.plot([0, max_xy], [0, max_xy], "--", color="#94a3b8", linewidth=0.8, alpha=0.7,
+            label="MAX = TOTAL (single-day)")
 
     ax.set_title("Scatter: MAX vs TOTAL — Deteksi Outlier", pad=12)
     ax.set_xlabel("TOTAL Waste (qty)")
     ax.set_ylabel("MAX Waste (qty, single day)")
-    ax.legend(loc="upper left", fontsize=8)
-    fig.tight_layout()
+    # Pattern B: legend outside, lower-right (so it doesn't cover high-value points)
+    place_legend_outside(ax, loc="lower right", bbox_to_anchor=(1.02, 0.0))
+    apply_layout(fig, ax, left_pad=0.16, bottom_pad=0.14, right_pad=0.75)
     return fig
 
 
@@ -415,7 +518,7 @@ def chart_box_total_per_jenis(df: pd.DataFrame) -> Figure:
     ax.set_title("Distribusi TOTAL Waste per JENIS", pad=12)
     ax.set_ylabel("TOTAL Waste (qty)")
     ax.set_xlabel("JENIS")
-    fig.tight_layout()
+    apply_layout(fig, ax, left_pad=0.16, bottom_pad=0.15, top_pad=0.88)
     return fig
 
 
@@ -440,7 +543,8 @@ def chart_score_per_cabang(df: pd.DataFrame) -> Figure:
     b1 = ax.bar(x - w/2, g["mean"], w, label="Rata-rata", color=PALETTE_ACCENT, edgecolor="white", linewidth=1.5)
     b2 = ax.bar(x + w/2, g["max"], w, label="Max", color=PALETTE_SECONDARY, edgecolor="white", linewidth=1.5)
     ax.set_xticks(x)
-    ax.set_xticklabels(g["NAMA RESTO"].astype(str), rotation=20)
+    # Pattern C: abbreviate cabang codes
+    ax.set_xticklabels([fmt_cabang(str(c)) for c in g["NAMA RESTO"]])
     ax.set_title("Anomali Score per Cabang (Avg vs Max)", pad=12)
     ax.set_ylabel("Anomali Score")
     ax.set_xlabel("Cabang")
@@ -449,7 +553,10 @@ def chart_score_per_cabang(df: pd.DataFrame) -> Figure:
     ax.axhline(8, color=PALETTE_STATUS["Prioritas Tinggi"], linestyle="--", linewidth=0.8, alpha=0.5)
     ax.axhline(5, color=PALETTE_STATUS["Potensi Anomali"], linestyle="--", linewidth=0.8, alpha=0.5)
     ax.axhline(3, color=PALETTE_STATUS["Perlu Review"], linestyle="--", linewidth=0.8, alpha=0.5)
-    fig.tight_layout()
+    # Pattern D: headroom for tallest bar (Max)
+    add_ylim_headroom(ax)
+    # Pattern A + B + E: margins, legend outside, rotation
+    apply_layout(fig, ax, rotate_x=True, legend_outside=True, bottom_pad=0.22, right_pad=0.75)
     return fig
 
 
@@ -470,12 +577,16 @@ def chart_kategori_per_cabang(df: pd.DataFrame) -> Figure:
     pivot = pd.crosstab(df["NAMA RESTO"], df["KATEGORI ANOMALI"])
     colors = PALETTE_KATEGORI[:len(pivot.columns)]
     pivot.plot(kind="bar", stacked=True, ax=ax, color=colors, edgecolor="white", linewidth=1)
+    # Pattern C: abbreviate cabang codes
+    ax.set_xticklabels([fmt_cabang(str(idx)) for idx in pivot.index])
     ax.set_title("Kategori Anomali per Cabang", pad=12)
     ax.set_ylabel("Jumlah Baris")
     ax.set_xlabel("Cabang")
-    ax.legend(title="Kategori", loc="upper right")
-    ax.tick_params(axis="x", rotation=20)
-    fig.tight_layout()
+    ax.legend(title="Kategori")
+    # Pattern A + B + E: margins, legend outside, rotation
+    apply_layout(fig, ax, rotate_x=True, legend_outside=True, bottom_pad=0.22, right_pad=0.75)
+    # Restore legend title
+    _restore_legend_title(ax, "Kategori")
     return fig
 
 
@@ -495,12 +606,15 @@ def chart_jenis_donut(df: pd.DataFrame) -> Figure:
 
     counts = df["JENIS"].value_counts()
     colors = PALETTE_KATEGORI[:len(counts)]
+    # Pattern D + C: closer pct, count moved to legend
     wedges, texts, autotexts = ax.pie(
         counts.values,
         labels=counts.index.astype(str),
         colors=colors,
-        autopct=lambda pct: f"{pct:.1f}%\n({int(pct/100*counts.sum())})",
+        autopct=lambda pct: f"{pct:.1f}%",
         startangle=90,
+        pctdistance=0.72,
+        labeldistance=1.08,
         wedgeprops=dict(width=0.4, edgecolor="white", linewidth=2),
         textprops=dict(fontsize=9, color="#1e293b", fontweight="bold"),
     )
@@ -508,7 +622,21 @@ def chart_jenis_donut(df: pd.DataFrame) -> Figure:
         at.set_color("white")
         at.set_fontsize(8)
     ax.set_title("Distribusi JENIS Waste", pad=12)
-    fig.tight_layout()
+    # Pattern B: legend outside with counts
+    ax.legend(
+        wedges,
+        [f"{s} ({c})" for s, c in zip(counts.index, counts.values)],
+        loc="center left",
+        bbox_to_anchor=(0.92, 0.5),
+        fontsize=8,
+        frameon=True,
+        edgecolor="#cbd5e1",
+        facecolor="white",
+        framealpha=0.95,
+    )
+    # Donut: keep tight_layout (rule 6) + manual margins for legend
+    fig.tight_layout(pad=2.0)
+    fig.subplots_adjust(top=0.92, right=0.70)
     return fig
 
 

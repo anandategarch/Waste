@@ -26,6 +26,21 @@ from .charts import (
     PALETTE_STATUS, PALETTE_KATEGORI, PALETTE_ACCENT, PALETTE_SECONDARY, PALETTE_NEUTRAL,
 )
 
+# v2.3.1 helpers — fix semua UI/UX issues (Pattern A-H)
+from .chart_helpers import (
+    apply_layout,
+    fmt_cabang,
+    fmt_item,
+    fmt_reason,
+    place_legend_outside,
+    add_ylim_headroom,
+    add_xlim_headroom,
+    dynamic_figsize,
+    adaptive_text_color,
+    fmt_number_short,
+    fmt_number_comma,
+)
+
 
 FilterCallback = Callable[[str, str | None], None]
 """Callback signature: (filter_key, value) -> None. value=None artinya clear filter."""
@@ -49,6 +64,37 @@ def _styled_axes(fig: Figure):
     ax.title.set_fontweight("bold")
     ax.title.set_fontsize(10)
     return ax
+
+
+def _wrap_title(title: str, max_chars: int = 40) -> str:
+    """Wrap long titles containing cabang names with newline.
+
+    Pattern C: long titles overflow the figure when cabang codes are long.
+    Splits at the space closest to the midpoint (single split, 2 lines max).
+    """
+    if len(title) <= max_chars:
+        return title
+    mid = len(title) // 2
+    left_space = title.rfind(" ", 0, mid)
+    right_space = title.find(" ", mid)
+    if left_space == -1 and right_space == -1:
+        return title
+    if left_space == -1:
+        split_at = right_space
+    elif right_space == -1:
+        split_at = left_space
+    else:
+        split_at = left_space if (mid - left_space) <= (right_space - mid) else right_space
+    return title[:split_at] + "\n" + title[split_at + 1:]
+
+
+def _restore_legend_title(ax, title: str | None) -> None:
+    """Set title on existing legend (place_legend_outside doesn't preserve it)."""
+    if not title:
+        return
+    leg = ax.get_legend()
+    if leg is not None:
+        leg.set_title(title)
 
 
 # ============================================================
@@ -90,8 +136,10 @@ def chart_status_bar_interactive(
                 fontweight="bold", color="#0f172a")
     ax.set_title("Klik Bar untuk Filter Status", pad=10)
     ax.set_ylabel("Jumlah Baris")
-    ax.tick_params(axis="x", rotation=15)
-    fig.tight_layout()
+    # Pattern D: headroom so data labels don't clip
+    add_ylim_headroom(ax)
+    # Pattern A + E: rotate status labels (they're long like "Prioritas Tinggi")
+    apply_layout(fig, ax, rotate_x=True, rotation=20, bottom_pad=0.22, top_pad=0.88)
 
     # Wire click event
     if on_click:
@@ -117,7 +165,10 @@ def chart_cabang_bar_interactive(
     active_filter: tuple[str, str | None] | None = None,
 ) -> Figure:
     """Bar chart waste per NAMA RESTO. Klik bar → filter by cabang."""
-    fig = Figure(figsize=(6, 3.2), dpi=100)
+    # Pattern G: wider figure for many cabangs
+    n_cabangs = df["NAMA RESTO"].nunique() if "NAMA RESTO" in df.columns else 5
+    fig_w = max(6.0, min(12.0, 0.4 * n_cabangs + 3))
+    fig = Figure(figsize=(fig_w, 3.5), dpi=100)
     ax = _styled_axes(fig)
 
     if "NAMA RESTO" not in df.columns or "TOTAL" not in df.columns or df.empty:
@@ -135,16 +186,23 @@ def chart_cabang_bar_interactive(
         else:
             colors.append(PALETTE_ACCENT)
 
-    bars = ax.bar(g.index.astype(str), g.values, color=colors,
+    # Pattern C: abbreviate cabang codes
+    cabang_labels = [fmt_cabang(str(c)) for c in g.index]
+    bars = ax.bar(cabang_labels, g.values, color=colors,
                   edgecolor="white", linewidth=1.5)
+    # Pattern D: data labels with short format, rotate 90° if >10 bars to prevent overlap
+    label_rotation = 90 if len(bars) > 10 else 0
     for bar, val in zip(bars, g.values):
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
-                f"{val:.0f}", ha="center", va="bottom", fontsize=8,
-                fontweight="bold", color="#0f172a")
+                fmt_number_short(val), ha="center", va="bottom", fontsize=7,
+                fontweight="bold", color="#0f172a",
+                rotation=label_rotation)
     ax.set_title("Klik Bar untuk Filter Cabang", pad=10)
     ax.set_ylabel("Total Waste")
-    ax.tick_params(axis="x", rotation=20)
-    fig.tight_layout()
+    # Pattern D: 20% headroom for rotated labels
+    add_ylim_headroom(ax, factor=1.20)
+    # Pattern A + E: rotate x labels
+    apply_layout(fig, ax, rotate_x=True, bottom_pad=0.22, top_pad=0.88)
 
     if on_click:
         def _on_pick(event):
@@ -169,7 +227,9 @@ def chart_top_items_interactive(
     top_n: int = 10,
 ) -> Figure:
     """Horizontal bar top items. Klik → filter by NAMA BARANG."""
-    fig = Figure(figsize=(6, 4), dpi=100)
+    # Pattern G: dynamic figsize based on number of items
+    fig_w, fig_h = dynamic_figsize(top_n, base_w=6.0, per_item_h=0.4, min_h=4.0, max_h=10.0)
+    fig = Figure(figsize=(fig_w, fig_h), dpi=100)
     ax = _styled_axes(fig)
 
     if "NAMA BARANG" not in df.columns or "TOTAL" not in df.columns or df.empty:
@@ -188,15 +248,21 @@ def chart_top_items_interactive(
         else:
             colors.append(PALETTE_SECONDARY)
 
-    bars = ax.barh(g.index.astype(str), g.values, color=colors,
+    # Pattern C: wrap long item names
+    item_labels = [fmt_item(name) for name in g.index.astype(str)]
+    bars = ax.barh(item_labels, g.values, color=colors,
                    edgecolor="white", linewidth=1.5)
+    # Pattern D: data labels with short format
     for bar, val in zip(bars, g.values):
         ax.text(bar.get_width(), bar.get_y() + bar.get_height()/2,
-                f" {val:.1f}", ha="left", va="center", fontsize=8,
+                f" {fmt_number_short(val)}", ha="left", va="center", fontsize=8,
                 fontweight="bold", color="#0f172a")
     ax.set_title(f"Top {top_n} Item — Klik untuk Filter", pad=10)
     ax.set_xlabel("Total Waste")
-    fig.tight_layout()
+    # Pattern D: headroom for data labels
+    add_xlim_headroom(ax, factor=1.10, side="right")
+    # Pattern A: extra left padding for wrapped item labels
+    apply_layout(fig, ax, left_pad=0.30, bottom_pad=0.12, top_pad=0.88)
 
     if on_click:
         def _on_pick(event):
@@ -243,12 +309,18 @@ def chart_keterangan_bar_interactive(
     bars = ax.bar(range(len(g)), g.values, color=colors,
                   edgecolor="white", linewidth=1.5)
     ax.set_xticks(range(len(g)))
-    ax.set_xticklabels(g.index.astype(str), rotation=30, ha="right", fontsize=8)
+    # Pattern C: wrap long KETERANGAN reasons
+    ax.set_xticklabels([fmt_reason(str(k)) for k in g.index], fontsize=8)
+    # Pattern D: data labels with short format
     for i, val in enumerate(g.values):
-        ax.text(i, val, f"{val:.0f}", ha="center", va="bottom", fontsize=7, color="#0f172a")
+        ax.text(i, val, fmt_number_short(val), ha="center", va="bottom",
+                fontsize=7, color="#0f172a")
     ax.set_title("Top Alasan — Klik Bar untuk Filter", pad=10)
     ax.set_ylabel("Total Waste")
-    fig.tight_layout()
+    # Pattern D: headroom
+    add_ylim_headroom(ax)
+    # Pattern A + E: rotation 30 (wrapped labels)
+    apply_layout(fig, ax, rotate_x=True, rotation=30, bottom_pad=0.22, top_pad=0.88)
 
     if on_click:
         def _on_pick(event):
@@ -290,10 +362,13 @@ def chart_jenis_donut_interactive(
             base = "#cbd5e1"
         colors.append(base)
 
+    # Pattern D + C: closer pct, count moved to legend
     wedges, texts, autotexts = ax.pie(
         counts.values, labels=counts.index.astype(str), colors=colors,
-        autopct=lambda pct: f"{pct:.1f}%\n({int(round(pct/100*counts.sum()))})",
+        autopct=lambda pct: f"{pct:.1f}%",
         startangle=90,
+        pctdistance=0.72,
+        labeldistance=1.08,
         wedgeprops=dict(width=0.45, edgecolor="white", linewidth=2),
         textprops=dict(fontsize=9, color="#1e293b", fontweight="bold"),
     )
@@ -301,7 +376,21 @@ def chart_jenis_donut_interactive(
         at.set_color("white")
         at.set_fontsize(8)
     ax.set_title("JENIS — Klik Slice untuk Filter", pad=10)
-    fig.tight_layout()
+    # Pattern B: legend outside with counts
+    ax.legend(
+        wedges,
+        [f"{s} ({c})" for s, c in zip(counts.index, counts.values)],
+        loc="center left",
+        bbox_to_anchor=(0.92, 0.5),
+        fontsize=8,
+        frameon=True,
+        edgecolor="#cbd5e1",
+        facecolor="white",
+        framealpha=0.95,
+    )
+    # Donut: keep tight_layout (rule 6) + manual margins for legend
+    fig.tight_layout(pad=2.0)
+    fig.subplots_adjust(top=0.92, right=0.70)
 
     if on_click:
         def _on_pick(event):
@@ -348,14 +437,17 @@ def chart_score_per_cabang_interactive(
     b1 = ax.bar(x - w/2, g["mean"], w, label="Rata-rata", color=colors_avg, edgecolor="white", linewidth=1.5)
     b2 = ax.bar(x + w/2, g["max"], w, label="Max", color=colors_max, edgecolor="white", linewidth=1.5)
     ax.set_xticks(x)
-    ax.set_xticklabels(g["NAMA RESTO"].astype(str), rotation=20, fontsize=8)
+    # Pattern C: abbreviate cabang codes
+    ax.set_xticklabels([fmt_cabang(str(c)) for c in g["NAMA RESTO"]], fontsize=8)
     ax.set_title("Anomali Score per Cabang — Klik untuk Filter", pad=10)
     ax.set_ylabel("Score")
-    ax.legend(fontsize=8, loc="upper right")
     ax.axhline(8, color=PALETTE_STATUS["Prioritas Tinggi"], linestyle="--", linewidth=0.8, alpha=0.5)
     ax.axhline(5, color=PALETTE_STATUS["Potensi Anomali"], linestyle="--", linewidth=0.8, alpha=0.5)
     ax.axhline(3, color=PALETTE_STATUS["Perlu Review"], linestyle="--", linewidth=0.8, alpha=0.5)
-    fig.tight_layout()
+    # Pattern D: headroom for max bar data labels
+    add_ylim_headroom(ax)
+    # Pattern A + B + E: margins, legend outside, rotation
+    apply_layout(fig, ax, rotate_x=True, legend_outside=True, bottom_pad=0.22, right_pad=0.75, top_pad=0.88)
 
     if on_click:
         def _on_pick(event):
@@ -399,18 +491,24 @@ def chart_compare_total_waste(
     w = 0.38
     b1 = ax.bar(x - w/2, a_vals, w, label=cabang_a, color=PALETTE_ACCENT, edgecolor="white", linewidth=1.5)
     b2 = ax.bar(x + w/2, b_vals, w, label=cabang_b, color=PALETTE_SECONDARY, edgecolor="white", linewidth=1.5)
+    # Pattern D: data labels with short format
     for bar, val in zip(b1, a_vals):
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
-                f"{val:.0f}", ha="center", va="bottom", fontsize=8, fontweight="bold", color=PALETTE_ACCENT)
+                fmt_number_short(val), ha="center", va="bottom", fontsize=8,
+                fontweight="bold", color=PALETTE_ACCENT)
     for bar, val in zip(b2, b_vals):
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
-                f"{val:.0f}", ha="center", va="bottom", fontsize=8, fontweight="bold", color=PALETTE_SECONDARY)
+                fmt_number_short(val), ha="center", va="bottom", fontsize=8,
+                fontweight="bold", color=PALETTE_SECONDARY)
     ax.set_xticks(x)
     ax.set_xticklabels(jenis_list)
-    ax.set_title(f"Total Waste per JENIS — {cabang_a} vs {cabang_b}", pad=10)
+    # Pattern C: wrap long title with cabang names
+    ax.set_title(_wrap_title(f"Total Waste per JENIS — {cabang_a} vs {cabang_b}"), pad=10)
     ax.set_ylabel("Total Waste")
-    ax.legend(fontsize=9, loc="upper right")
-    fig.tight_layout()
+    # Pattern D: headroom for data labels
+    add_ylim_headroom(ax)
+    # Pattern A + B: margins + legend outside
+    apply_layout(fig, ax, legend_outside=True, bottom_pad=0.18, right_pad=0.75, top_pad=0.85)
     return fig
 
 
@@ -441,17 +539,23 @@ def chart_compare_status(
     for bar, val in zip(b1, a_vals):
         if val > 0:
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
-                    f"{val}", ha="center", va="bottom", fontsize=8, fontweight="bold", color=PALETTE_ACCENT)
+                    fmt_number_short(val), ha="center", va="bottom", fontsize=8,
+                    fontweight="bold", color=PALETTE_ACCENT)
     for bar, val in zip(b2, b_vals):
         if val > 0:
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
-                    f"{val}", ha="center", va="bottom", fontsize=8, fontweight="bold", color=PALETTE_SECONDARY)
+                    fmt_number_short(val), ha="center", va="bottom", fontsize=8,
+                    fontweight="bold", color=PALETTE_SECONDARY)
     ax.set_xticks(x)
-    ax.set_xticklabels(statuses, fontsize=8, rotation=15)
-    ax.set_title(f"Status Anomali — {cabang_a} vs {cabang_b}", pad=10)
+    ax.set_xticklabels(statuses, fontsize=8)
+    # Pattern C: wrap long title with cabang names
+    ax.set_title(_wrap_title(f"Status Anomali — {cabang_a} vs {cabang_b}"), pad=10)
     ax.set_ylabel("Jumlah Baris")
-    ax.legend(fontsize=9, loc="upper right")
-    fig.tight_layout()
+    # Pattern D: headroom
+    add_ylim_headroom(ax)
+    # Pattern A + B + E: rotation + legend outside + margins
+    apply_layout(fig, ax, rotate_x=True, rotation=15, legend_outside=True,
+                 bottom_pad=0.22, right_pad=0.75, top_pad=0.85)
     return fig
 
 
@@ -462,7 +566,9 @@ def chart_compare_top_items(
     top_n: int = 8,
 ) -> Figure:
     """Horizontal grouped bar: top items by total waste, A vs B side-by-side."""
-    fig = Figure(figsize=(7, 4.5), dpi=100)
+    # Pattern G: dynamic figsize based on top_n
+    fig_w, fig_h = dynamic_figsize(top_n, base_w=7.0, per_item_h=0.45, min_h=4.0, max_h=10.0)
+    fig = Figure(figsize=(fig_w, fig_h), dpi=100)
     ax = _styled_axes(fig)
 
     if "NAMA RESTO" not in df.columns or "NAMA BARANG" not in df.columns or "TOTAL" not in df.columns:
@@ -482,11 +588,16 @@ def chart_compare_top_items(
     b1 = ax.barh(y - h/2, a_vals, h, label=cabang_a, color=PALETTE_ACCENT, edgecolor="white", linewidth=1.5)
     b2 = ax.barh(y + h/2, b_vals, h, label=cabang_b, color=PALETTE_SECONDARY, edgecolor="white", linewidth=1.5)
     ax.set_yticks(y)
-    ax.set_yticklabels(all_items.index.astype(str), fontsize=8)
-    ax.set_title(f"Top {top_n} Item — {cabang_a} vs {cabang_b}", pad=10)
+    # Pattern C: wrap long item names
+    ax.set_yticklabels([fmt_item(str(name)) for name in all_items.index], fontsize=8)
+    # Pattern C: wrap long title with cabang names
+    ax.set_title(_wrap_title(f"Top {top_n} Item — {cabang_a} vs {cabang_b}"), pad=10)
     ax.set_xlabel("Total Waste")
-    ax.legend(fontsize=9, loc="lower right")
-    fig.tight_layout()
+    # Pattern D: headroom for data labels (none here but keep ratio consistent)
+    add_xlim_headroom(ax, factor=1.10, side="right")
+    # Pattern A + B: legend outside + left padding for wrapped labels
+    apply_layout(fig, ax, legend_outside=True, left_pad=0.30, bottom_pad=0.12,
+                 right_pad=0.75, top_pad=0.88)
     return fig
 
 
@@ -529,15 +640,21 @@ def chart_compare_score(
     b2 = ax.bar(x + w/2, b_vals, w, label=cabang_b, color=PALETTE_SECONDARY, edgecolor="white", linewidth=1.5)
     for bar, val in zip(b1, a_vals):
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
-                f"{val:.1f}", ha="center", va="bottom", fontsize=7, fontweight="bold", color=PALETTE_ACCENT)
+                f"{val:.1f}", ha="center", va="bottom", fontsize=7,
+                fontweight="bold", color=PALETTE_ACCENT)
     for bar, val in zip(b2, b_vals):
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
-                f"{val:.1f}", ha="center", va="bottom", fontsize=7, fontweight="bold", color=PALETTE_SECONDARY)
+                f"{val:.1f}", ha="center", va="bottom", fontsize=7,
+                fontweight="bold", color=PALETTE_SECONDARY)
     ax.set_xticks(x)
-    ax.set_xticklabels(metrics, fontsize=8, rotation=10)
-    ax.set_title(f"Metrics Comparison — {cabang_a} vs {cabang_b}", pad=10)
-    ax.legend(fontsize=9, loc="upper right")
-    fig.tight_layout()
+    ax.set_xticklabels(metrics, fontsize=8)
+    # Pattern C: wrap long title with cabang names
+    ax.set_title(_wrap_title(f"Metrics Comparison — {cabang_a} vs {cabang_b}"), pad=10)
+    # Pattern D: headroom
+    add_ylim_headroom(ax)
+    # Pattern A + B + E: rotation + legend outside + margins
+    apply_layout(fig, ax, rotate_x=True, rotation=15, legend_outside=True,
+                 bottom_pad=0.22, right_pad=0.75, top_pad=0.85)
     return fig
 
 
@@ -621,7 +738,7 @@ def chart_quadrant_scatter(
     else:
         item_df["_size"] = 50
 
-    # Plot each quadrant
+    # Plot each quadrant — Pattern C: wrap long legend labels with fmt_reason
     for quad, color in quadrant_colors.items():
         sub = item_df[item_df["_quadrant"] == quad]
         if sub.empty:
@@ -630,32 +747,44 @@ def chart_quadrant_scatter(
             sub["_prevalence"] * 100, sub["_persistence"] * 100,
             s=sub["_size"], c=color, alpha=0.65,
             edgecolors="white", linewidth=1.5,
-            label=quadrant_labels[quad],
+            label=fmt_reason(quadrant_labels[quad], width=30),
         )
 
     # Threshold reference lines
     ax.axvline(threshold * 100, color="#94a3b8", linestyle="--", linewidth=1, alpha=0.6)
     ax.axhline(threshold * 100, color="#94a3b8", linestyle="--", linewidth=1, alpha=0.6)
 
-    # Annotate top 5 items by totalWaste
+    # Annotate top 5 items by totalWaste — very short labels, adjust position to stay in plot
     if "NAMA BARANG" in item_df.columns and "totalWaste" in item_df.columns:
         top_items = item_df.nlargest(5, "totalWaste")
         for _, row in top_items.iterrows():
-            name = str(row["NAMA BARANG"])[:15]
+            name = str(row["NAMA BARANG"])[:8]
+            x_pos = row["_prevalence"] * 100
+            y_pos = row["_persistence"] * 100
+            # If point is near right edge, place label to the LEFT; else to the right
+            if x_pos > 70:
+                xytext = (-25, 10)
+                ha = "right"
+            else:
+                xytext = (12, 10)
+                ha = "left"
             ax.annotate(
                 name,
-                (row["_prevalence"] * 100, row["_persistence"] * 100),
-                xytext=(5, 5), textcoords="offset points",
-                fontsize=7, color="#0f172a", fontweight="bold",
+                (x_pos, y_pos),
+                xytext=xytext, textcoords="offset points",
+                fontsize=6, color="#0f172a", fontweight="bold",
+                ha=ha,
+                arrowprops=dict(arrowstyle="-", color="#94a3b8", lw=0.5),
             )
 
     ax.set_xlabel("Prevalence (% cabang yang punya waste)", fontsize=9)
     ax.set_ylabel("Persistence (% hari aktif)", fontsize=9)
-    ax.set_title("Quadrant: Sistemik vs Insiden — klik untuk detail", pad=10)
-    ax.set_xlim(-5, 105)
-    ax.set_ylim(-5, 105)
-    ax.legend(fontsize=8, loc="upper right", framealpha=0.9)
-    fig.tight_layout()
+    ax.set_title("Quadrant: Sistemik vs Insiden", pad=10)
+    ax.set_xlim(-5, 115)  # extra right margin for annotations
+    ax.set_ylim(-5, 115)
+    # Pattern B: legend truly outside, right side
+    place_legend_outside(ax, loc="center left", bbox_to_anchor=(1.02, 0.5))
+    apply_layout(fig, ax, left_pad=0.12, bottom_pad=0.12, right_pad=0.65, top_pad=0.88)
     return fig
 
 
@@ -670,7 +799,9 @@ def chart_rate_league(
     """Horizontal bar: ranking waste_qty/BOM per item.
     Items with waste rate >= 5% dianggap 'blatant'.
     """
-    fig = Figure(figsize=(7, 5), dpi=100)
+    # Pattern G: dynamic figsize based on top_n
+    fig_w, fig_h = dynamic_figsize(top_n, base_w=7.0, per_item_h=0.42, min_h=4.5, max_h=14.0)
+    fig = Figure(figsize=(fig_w, fig_h), dpi=100)
     ax = _styled_axes(fig)
 
     if "NAMA BARANG" not in df.columns or "TOTAL BOM" not in df.columns or "TOTAL" not in df.columns:
@@ -708,14 +839,17 @@ def chart_rate_league(
         else:
             colors.append("#16a34a")
 
+    # Pattern C: wrap long item names with fmt_item
+    item_labels = [fmt_item(name) for name in item_agg["NAMA BARANG"].astype(str)]
     bars = ax.barh(
-        item_agg["NAMA BARANG"].astype(str),
+        item_labels,
         item_agg["waste_rate"],
         color=colors, edgecolor="white", linewidth=1.5,
     )
+    # Pattern D: data labels with short-formatted numbers
     for bar, val, bom, wst in zip(bars, item_agg["waste_rate"], item_agg["total_bom"], item_agg["total_waste"]):
         ax.text(bar.get_width(), bar.get_y() + bar.get_height()/2,
-                f" {val:.1f}% (waste {wst:.0f} / bom {bom:.0f})",
+                f" {val:.1f}% (waste {fmt_number_short(wst)} / bom {fmt_number_short(bom)})",
                 ha="left", va="center", fontsize=7, fontweight="bold", color="#0f172a")
 
     # Reference line at 5%
@@ -724,8 +858,11 @@ def chart_rate_league(
 
     ax.set_xlabel("Waste Rate (%) = Waste Qty / BOM Qty × 100", fontsize=9)
     ax.set_title(f"Top {top_n} Waste Rate League — per bahan", pad=10)
-    ax.legend(fontsize=8, loc="lower right")
-    fig.tight_layout()
+    # Pattern D: extra headroom for long "(waste X / bom Y)" labels
+    add_xlim_headroom(ax, factor=1.25, side="right")
+    # Pattern A + B: legend outside + bottom padding + left padding for wrapped items
+    apply_layout(fig, ax, legend_outside=True, bottom_pad=0.16,
+                 left_pad=0.30, right_pad=0.75, top_pad=0.88)
     return fig
 
 
@@ -767,6 +904,8 @@ def chart_fingerprint_distribution(
     ax.set_xticklabels(labels[:len(counts)], fontsize=8)
     ax.set_ylabel("Jumlah Item", fontsize=9)
     ax.set_title("Waste Fingerprint — Distribusi per Class", pad=10)
-    fig.tight_layout()
+    # Pattern D: headroom for top data labels
+    add_ylim_headroom(ax)
+    # Pattern A + H: margins + labelpad
+    apply_layout(fig, ax, left_pad=0.14, bottom_pad=0.18, top_pad=0.88)
     return fig
-
