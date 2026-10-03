@@ -18,7 +18,7 @@ pyplot global state (aman untuk multi-embed di Tkinter).
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any
+from typing import Any, Callable
 
 # Backend di-set oleh ui_app.py (TkAgg) SEBELUM import modul ini.
 # plt hanya dipakai untuk rcParams global, bukan untuk membuat figure.
@@ -26,6 +26,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.figure import Figure
+from matplotlib.patches import Patch
 
 # v2.3.1 helpers — fix semua UI/UX issues (Pattern A-H)
 from .chart_helpers import (
@@ -41,6 +42,15 @@ from .chart_helpers import (
     adaptive_text_color,
     fmt_number_short,
 )
+
+# v2.5.0 — analisa temporal (P1) + money view (P2) sebagai sumber agregat.
+# Keduanya modul murni tanpa dependensi balik ke charts.py (bebas siklus).
+from . import temporal as _temporal
+from . import priority as _priority
+
+# Drill-down click handler: (filter_key, value) -> None — kontrak sama
+# dengan dashboard.FilterCallback supaya satu handler dipakai lintas tab.
+DrillCallback = Callable[[str, "str | None"], None]
 
 # Lazy import FigureCanvasTkAgg — hanya ketika embed ke Tkinter (di UI).
 # Di headless test environment, import ini bisa gagal karena tidak ada Tcl/Tk.
@@ -188,17 +198,59 @@ def _empty_figure(msg: str = "Tidak ada data", figsize: tuple = (7, 4.5)) -> Fig
     return fig
 
 
+def _connect_click(fig: Figure, handler) -> None:
+    """Connect 'button_press_event' + simpan cid di fig._waste_cids (fix M9).
+
+    Kontrak identik dengan dashboard._connect_click — teardown UI
+    (base.py _dispose_chart_registry) memutus semua listener via
+    fig._waste_cids, jadi listener tidak bocor saat chart di-swap.
+    """
+    cid = fig.canvas.mpl_connect("button_press_event", handler)
+    cids = getattr(fig, "_waste_cids", None)
+    if cids is None:
+        cids = []
+        fig._waste_cids = cids
+    cids.append(cid)
+
+
+def _wire_patch_click(fig: Figure, patches, labels, on_click, key: str) -> None:
+    """Wire klik pada patch (bar/wedge) → on_click(key, label ASLI).
+
+    P8 v2.5.0: drill-down dari chart statis (tab Visualisasi). Hit-test
+    memakai patch.contains(event) (koordinat display). Nilai yang dikirim
+    adalah nilai kolom ASLI — bukan label truncation di sumbu — supaya
+    cocok dengan filter data. Klik area kosong/legend → diabaikan.
+    """
+    pairs = list(zip(patches, labels))
+
+    def _handler(event):
+        for patch, label in pairs:
+            try:
+                # contains() return TUPLE (bool, dict) — tuple non-kosong
+                # selalu truthy, jadi WAJIB unpack [0] (bug dashboard tidak
+                # ada karena sudah pakai [0]; ini menjaga konsistensi).
+                if patch.contains(event)[0]:
+                    on_click(key, str(label))
+                    return
+            except Exception:  # noqa: BLE001 — event aneh diabaikan saja
+                return
+
+    _connect_click(fig, _handler)
+
+
 # ============================================================
 # CHART 1 — PIE: Distribusi Status Anomali
 # ============================================================
 
-def chart_status_pie(df: pd.DataFrame) -> Figure:
+def chart_status_pie(df: pd.DataFrame, on_click: DrillCallback | None = None) -> Figure:
     """Pie chart distribusi ANOMALY STATUS.
 
     H3 fix: status di luar 4 kanonik TETAP ditampilkan sebagai slice berwarna
     netral + entri legend. Sebelumnya reindex() membuang status tak dikenal
     secara diam-diam — input [Normal, UNKNOWN, UNKNOWN] salah tampil
     "Normal 100%".
+    P8 (v2.5.0): on_click != None → klik wedge mem-filter status (drill-down
+    lintas-tab; kontrak (filter_key, value) sama dengan dashboard).
     """
     if "ANOMALY STATUS" not in df.columns or df.empty:
         return _empty_figure("Tidak ada data", figsize=(6, 4.2))
@@ -248,6 +300,8 @@ def chart_status_pie(df: pd.DataFrame) -> Figure:
     # Pie charts: keep tight_layout (rule 6) + manual margins for legend
     fig.tight_layout(pad=2.0)
     fig.subplots_adjust(top=0.92, right=0.70)
+    if on_click is not None:
+        _wire_patch_click(fig, wedges, list(counts.index), on_click, "status")
     return fig
 
 
@@ -255,13 +309,14 @@ def chart_status_pie(df: pd.DataFrame) -> Figure:
 # CHART 2 — BAR: Waste Total per Cabang
 # ============================================================
 
-def chart_waste_per_cabang(df: pd.DataFrame) -> Figure:
+def chart_waste_per_cabang(df: pd.DataFrame, on_click: DrillCallback | None = None) -> Figure:
     """Bar chart total waste per NAMA RESTO.
 
     C1 fix: bar di-plot posisional (np.arange + set_xticklabels) — label
     display hasil truncation fmt_cabang yang duplikat tidak lagi menumpuk
     beberapa bar pada satu posisi x (dulu bar saling menimpa diam-diam).
     Label duplikat juga diberi suffix "#k" agar tetap bisa dibedakan.
+    P8 (v2.5.0): on_click != None → klik bar mem-filter cabang.
     """
     # Pattern G: wider figure for many cabangs
     n_cabangs = df["NAMA RESTO"].nunique() if "NAMA RESTO" in df.columns else 5
@@ -299,6 +354,9 @@ def chart_waste_per_cabang(df: pd.DataFrame) -> Figure:
     add_ylim_headroom(ax, factor=1.20)
     # Pattern A + E: margins + rotation
     apply_layout(fig, ax, rotate_x=True, bottom_pad=0.22)
+    if on_click is not None:
+        # Label ASLI (bukan truncation) → filter cocok dengan data.
+        _wire_patch_click(fig, bars, list(g.index.astype(str)), on_click, "cabang")
     return fig
 
 
@@ -306,13 +364,15 @@ def chart_waste_per_cabang(df: pd.DataFrame) -> Figure:
 # CHART 3 — HORIZONTAL BAR: Top 10 Items
 # ============================================================
 
-def chart_top_items(df: pd.DataFrame, top_n: int = 10) -> Figure:
+def chart_top_items(df: pd.DataFrame, top_n: int = 10,
+                    on_click: DrillCallback | None = None) -> Figure:
     """Horizontal bar chart top N item by TOTAL waste.
 
     M4 fix: tinggi figure dihitung dari jumlah item HASIL agregasi (len(g)),
     bukan top_n yang diminta — dataset kecil tidak lagi mendapat figure
     7-inch yang setengah kosong.
     C1 fix: barh posisional — label ter-wrap yang identik tidak menimpa bar.
+    P8 (v2.5.0): on_click != None → klik bar mem-filter item.
     """
     if "NAMA BARANG" not in df.columns or "TOTAL" not in df.columns or df.empty:
         return _empty_figure("Tidak ada data", figsize=(7.0, 4.0))
@@ -347,6 +407,8 @@ def chart_top_items(df: pd.DataFrame, top_n: int = 10) -> Figure:
     add_xlim_headroom(ax, factor=1.10, side="right")
     # Pattern A: more left padding for wrapped multi-line item labels
     apply_layout(fig, ax, left_pad=0.30, bottom_pad=0.12)
+    if on_click is not None:
+        _wire_patch_click(fig, bars, list(g.index.astype(str)), on_click, "item")
     return fig
 
 
@@ -399,12 +461,13 @@ def chart_status_per_cabang(df: pd.DataFrame) -> Figure:
 # CHART 5 — PARETO: Alasan (KETERANGAN)
 # ============================================================
 
-def chart_pareto_keterangan(df: pd.DataFrame) -> Figure:
+def chart_pareto_keterangan(df: pd.DataFrame, on_click: DrillCallback | None = None) -> Figure:
     """Pareto chart: bar TOTAL per KETERANGAN + cumulative line.
 
     M3 fix: ax2 = ax.twinx() dibuat SETELAH empty-data guard — sebelumnya
     dibuat sebelum guard, sehingga early-return menyisakan y-axis kedua
     (orphan) yang tetap terlihat di figure empty-state.
+    P8 (v2.5.0): on_click != None → klik bar mem-filter KETERANGAN.
     """
     fig = Figure(figsize=(8, 4.5), dpi=100)
     ax = fig.add_subplot(111)
@@ -450,6 +513,8 @@ def chart_pareto_keterangan(df: pd.DataFrame) -> Figure:
     add_ylim_headroom(ax)
     # Pattern A + E: rotation 30 (less than 45 because labels are wrapped to 2 lines)
     apply_layout(fig, ax, rotate_x=True, rotation=30, bottom_pad=0.20)
+    if on_click is not None:
+        _wire_patch_click(fig, bars, list(g.index.astype(str)), on_click, "keterangan")
     return fig
 
 
@@ -927,6 +992,279 @@ def chart_jenis_donut(df: pd.DataFrame) -> Figure:
     # Donut: keep tight_layout (rule 6) + manual margins for legend
     fig.tight_layout(pad=2.0)
     fig.subplots_adjust(top=0.92, right=0.70)
+    return fig
+
+
+# ============================================================
+# CHART 13 (v2.5.0 P1) — BAR: Waste per Hari + highlight hari peak
+# ============================================================
+
+def chart_waste_per_day(df: pd.DataFrame, key_akhir: int | None = None) -> Figure:
+    """Bar chart total waste per hari 1..N; hari di kelas peak mingguan
+    di-highlight merah (P1 — analisa temporal).
+
+    Sumber: temporal.waste_per_day + temporal.weekday_effect. Judul mencatat
+    efek peak (mis. \"+35% di hari 5,6,12,13,...\") supaya pola mingguan
+    terlihat tanpa chart terpisah.
+    """
+    per_day = _temporal.waste_per_day(df, key_akhir=key_akhir)
+    if per_day.empty:
+        return _empty_figure("Tidak ada data", figsize=(9, 4.5))
+
+    effect = _temporal.weekday_effect(df, key_akhir=key_akhir)
+    peak = effect.get("peak_classes") or ()
+
+    n = len(per_day)
+    fig_w = max(8.0, min(14.0, 0.35 * n + 2))
+    fig = Figure(figsize=(fig_w, 4.5), dpi=100)
+    ax = fig.add_subplot(111)
+    x = np.arange(n)
+    colors = [
+        "#dc2626" if int(d) % 7 in peak else PALETTE_ACCENT
+        for d in per_day["day"]
+    ]
+    bars = ax.bar(x, per_day["total"], color=colors,
+                  edgecolor="white", linewidth=1.0)
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(d) for d in per_day["day"]])
+    for bar, val in zip(bars, per_day["total"]):
+        if val == 0 or pd.isna(val):
+            continue
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+                fmt_number_short(val), ha="center", va="bottom",
+                fontsize=6, color="#0f172a", rotation=90)
+
+    title = "Total Waste per Hari (bulan)"
+    if peak:
+        ratio = effect.get("ratio")
+        days_str = ", ".join(
+            str(int(d)) for d in per_day["day"] if int(d) % 7 in peak
+        )
+        if ratio and ratio == ratio:  # NaN-safe
+            title += f" — hari peak +{ratio * 100 - 100:.0f}% ({days_str})"
+        else:
+            title += f" — hari peak: {days_str}"
+    ax.set_title(title, pad=12)
+    ax.set_ylabel("Total Waste (qty)")
+    ax.set_xlabel("Hari (tanggal dalam bulan)")
+    add_ylim_headroom(ax, factor=1.22)
+    apply_layout(fig, ax, bottom_pad=0.14)
+    return fig
+
+
+# ============================================================
+# CHART 14 (v2.5.0 P1) — BAR: Efek kelas hari (mod 7)
+# ============================================================
+
+def chart_weekday_effect(df: pd.DataFrame, key_akhir: int | None = None) -> Figure:
+    """Bar mean-per-baris-aktif per kelas hari (day % 7) + garis rata-rata
+    keseluruhan (P1). Dua kelas peak diberi warna aksen berbeda."""
+    pat = _temporal.weekday_pattern(df, key_akhir=key_akhir)
+    if pat.empty:
+        return _empty_figure("Tidak ada data", figsize=(7, 4.5))
+    effect = _temporal.weekday_effect(df, key_akhir=key_akhir)
+    peak = effect.get("peak_classes") or ()
+
+    fig = Figure(figsize=(7, 4.5), dpi=100)
+    ax = fig.add_subplot(111)
+    x = np.arange(len(pat))
+    colors = [
+        "#dc2626" if int(m) in peak else PALETTE_ACCENT
+        for m in pat["mod_class"]
+    ]
+    bars = ax.bar(x, pat["mean_per_active"], color=colors,
+                  edgecolor="white", linewidth=1.5)
+    ax.set_xticks(x)
+    ax.set_xticklabels([
+        f"mod {int(m)}\n({days})" for m, days in zip(pat["mod_class"], pat["days"])
+    ])
+    for bar, val in zip(bars, pat["mean_per_active"]):
+        if val == 0 or pd.isna(val):
+            continue
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+                f"{val:.0f}", ha="center", va="bottom",
+                fontsize=8, fontweight="bold", color="#0f172a")
+    overall = (
+        pat["total"].sum() / pat["active_rows"].sum()
+        if pat["active_rows"].sum() > 0 else 0.0
+    )
+    ax.axhline(overall, color="#94a3b8", linestyle="--", linewidth=1.0, alpha=0.8)
+    ax.text(len(pat) - 0.4, overall, f"rata² {overall:.0f}",
+            ha="right", va="bottom", fontsize=8, color="#64748b")
+    ax.set_title("Rata-rata Waste per Baris Aktif per Kelas Hari (mod 7)",
+                 pad=12)
+    ax.set_ylabel("Mean per baris aktif")
+    ax.set_xlabel("Kelas hari (hari % 7)")
+    add_ylim_headroom(ax, factor=1.15)
+    apply_layout(fig, ax, bottom_pad=0.22)
+    return fig
+
+
+# ============================================================
+# CHART 15 (v2.5.0 P1) — HEATMAP: Alasan (KETERANGAN) × Hari
+# ============================================================
+
+def chart_reason_day_heatmap(df: pd.DataFrame, key_akhir: int | None = None,
+                             top_n: int = 9) -> Figure:
+    """Heatmap KETERANGAN × hari — kapan tiap alasan terjadi (P1).
+
+    Pola seperti 'Cancel Nota naik di hari ramai' / 'Kualitas Internal
+    spike tanggal 9' terlihat langsung di matriks ini.
+    """
+    mat = _temporal.reason_by_day(df, key_akhir=key_akhir, top_n=top_n)
+    if mat.empty:
+        return _empty_figure("Tidak ada data", figsize=(9, 5))
+    keterangan = mat["KETERANGAN"].astype(str).tolist()
+    day_cols = [c for c in mat.columns if c not in ("KETERANGAN", "Total")]
+    values = mat[day_cols].to_numpy(dtype=float)
+
+    n_rows = len(keterangan)
+    n_cols = len(day_cols)
+    fig_w = max(9.0, min(16.0, 0.42 * n_cols + 2))
+    fig_h = max(4.0, min(9.0, 0.5 * n_rows + 2))
+    fig = Figure(figsize=(fig_w, fig_h), dpi=100)
+    ax = fig.add_subplot(111)
+    im = ax.imshow(values, aspect="auto", cmap="YlOrRd")
+    ax.grid(False)
+    ax.set_xticks(range(n_cols))
+    ax.set_xticklabels([str(c) for c in day_cols], fontsize=7)
+    ax.set_yticks(range(n_rows))
+    ax.set_yticklabels([fmt_reason(k, width=18) for k in keterangan])
+    ax.set_title("Heatmap Alasan × Hari (total waste per hari)", pad=12)
+    ax.set_xlabel("Hari (tanggal dalam bulan)")
+    ax.set_ylabel("Alasan (KETERANGAN)")
+
+    max_val = float(values.max()) if values.size else 0.0
+    flat = sorted(
+        ((values[i, j], i, j) for i in range(n_rows) for j in range(n_cols)
+         if values[i, j] > 0),
+        reverse=True,
+    )
+    for _, i, j in flat[:50]:
+        v = values[i, j]
+        color = adaptive_text_color(v, max_val * 0.6, max_val)
+        ax.text(j, i, fmt_number_short(v, decimals=0), ha="center",
+                va="center", fontsize=7, color=color, fontweight="bold")
+
+    apply_layout(fig, ax, left_pad=0.26, bottom_pad=0.14,
+                 right_pad=0.92, x_fontsize=7)
+    cbar = fig.colorbar(im, ax=ax, fraction=0.05, pad=0.03,
+                        label="Total Waste (qty)")
+    cbar.ax.grid(False)
+    return fig
+
+
+# ============================================================
+# CHART 16 (v2.5.0 P2) — PARETO: Item (dengan satuan di label)
+# ============================================================
+
+def chart_item_pareto(df: pd.DataFrame, top_n: int = 20) -> Figure:
+    """Pareto per NAMA BARANG: bar TOTAL + garis kumulatif (P2 money view).
+
+    Label menyertakan satuan dominan item (mis. 'KULIT PANGSIT (GR)') —
+    agregat lintas item mencampur satuan, jadi satuan harus eksplisit.
+    """
+    if "NAMA BARANG" not in df.columns or "TOTAL" not in df.columns or df.empty:
+        return _empty_figure("Tidak ada data", figsize=(8, 4.5))
+    g = (df.groupby("NAMA BARANG", dropna=False)["TOTAL"].sum()
+         .sort_values(ascending=False).head(top_n))
+    if g.empty:
+        return _empty_figure("Tidak ada data", figsize=(8, 4.5))
+
+    # Satuan dominan per item (mode) — bila kolom SATUAN ada.
+    if "SATUAN" in df.columns:
+        sat_map = (
+            df.dropna(subset=["SATUAN"])
+            .groupby("NAMA BARANG")["SATUAN"]
+            .agg(lambda s: s.mode().iat[0] if not s.mode().empty else "")
+            .to_dict()
+        )
+    else:
+        sat_map = {}
+
+    grand = df["TOTAL"].sum()
+    cum = g.cumsum() / grand * 100 if grand and grand > 0 else g * 0
+
+    fig = Figure(figsize=(8, 4.5), dpi=100)
+    ax = fig.add_subplot(111)
+    labels = [
+        f"{fmt_item(str(name))} ({sat_map.get(name, '?')})"
+        for name in g.index
+    ]
+    ax.bar(range(len(g)), g.values, color=PALETTE_ACCENT,
+           edgecolor="white", linewidth=1.5)
+    ax.set_xticks(range(len(g)))
+    ax.set_xticklabels(disambiguate_labels(labels))
+    ax.set_ylabel("Total Waste (qty)")
+    ax.set_title(f"Pareto Item — Top {len(g)} (satuan di label)", pad=12)
+
+    ax2 = ax.twinx()
+    ax2.plot(range(len(g)), cum.values, color=PALETTE_SECONDARY,
+             marker="o", linewidth=2, markersize=4)
+    ax2.set_ylabel("Kumulatif % (dari total)", color=PALETTE_SECONDARY, labelpad=12)
+    ax2.set_ylim(0, 105)
+    ax2.tick_params(axis="y", colors=PALETTE_SECONDARY, labelsize=8)
+    ax2.axhline(80, color="#94a3b8", linestyle="--", linewidth=0.8, alpha=0.7)
+    ax2.text(len(g) - 1, 82, "80%", ha="right", fontsize=8, color="#94a3b8")
+
+    for i, v in enumerate(g.values):
+        if v == 0 or pd.isna(v):
+            continue
+        ax.text(i, v, fmt_number_short(v), ha="center", va="bottom",
+                fontsize=7, color="#0f172a")
+    add_ylim_headroom(ax)
+    apply_layout(fig, ax, rotate_x=True, rotation=30, bottom_pad=0.22)
+    return fig
+
+
+# ============================================================
+# CHART 17 (v2.5.0 P2) — HORIZONTAL BAR: Top Money Rows
+# ============================================================
+
+def chart_money_top(df: pd.DataFrame, top_n: int = 15) -> Figure:
+    """Top-N baris waste terbesar APA PUN statusnya, diwarnai FOCUS CLASS
+    (P2 — 'money view'): Fokus Utama merah, Sekunder oranye, Rutin netral.
+
+    Menjawab gap audit: baris Prioritas Tinggi hanya 0,5% waste; baris
+    uang terbesar justru berstatus Normal.
+    """
+    mv = _priority.money_view(df, top_n=top_n)
+    if mv.empty:
+        return _empty_figure("Tidak ada data", figsize=(8, 5))
+    mv = mv.sort_values("TOTAL", ascending=True)  # barh bawah→atas menaik
+    focus_colors = {
+        "Fokus Utama": "#dc2626",
+        "Fokus Sekunder": "#ea580c",
+        "Rutin": PALETTE_NEUTRAL,
+    }
+    labels = [
+        f"{fmt_item(str(it))} @ {fmt_cabang(str(cb))}"
+        for it, cb in zip(mv["NAMA BARANG"], mv["NAMA RESTO"])
+    ]
+    n = len(mv)
+    fig_w, fig_h = dynamic_figsize(n, base_w=8.0, per_item_h=0.42,
+                                   min_h=4.0, max_h=10.0)
+    fig = Figure(figsize=(fig_w, fig_h), dpi=100)
+    ax = fig.add_subplot(111)
+    y = np.arange(n)
+    colors = [focus_colors.get(str(f), PALETTE_NEUTRAL) for f in mv["FOCUS CLASS"]]
+    bars = ax.barh(y, mv["TOTAL"].astype(float), color=colors,
+                   edgecolor="white", linewidth=1.0)
+    ax.set_yticks(y)
+    ax.set_yticklabels(disambiguate_labels(labels))
+    for bar, val, score in zip(bars, mv["TOTAL"], mv["FOCUS SCORE"]):
+        if val == 0 or pd.isna(val):
+            continue
+        ax.text(bar.get_width(), bar.get_y() + bar.get_height()/2,
+                f" {fmt_number_short(val)} (F{score:.0f})", ha="left",
+                va="center", fontsize=7, fontweight="bold", color="#0f172a")
+    ax.set_title(f"Top {n} Waste Terbesar — warna = FOCUS CLASS", pad=12)
+    ax.set_xlabel("TOTAL waste (qty)")
+    handles = [Patch(facecolor=c, edgecolor="white", label=l)
+               for l, c in focus_colors.items()]
+    ax.legend(handles=handles, loc="lower right", fontsize=8, frameon=False)
+    add_xlim_headroom(ax, factor=1.18, side="right")
+    apply_layout(fig, ax, left_pad=0.34, bottom_pad=0.10)
     return fig
 
 

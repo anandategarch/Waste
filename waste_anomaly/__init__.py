@@ -16,5 +16,6 @@ Penggunaan dasar (tanpa UI):
 Untuk UI Tkinter, jalankan:  python ui_app.py
 """
 
-__version__ = "2.4.1"
-__all__ = ["pipeline", "loader", "stages", "signals", "exporter", "utils"]
+__version__ = "2.5.0"
+__all__ = ["pipeline", "loader", "stages", "signals", "exporter", "utils",
+           "temporal", "priority", "data_quality", "period_compare"]

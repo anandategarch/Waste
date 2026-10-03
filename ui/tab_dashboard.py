@@ -65,6 +65,14 @@ class DashboardTabMixin:
         self.kpi_cabang = KPICard(kpi_frame, "CABANG", "0", "#9333ea")
         self.kpi_cabang.grid(row=0, column=5, sticky="ew", padx=2)
 
+        # P5 (v2.5.0): breakdown satuan di bawah KPI — total waste mencampur
+        # satuan (GR/PCS/PACK/...); angka per satuan membuat KPI jujur.
+        self.lbl_kpi_units = tk.Label(
+            kpi_frame, text="", font=F_HINT, fg=C_TEXT_MUTED, bg=C_BG,
+            anchor="w", justify="left",
+        )
+        self.lbl_kpi_units.grid(row=1, column=0, columnspan=6, sticky="ew", padx=6, pady=(2, 0))
+
         # ===== Row 1: Filter bar (extended v2.1) =====
         filter_frame = tk.Frame(inner, bg=C_CARD, relief="flat",
                                highlightbackground=C_BORDER, highlightthickness=1)
@@ -96,6 +104,15 @@ class DashboardTabMixin:
         self._cb_status["values"] = ["(Semua)", "Prioritas Tinggi", "Potensi Anomali", "Perlu Review", "Normal"]
         self._cb_status.grid(row=0, column=6, padx=2)
         self._cb_status.bind("<<ComboboxSelected>>", lambda e: self._on_filter_dropdown_change("status", self.var_filter_status.get()))
+
+        # P8 (v2.5.0): filter KETERANGAN (alasan) — dulu hanya bisa lewat
+        # profil tersimpan / klik chart Pareto di Viz; kini dropdown langsung.
+        tk.Label(filter_frame, text="Keterangan:", font=F_BODY, bg=C_CARD).grid(row=0, column=7, padx=(8, 2))
+        self.var_filter_ket = tk.StringVar(value="(Semua)")
+        self._cb_ket = ttk.Combobox(filter_frame, textvariable=self.var_filter_ket, width=14, state="readonly")
+        self._cb_ket["values"] = ["(Semua)"]
+        self._cb_ket.grid(row=0, column=8, padx=2)
+        self._cb_ket.bind("<<ComboboxSelected>>", lambda e: self._on_filter_dropdown_change("keterangan", self.var_filter_ket.get()))
 
         # L6: label aksi konsisten (emoji + istilah teknis dipertahankan)
         self.btn_clear_filter = ttk.Button(filter_frame, text="✕ Clear Filter", command=self._clear_all_filters)
@@ -339,6 +356,8 @@ class DashboardTabMixin:
             self.var_filter_cabang.set(value if value else "(Semua)")
         elif key == "status":
             self.var_filter_status.set(value if value else "(Semua)")
+        elif key == "keterangan" and hasattr(self, "var_filter_ket"):
+            self.var_filter_ket.set(value if value else "(Semua)")
         self.after_idle(lambda: self._apply_dashboard_filter())
 
 
@@ -455,6 +474,8 @@ class DashboardTabMixin:
                 self.var_filter_cabang.set("(Semua)")
             elif key == "status":
                 self.var_filter_status.set("(Semua)")
+            elif key == "keterangan" and hasattr(self, "var_filter_ket"):
+                self.var_filter_ket.set("(Semua)")
         self._apply_dashboard_filter()
 
 
@@ -726,6 +747,24 @@ class DashboardTabMixin:
         self.kpi_waste.set_value(f"{total_waste:,.1f}")
         self.kpi_cabang.set_value(f"{cabang:,}")
 
+        # P5 (v2.5.0): breakdown satuan di bawah KPI waste
+        try:
+            from waste_anomaly import temporal as _wa_temporal
+            units = _wa_temporal.unit_summary(df)
+            if not units.empty:
+                parts = [
+                    f"{r['SATUAN']} {r['total']:,.0f} ({r['share_pct']:.0f}%)"
+                    for _, r in units.iterrows()
+                ]
+                self.lbl_kpi_units.configure(
+                    text="Total Waste per satuan: " + " • ".join(parts)
+                    + "  — angka campuran lintas satuan, indikatif saja"
+                )
+            else:
+                self.lbl_kpi_units.configure(text="")
+        except Exception:  # noqa: BLE001 — breakdown best-effort
+            self.lbl_kpi_units.configure(text="")
+
         # Populate cabang dropdown — M10: JANGAN reset pilihan saat refresh;
         # pertahankan bila nilai masih ada di daftar baru (dulu selalu kembali
         # ke "(Semua)" setiap refresh/re-render).
@@ -736,6 +775,13 @@ class DashboardTabMixin:
                 new_vals = ["(Semua)"] + cabangs
                 self._cb_cabang["values"] = new_vals
                 self.var_filter_cabang.set(cur if cur in new_vals else "(Semua)")
+            # P8 (v2.5.0): isi dropdown KETERANGAN juga (preserve-or-Semua)
+            if "KETERANGAN" in df.columns and hasattr(self, "_cb_ket"):
+                kets = sorted(df["KETERANGAN"].dropna().astype(str).unique().tolist())
+                cur_k = self.var_filter_ket.get()
+                new_k = ["(Semua)"] + kets
+                self._cb_ket["values"] = new_k
+                self.var_filter_ket.set(cur_k if cur_k in new_k else "(Semua)")
             # Update dropdown tab Compare juga (M10: preserve-or-empty)
             if hasattr(self, "_cb_compare_a"):
                 cur_a = self.var_compare_a.get()

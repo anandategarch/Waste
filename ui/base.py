@@ -343,7 +343,7 @@ class AppBase:
         hdr.pack_propagate(False)
         lbl = tk.Label(hdr, text=f"  📊  {APP_TITLE}", font=F_APP_TITLE, fg="white", bg=C_HEADER)
         lbl.pack(side="left", padx=16, pady=10)
-        sub = tk.Label(hdr, text=f"v{APP_VERSION}  •  Replika Power Query M code  •  12 sinyal anomali + drill-down",
+        sub = tk.Label(hdr, text=f"v{APP_VERSION}  •  Replika Power Query M code  •  12 sinyal anomali + money view + drill-down",
                        font=F_HINT, fg="#94a3b8", bg=C_HEADER)
         sub.pack(side="left", padx=8)
 
@@ -414,8 +414,9 @@ class AppBase:
 
     def _mark_all_tabs_dirty(self):
         """Tandai semua tab data-dependent perlu render saat dikunjungi."""
-        for key in ("dashboard", "compare", "quadrant", "rate_league",
-                    "hasil", "visualisasi", "ringkasan"):
+        for key in ("dashboard", "temporal", "money", "compare", "quadrant",
+                    "rate_league", "hasil", "visualisasi", "quality",
+                    "period", "ringkasan"):
             self._tab_render_dirty[key] = True
 
 
@@ -436,6 +437,10 @@ class AppBase:
         try:
             if key == "dashboard":
                 self._apply_dashboard_filter()
+            elif key == "temporal":
+                self._render_temporal()
+            elif key == "money":
+                self._render_money()
             elif key == "compare":
                 self._render_compare_charts()
             elif key == "quadrant":
@@ -446,6 +451,12 @@ class AppBase:
                 self._refresh_preview()
             elif key == "visualisasi":
                 self._refresh_viz()
+            elif key == "quality":
+                self._render_quality()
+            elif key == "period":
+                # P9: tabel period hanya berubah saat user klik Bandingkan;
+                # dirty-render tinggal menampilkan hasil tersimpan.
+                self._render_period_tables()
             elif key == "ringkasan":
                 if self.last_summary:
                     self._update_summary_tab(self.last_summary)
@@ -464,56 +475,78 @@ class AppBase:
         nb.add(tab1, text="📊 Dashboard")
         self._build_dashboard_tab(tab1)
 
-        # Tab 2: Compare Cabang (NEW v2.1)
+        # Tab 2: Temporal (NEW v2.5.0 — P1 analisa hari/weekday)
         tab2 = ttk.Frame(nb)
-        nb.add(tab2, text="⚖ Compare Cabang")
-        self._build_compare_tab(tab2)
+        nb.add(tab2, text="📅 Temporal")
+        self._build_temporal_tab(tab2)
 
-        # Tab 3: Quadrant Analysis (NEW v2.3)
+        # Tab 3: Money View (NEW v2.5.0 — P2/P4/P5 prioritas magnitude)
         tab3 = ttk.Frame(nb)
-        nb.add(tab3, text="🎯 Quadrant")
-        self._build_quadrant_tab(tab3)
+        nb.add(tab3, text="💰 Money View")
+        self._build_money_tab(tab3)
 
-        # Tab 4: Rate League (NEW v2.3)
+        # Tab 4: Compare Cabang (NEW v2.1)
         tab4 = ttk.Frame(nb)
-        nb.add(tab4, text="🏆 Rate League")
-        self._build_rate_league_tab(tab4)
+        nb.add(tab4, text="⚖ Compare Cabang")
+        self._build_compare_tab(tab4)
 
-        # Tab 5: Hasil
+        # Tab 5: Quadrant Analysis (NEW v2.3)
         tab5 = ttk.Frame(nb)
-        nb.add(tab5, text="📋 Hasil")
-        self._build_result_tab(tab5)
+        nb.add(tab5, text="🎯 Quadrant")
+        self._build_quadrant_tab(tab5)
 
-        # Tab 6: Visualisasi (12 chart gallery)
+        # Tab 6: Rate League (NEW v2.3)
         tab6 = ttk.Frame(nb)
-        nb.add(tab6, text="📈 Visualisasi")
-        self._build_viz_tab(tab6)
+        nb.add(tab6, text="🏆 Rate League")
+        self._build_rate_league_tab(tab6)
 
-        # Tab 7: Ringkasan
+        # Tab 7: Hasil
         tab7 = ttk.Frame(nb)
-        nb.add(tab7, text="🗂 Ringkasan")
-        self._build_summary_tab(tab7)
+        nb.add(tab7, text="📋 Hasil")
+        self._build_result_tab(tab7)
 
-        # Tab 8: Run Pipeline
+        # Tab 8: Visualisasi (12 chart gallery)
         tab8 = ttk.Frame(nb)
-        nb.add(tab8, text="▶ Run Pipeline")
-        self._build_run_tab(tab8)
+        nb.add(tab8, text="📈 Visualisasi")
+        self._build_viz_tab(tab8)
 
-        # Tab 9: Konfigurasi
+        # Tab 9: Data Quality (NEW v2.5.0 — P6)
         tab9 = ttk.Frame(nb)
-        nb.add(tab9, text="⚙ Konfigurasi")
-        self._build_config_tab(tab9)
+        nb.add(tab9, text="🧹 Data Quality")
+        self._build_quality_tab(tab9)
 
-        # Tab 10: Bantuan
+        # Tab 10: Compare Periode (NEW v2.5.0 — P9)
         tab10 = ttk.Frame(nb)
-        nb.add(tab10, text="❓ Bantuan")
-        self._build_help_tab(tab10)
+        nb.add(tab10, text="🔀 Compare Periode")
+        self._build_period_tab(tab10)
+
+        # Tab 11: Ringkasan
+        tab11 = ttk.Frame(nb)
+        nb.add(tab11, text="🗂 Ringkasan")
+        self._build_summary_tab(tab11)
+
+        # Tab 12: Run Pipeline
+        tab12 = ttk.Frame(nb)
+        nb.add(tab12, text="▶ Run Pipeline")
+        self._build_run_tab(tab12)
+
+        # Tab 13: Konfigurasi
+        tab13 = ttk.Frame(nb)
+        nb.add(tab13, text="⚙ Konfigurasi")
+        self._build_config_tab(tab13)
+
+        # Tab 14: Bantuan
+        tab14 = ttk.Frame(nb)
+        nb.add(tab14, text="❓ Bantuan")
+        self._build_help_tab(tab14)
 
         # H2: map widget-path tab → key (untuk lazy render via <<NotebookTabChanged>>)
         for _tab, _key in [
-            (tab1, "dashboard"), (tab2, "compare"), (tab3, "quadrant"),
-            (tab4, "rate_league"), (tab5, "hasil"), (tab6, "visualisasi"),
-            (tab7, "ringkasan"),
+            (tab1, "dashboard"), (tab2, "temporal"), (tab3, "money"),
+            (tab4, "compare"), (tab5, "quadrant"),
+            (tab6, "rate_league"), (tab7, "hasil"), (tab8, "visualisasi"),
+            (tab9, "quality"), (tab10, "period"),
+            (tab11, "ringkasan"),
         ]:
             self._tab_key_by_widget[str(_tab)] = _key
         # H2: render tab saat pertama kali dikunjungi bila dirty

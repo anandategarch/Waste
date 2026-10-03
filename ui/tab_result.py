@@ -61,6 +61,12 @@ class ResultTabMixin:
         self.tree.grid(row=0, column=0, sticky="nsew")
         sb_y.grid(row=0, column=1, sticky="ns")
         sb_x.grid(row=1, column=0, sticky="ew")
+        # P8 (v2.5.0): double-click baris Detail/Anomali → filter cabang+item
+        # di Dashboard + lompat ke sana (drill-down lintas-tab).
+        self.tree.bind("<Double-1>", self._on_result_row_double_click)
+        tk.Label(c2, text="💡 Klik 2× baris (sheet Detail/Anomali) untuk drill-down cabang+item di Dashboard",
+                 font=F_HINT, fg=C_TEXT_MUTED, bg=C_CARD).grid(
+            row=2, column=0, sticky="w", padx=8, pady=(0, 4))
 
 
     def _refresh_preview(self):
@@ -104,6 +110,33 @@ class ResultTabMixin:
             )
 
 
+    def _on_result_row_double_click(self, event):
+        """P8 (v2.5.0): double-click baris → set filter cabang+item dari baris
+        tsb lalu pindah ke Dashboard (render ulang otomatis). Hanya berlaku
+        bila sheet punya kolom NAMA RESTO & NAMA BARANG (Detail/Anomali)."""
+        selection = self.tree.selection()
+        if not selection:
+            return
+        vals = self.tree.item(selection[0], "values")
+        if not vals:
+            return
+        cols = self.tree["columns"]
+        try:
+            cabang = vals[cols.index("NAMA RESTO")] if "NAMA RESTO" in cols else None
+            item_name = vals[cols.index("NAMA BARANG")] if "NAMA BARANG" in cols else None
+        except (ValueError, IndexError):
+            return
+        if not (cabang and item_name):
+            return
+        self.active_filters["cabang"] = cabang
+        self.var_filter_cabang.set(cabang)
+        self.active_filters["item"] = item_name
+        self._apply_dashboard_filter()
+        try:
+            self.notebook.select(0)  # tab Dashboard
+        except Exception:  # noqa: BLE001 — lompatan best-effort
+            pass
+
     def _export_excel_report(self):
         """Export laporan Excel 6-sheet dari df pipeline (in-memory)."""
         df = self._pipeline_df
@@ -133,20 +166,68 @@ class ResultTabMixin:
         log_lines = list(self._log_lines[-200:])
         config_snapshot = dict(self.config)  # read-only snapshot untuk thread
 
+        # v2.5.0: sheet analisa tambahan (P1/P2/P6) dihitung SEBELUM thread —
+        # aman & cepat (agregat kecil; pipeline besar tetap di worker).
+        extra_sheets = self._build_extra_export_sheets(df)
+
         self._export_running = True
         self.btn_export_excel.configure(state="disabled")
         self._set_status("Menyimpan laporan Excel…", "running")
-        self.log(f"=== Export Excel → {path} (6 sheet) ===")
+        n_sheets = 6 + len(extra_sheets)
+        self.log(f"=== Export Excel → {path} ({n_sheets} sheet) ===")
 
         def _worker():
             try:
-                result = export_to_excel(df, path, config_snapshot, key_akhir, log_lines)
+                result = export_to_excel(df, path, config_snapshot, key_akhir,
+                                         log_lines, extra_sheets=extra_sheets)
             except Exception as e:  # defensive — kontrak exporter dict
                 result = {"success": False, "error": str(e), "output_path": path}
             self.ui_queue.put(("export_done", result, None))
 
         threading.Thread(target=_worker, daemon=True).start()
 
+
+    def _build_extra_export_sheets(self, df: pd.DataFrame) -> dict:
+        """v2.5.0: 4 sheet analisa tambahan untuk laporan Excel.
+
+        P1: 'Waste per Hari' (tabel hari) + 'Alasan x Hari' (matrix).
+        P2: 'Money View' (top 100 baris waste terbesar + FOCUS).
+        P6: 'Data Quality' (temuan pemeriksaan).
+        Semua best-effort: modul gagal/df tanpa kolom → sheet di-skip.
+        """
+        sheets: dict = {}
+        try:
+            from waste_anomaly import temporal as wa_temporal
+            per_day = wa_temporal.waste_per_day(df, key_akhir=self._last_key_akhir)
+            if not per_day.empty:
+                sheets["Waste per Hari"] = per_day
+            reason_day = wa_temporal.reason_by_day(df, key_akhir=self._last_key_akhir)
+            if not reason_day.empty:
+                sheets["Alasan x Hari"] = reason_day
+        except Exception as e:  # noqa: BLE001 — sheet opsional best-effort
+            self.log(f"⚠ Sheet temporal untuk export dilewati: {e}")
+        try:
+            from waste_anomaly import priority as wa_priority
+            mv = wa_priority.money_view(df, top_n=100)
+            if not mv.empty:
+                sheets["Money View"] = mv
+        except Exception as e:  # noqa: BLE001
+            self.log(f"⚠ Sheet money view untuk export dilewati: {e}")
+        try:
+            from waste_anomaly import data_quality as wa_dq
+            checks = wa_dq.run_checks(df, key_akhir=self._last_key_akhir)
+            if checks:
+                sheets["Data Quality"] = pd.DataFrame([
+                    {
+                        "Severity": r.severity, "Kode": r.code, "Judul": r.title,
+                        "Jumlah": r.count, "Detail": r.detail,
+                        "Contoh": " | ".join(r.sample),
+                    }
+                    for r in checks
+                ])
+        except Exception as e:  # noqa: BLE001
+            self.log(f"⚠ Sheet data quality untuk export dilewati: {e}")
+        return sheets
 
     def _on_export_done(self, result: dict):
         """Hasil export Excel dari worker thread (via ui_queue)."""
@@ -157,9 +238,12 @@ class ResultTabMixin:
             result = {"success": False, "error": str(result), "output_path": ""}
         if result.get("success"):
             out = result.get("output_path", "")
+            n_extra = result.get("extra_sheets_count", 0)
             self._set_status(f"✓ Laporan Excel tersimpan: {out}", "done")
             self.log(f"=== Export selesai: {out} ===")
-            messagebox.showinfo("Export Selesai", f"Laporan Excel (6 sheet) tersimpan:\n{out}")
+            messagebox.showinfo(
+                "Export Selesai",
+                f"Laporan Excel ({6 + n_extra} sheet) tersimpan:\n{out}")
         else:
             err = result.get("error", "Unknown error")
             self._set_status(f"⚠ Export gagal: {err}", "error")

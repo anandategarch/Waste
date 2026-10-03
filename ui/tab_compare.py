@@ -17,6 +17,7 @@ import tkinter as tk
 from tkinter import ttk
 from waste_anomaly import charts as wa_charts
 from waste_anomaly import dashboard as wa_dash
+from waste_anomaly import priority as wa_priority
 
 
 class CompareTabMixin:
@@ -89,8 +90,49 @@ class CompareTabMixin:
                                             anchor="w", justify="left")
         self.lbl_compare_metrics.pack(fill="x", padx=16, pady=(0, 12))
 
+        # Card 4 (v2.5.0 P3): chart profil alasan 2 cabang (share %)
+        c4 = tk.Frame(inner, bg=C_CARD, relief="flat",
+                      highlightbackground=C_BORDER, highlightthickness=1)
+        c4.grid(row=3, column=0, sticky="nsew", padx=8, pady=8)
+        c4.columnconfigure(0, weight=1)
+        c4.rowconfigure(1, weight=1)
+        tk.Label(c4, text="🧾 Profil Alasan (share %) — 2 Cabang",
+                 font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(
+            anchor="w", padx=16, pady=(12, 4))
+        self._compare_reason_frame = tk.Frame(c4, bg=C_CARD)
+        self._compare_reason_frame.pack(fill="both", expand=True, padx=4, pady=(0, 8))
+        self._compare_reason_frame.columnconfigure(0, weight=1)
+        self._compare_reason_frame.rowconfigure(0, weight=1)
+        tk.Label(self._compare_reason_frame, text="🧾\n\nPilih 2 cabang untuk\nlihat profil alasan",
+                 font=F_BODY, fg=C_TEXT_MUTED, bg=C_CARD, justify="center").grid(
+            row=0, column=0, sticky="nsew", padx=20, pady=20)
+
+        # Card 5 (v2.5.0 P3): tabel profil alasan semua cabang + benchmark SUSUT
+        c5 = tk.Frame(inner, bg=C_CARD, relief="flat",
+                      highlightbackground=C_BORDER, highlightthickness=1)
+        c5.grid(row=4, column=0, sticky="ew", padx=8, pady=8)
+        c5.columnconfigure(0, weight=1)
+        tk.Label(c5, text="📋 Profil Alasan & SUSUT per Cabang — klik header sort ▼/▲",
+                 font=F_CARD, fg=C_HEADER, bg=C_CARD).pack(
+            anchor="w", padx=16, pady=(12, 4))
+        self.lbl_reason_profile_count = tk.Label(
+            c5, text="(belum ada data)", font=F_HINT, fg=C_TEXT_MUTED, bg=C_CARD)
+        self.lbl_reason_profile_count.pack(anchor="w", padx=16)
+        tree_wrap = tk.Frame(c5, bg=C_CARD)
+        tree_wrap.pack(fill="both", expand=True, padx=4, pady=(0, 8))
+        tree_wrap.columnconfigure(0, weight=1)
+        tree_wrap.rowconfigure(0, weight=1)
+        self.tree_reason_profile = ttk.Treeview(tree_wrap, show="headings", height=10)
+        sb_y = ttk.Scrollbar(tree_wrap, orient="vertical", command=self.tree_reason_profile.yview)
+        sb_x = ttk.Scrollbar(tree_wrap, orient="horizontal", command=self.tree_reason_profile.xview)
+        self.tree_reason_profile.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+        self.tree_reason_profile.grid(row=0, column=0, sticky="nsew")
+        sb_y.grid(row=0, column=1, sticky="ns")
+        sb_x.grid(row=1, column=0, sticky="ew")
+
         # Placeholder
         self._compare_canvases = []
+        self._compare_reason_canvases = []
         for f in self._compare_chart_frames:
             tk.Label(f, text="⚖\n\nPilih Cabang A & B\nuntuk lihat comparison.",
                      font=F_BODY, fg=C_TEXT_MUTED, bg=C_CARD, justify="center").grid(
@@ -106,10 +148,15 @@ class CompareTabMixin:
         # H3: dispose figure lama dulu (leak fix) — registry (key, fig, canvas)
         self._dispose_chart_registry(self._compare_canvases)
         self._compare_canvases = []
+        # P3: dispose chart reason-mix juga
+        self._dispose_chart_registry(getattr(self, "_compare_reason_canvases", []))
+        self._compare_reason_canvases = []
         # Destroy existing
         for f in self._compare_chart_frames:
             for c in f.winfo_children():
                 c.destroy()
+        for c in self._compare_reason_frame.winfo_children():
+            c.destroy()
 
         if not a or not b or a == b:
             for f in self._compare_chart_frames:
@@ -117,12 +164,14 @@ class CompareTabMixin:
                          font=F_BODY, fg=C_TEXT_MUTED, bg=C_CARD, justify="center").grid(
                     row=0, column=0, sticky="nsew", padx=20, pady=20)
             self.lbl_compare_metrics.configure(text="(pilih 2 cabang berbeda)")
+            self._render_reason_profile(df)
             return
         if df is None or df.empty:
             for f in self._compare_chart_frames:
                 tk.Label(f, text="(belum ada data)",
                          font=F_BODY, fg=C_TEXT_MUTED, bg=C_CARD).grid(
                     row=0, column=0, sticky="nsew", padx=20, pady=20)
+            self._render_reason_profile(df)
             return
 
         # Chart 1: Total waste per JENIS
@@ -152,6 +201,22 @@ class CompareTabMixin:
         c3 = wa_charts.embed_figure(f3, fig3)
         c3.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
         self._compare_canvases.append(("metrics", fig3, c3))
+
+        # P3 (v2.5.0): chart profil alasan share % 2 cabang
+        try:
+            fig_r = wa_dash.chart_reason_mix_compare(df, a, b)
+            c_r = wa_charts.embed_figure(self._compare_reason_frame, fig_r)
+            c_r.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=4, pady=4)
+            self._compare_reason_canvases.append(("reason_mix", fig_r, c_r))
+        except Exception as e:  # noqa: BLE001 - chart gagal tidak menjatuhkan tab
+            tk.Label(self._compare_reason_frame, text="Gagal render:\n" + str(e),
+                     font=F_BODY, fg="#dc2626", bg=C_CARD, justify="left").grid(
+                row=0, column=0, sticky="nsew", padx=8, pady=8)
+            self.log("Warn chart reason-mix gagal: " + str(e))
+
+        # P3 (v2.5.0): tabel profil alasan semua cabang — dirender DI MANA PUN
+        # kondisi pilihan A/B (tidak bergantung 2 cabang terpilih).
+        self._render_reason_profile(df)
 
         # Update metrics summary text — M16b: dibangun dari daftar tuple
         # (label, val_a, val_b, fmt) diformat dalam SATU loop (dulu 10
@@ -195,6 +260,56 @@ class CompareTabMixin:
         ]
         self.lbl_compare_metrics.configure(text="\n".join(lines))
 
+
+    def _render_reason_profile(self, df):
+        """P3 (v2.5.0): tabel profil alasan per cabang + benchmark SUSUT."""
+        tree = self.tree_reason_profile
+        tree.delete(*tree.get_children(""))
+        if df is None or df.empty:
+            self.lbl_reason_profile_count.configure(text="(belum ada data)")
+            return
+        try:
+            prof = wa_priority.reason_profile(df)
+            sus = wa_priority.susut_benchmark(df)
+            if not prof.empty and not sus.empty:
+                prof = prof.merge(
+                    sus[["NAMA RESTO", "Share Cabang %", "Rank"]],
+                    on="NAMA RESTO", how="left",
+                ).rename(columns={
+                    "Share Cabang %": "SUSUT Share %",
+                    "Rank": "SUSUT Rank",
+                })
+        except Exception as e:  # noqa: BLE001 - tabel profil best-effort
+            self.log("Warn profil alasan gagal dibangun: " + str(e))
+            self.lbl_reason_profile_count.configure(text="Warn " + str(e))
+            return
+        self._reason_profile_df = prof
+        d = self._apply_tree_sort_state(prof, tree)
+        cols = list(d.columns)
+        self._populate_tree(
+            tree, d, cols, width=95, ndigits=1, cap=30,
+            get_df=lambda: self._reason_profile_df,
+            render_fn=self._render_reason_profile_tree,
+        )
+        count = len(prof)
+        n_susut = int((sus["SUSUT"] > 0).sum()) if not sus.empty else 0
+        self.lbl_reason_profile_count.configure(
+            text=str(count) + " cabang - " + str(n_susut)
+                 + " punya SUSUT>0 - sort kolom 'SUSUT Share %' "
+                   "untuk lihat cabang shrinkage terbesar"
+        )
+
+    def _render_reason_profile_tree(self, prof):
+        """Render ulang tabel profil (dipanggil sort heading - tanpa re-join)."""
+        tree = self.tree_reason_profile
+        tree.delete(*tree.get_children(""))
+        d = self._apply_tree_sort_state(prof, tree)
+        cols = list(d.columns)
+        self._populate_tree(
+            tree, d, cols, width=95, ndigits=1, cap=30,
+            get_df=lambda: self._reason_profile_df,
+            render_fn=self._render_reason_profile_tree,
+        )
 
     def _export_compare_charts(self):
         """M24: export PNG via helper shared (dulu loop duplikat 4×)."""

@@ -45,7 +45,7 @@ def bundle_res_dir() -> Path:
     return _bundle_dir()
 
 
-APP_VERSION = "2.4.1"
+APP_VERSION = "2.5.0"
 APP_TITLE = "Waste Anomaly Detection — Pro Dashboard"
 
 # F11 (v2.4.0): logger UI bersama — exception senyap kini tercatat ke file.

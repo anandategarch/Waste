@@ -1210,3 +1210,70 @@ def chart_fingerprint_distribution(
     # Pattern A + H: margins + labelpad
     apply_layout(fig, ax, left_pad=0.14, bottom_pad=0.18, top_pad=0.88)
     return fig
+
+
+# ============================================================
+# COMPARE: Reason mix — share % alasan 2 cabang (P3 v2.5.0)
+# ============================================================
+
+def chart_reason_mix_compare(
+    df: pd.DataFrame,
+    cabang_a: str,
+    cabang_b: str,
+) -> Figure:
+    """Grouped bar: share % TOTAL per KETERANGAN untuk 2 cabang (P3).
+
+    Menjawab 'cabang ini SUSUT-nya aneh nggak?' — profil alasan per cabang
+    dibandingkan berdampingan dalam persentase (bukan absolut) supaya
+    cabang besar/kecil sebanding. Sumber: priority.reason_share.
+    """
+    from .priority import reason_share  # lokal — hindari import cycle saat load
+
+    fig = Figure(figsize=(6, 3.5), dpi=100)
+    ax = _styled_axes(fig)
+
+    if "NAMA RESTO" not in df.columns or "KETERANGAN" not in df.columns \
+            or "TOTAL" not in df.columns:
+        ax.text(0.5, 0.5, "Tidak ada data", ha="center", va="center",
+                color=PALETTE_NEUTRAL)
+        ax.set_axis_off()
+        return fig
+
+    sa = reason_share(df, cabang_a)
+    sb = reason_share(df, cabang_b)
+    if sa.empty and sb.empty:
+        ax.text(0.5, 0.5, "Tidak ada waste di kedua cabang",
+                ha="center", va="center", color=PALETTE_NEUTRAL)
+        ax.set_axis_off()
+        return fig
+
+    keys = list(sa.index) + [k for k in sb.index if k not in sa.index]
+    # urut by share gabungan (rata-rata dua sisi) desc
+    order = sorted(
+        keys,
+        key=lambda k: -float((sa.get(k, 0.0) + sb.get(k, 0.0)) / 2),
+    )
+    a_vals = [float(sa.get(k, 0.0)) for k in order]
+    b_vals = [float(sb.get(k, 0.0)) for k in order]
+
+    x = np.arange(len(order))
+    w = 0.38
+    b1 = ax.bar(x - w/2, a_vals, w, label=str(cabang_a),
+                color=PALETTE_ACCENT, edgecolor="white", linewidth=1.5)
+    b2 = ax.bar(x + w/2, b_vals, w, label=str(cabang_b),
+                color=PALETTE_SECONDARY, edgecolor="white", linewidth=1.5)
+    for bars, vals in ((b1, a_vals), (b2, b_vals)):
+        for bar, val in zip(bars, vals):
+            if val > 0:
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+                        f"{val:.0f}%", ha="center", va="bottom", fontsize=7,
+                        fontweight="bold", color="#0f172a")
+    ax.set_xticks(x)
+    ax.set_xticklabels([fmt_reason(str(k)) for k in order], fontsize=7)
+    ax.set_ylabel("Share dari waste cabang (%)")
+    ax.set_title("Profil Alasan (share %) — 2 Cabang", pad=10)
+    ax.legend(loc="upper right", fontsize=8, frameon=False)
+    add_ylim_headroom(ax, factor=1.15)
+    # Pattern A + B + E: margins + legend + rotation
+    apply_layout(fig, ax, rotate_x=True, rotation=30, bottom_pad=0.24)
+    return fig

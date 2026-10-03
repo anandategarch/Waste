@@ -253,6 +253,14 @@ class RunTabMixin:
         elif tag == "export_done":
             _, result, _ = item
             self._on_export_done(result)
+        elif tag == "period_done":
+            # P9 (v2.5.0): hasil compare periode dari worker tab Compare Periode.
+            _, result, _ = item
+            try:
+                self._on_period_done(result)
+            except Exception as e:  # noqa: BLE001 — render best-effort
+                self._set_status(f"⚠ Render compare periode gagal: {e}", "error")
+                self.log(f"⚠ Compare periode gagal dirender: {e}")
 
 
     def _on_pipeline_done(self, summary: dict):

@@ -91,6 +91,16 @@ class VizTabMixin:
             self._make_viz_placeholder()  # L3: dedupe inline
             return
 
+        # P8 (v2.5.0): 4 chart galeri ini kini bisa DIKLIK → set filter di
+        # Dashboard + lompat ke sana (drill-down lintas-tab). Chart lain
+        # tetap statis (tidak punya dimensi filter yang natural).
+        drillable = {
+            wa_charts.chart_status_pie: ("status", "Status"),
+            wa_charts.chart_waste_per_cabang: ("cabang", "Cabang"),
+            wa_charts.chart_top_items: ("item", "Item"),
+            wa_charts.chart_pareto_keterangan: ("keterangan", "Alasan"),
+        }
+
         cols_per_row = 2
         for idx, (title, desc, fn) in enumerate(wa_charts.ALL_CHARTS):
             row = idx // cols_per_row
@@ -103,11 +113,17 @@ class VizTabMixin:
             card.rowconfigure(1, weight=1)
             title_frame = tk.Frame(card, bg=C_TITLE_BG)
             title_frame.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 0))
+            drill_note = "" if fn not in drillable else "  👆 klik = drill-down"
             tk.Label(title_frame, text=f"📊 {title}", font=(FONT_NAME, 9, "bold"),
                      fg=C_HEADER, bg=C_TITLE_BG).pack(side="left", padx=8, pady=6)
-            tk.Label(title_frame, text=desc, font=F_HINT, fg=C_TEXT_MUTED, bg=C_TITLE_BG).pack(side="left", padx=8)
+            tk.Label(title_frame, text=desc + drill_note, font=F_HINT,
+                     fg=C_TEXT_MUTED, bg=C_TITLE_BG).pack(side="left", padx=8)
             try:
-                fig = fn(df)
+                kwargs = {}
+                if fn in drillable:
+                    key, _label = drillable[fn]
+                    kwargs["on_click"] = lambda k, v, _key=key: self._on_viz_chart_click(_key, v)
+                fig = fn(df, **kwargs)
                 canvas_widget = wa_charts.embed_figure(card, fig)
                 canvas_widget.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
                 self._viz_canvases.append((title, fig, canvas_widget))
@@ -117,6 +133,16 @@ class VizTabMixin:
                 err.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
         for c_i in range(cols_per_row):
             self._viz_inner.columnconfigure(c_i, weight=1, minsize=420)
+
+    def _on_viz_chart_click(self, key: str, value):
+        """P8 (v2.5.0): klik bar/wedge di chart galeri → terapkan filter di
+        Dashboard + lompat ke tab Dashboard (chart di-render ulang dengan
+        highlight oleh mekanisme filter yang sudah ada)."""
+        self._on_chart_click(key, value)
+        try:
+            self.notebook.select(0)  # tab Dashboard
+        except Exception:  # noqa: BLE001 — lompatan best-effort
+            pass
 
 
     def _export_all_charts(self):

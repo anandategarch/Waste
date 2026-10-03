@@ -1,8 +1,10 @@
 # Waste Anomaly Detection
 
-Python + Tkinter **professional dashboard** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif**, **filter profile persistence**, **comparison mode 2 cabang**, **analisa quadrant & rate league**, dan **22+ grafik** matplotlib embedded.
+Python + Tkinter **professional dashboard** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif lintas-tab**, **filter profile persistence**, **comparison mode 2 cabang**, **analisa temporal (hari/minggu)**, **money view (prioritas magnitude)**, **benchmark peer aktif**, **data quality otomatis**, **compare periode bulan-ke-bulan**, **quadrant & rate league**, dan **27+ grafik** matplotlib embedded.
 
-> **v2.4.1** (hasil "double check") — perbaikan **path frozen-mode PyInstaller**: config.json / filters.json / folder data / log kini disimpan BERDAMPINGAN EXE (dulu hilang senyap karena menulis ke _MEIPASS temp yang terhapus saat exit — kebalikan klaim BUILD_EXE.bat), + **12 pesan log duplikat dibersihkan**, + **10 test baru path frozen** (total **150 test**).
+> **v2.5.0** — hasil "kerjakan semua" (gelombang analisa): **4 tab analisa baru** (Temporal — pola hari/weekday; Money View + Benchmark — prioritas magnitude & peer aktif; Data Quality — 7 pemeriksaan otomatis; Compare Periode — bandingkan 2 workbook), **drill-down kini ada di SEMUA tab analisa** (klik chart di Visualisasi, double-click baris di Hasil/Quadrant/Money → filter + lompat ke Dashboard; + dropdown KETERANGAN), **5 chart baru** (waste per hari + highlight weekend, weekday effect, heatmap alasan×hari, Pareto item per satuan, top money rows per FOCUS), **export Excel 10 sheet** (+Waste per Hari, Alasan×Hari, Money View, Data Quality), **KPI jujur per satuan**. 4 modul analisa baru + **320 test** (naik dari 150). Detail di **Changelog v2.5.0**.
+>
+> **v2.4.1** (hasil "double check") — perbaikan **path frozen-mode PyInstaller**: config.json / filters.json / folder data / log kini disimpan BERDAMPINGAN EXE (dulu hilang senyap karena menulis ke _MEIPASS temp yang terhapus saat exit — kebalikan klaim BUILD_EXE.bat), + **12 pesan log duplikat dibersihkan**, + **10 test baru path frozen** (total 150 test).
 >
 > **v2.4.0** — hasil "kerjakan semua" (2025): **arsitektur modular** (god-object 3.256 baris / 102 metode dipecah jadi paket `ui/` — 14 file mixin, verbatim terverifikasi + 11 test struktural), **cancel run jujur** (hook antar-stage — CPU benar-benar berhenti), **validasi skema input** (anti degradasi senyap header lowercase), **exporter streaming** (anti OOM 100k baris), **logging framework** (rotating file + hook exception Tk), **140 test**, **CI GitHub Actions**, **packaging .exe** + ikon aplikasi. Detail di **Changelog v2.4.0**.
 
@@ -276,7 +278,7 @@ Waste/
 │   └── test_ui_structure.py        ← Struktur paket ui/ (MRO + manifest)
 ├── .github/workflows/ci.yml        ← CI: matrix Python × OS, lint + 150 test
 ├── waste_anomaly/
-│   ├── __init__.py                 ← __version__ single-source (2.4.1)
+│   ├── __init__.py                 ← __version__ single-source (2.5.0)
 │   ├── frozen.py                   ← Resolusi path PyInstaller exe vs dev (v2.4.1)
 │   ├── config.json                 ← Thresholds + sheet name candidates
 │   ├── pipeline.py                 ← Orchestrator 14 stage + cancel_check
@@ -387,6 +389,49 @@ Edit `waste_anomaly/config.json` → section `thresholds`. Atau pakai tab "⚙ K
 | Tab Visualisasi kosong | Pastikan sudah run pipeline. Klik "⟳ Refresh Grafik" manual kalau tidak auto-load. |
 | Grafik matplotlib error di Linux headless | Set env: `export MPLBACKEND=TkAgg` sebelum jalankan `python ui_app.py`. |
 | UI tidak terbuka | Pastikan Python 3.10+ terpasang (`python --version`). |
+
+## Changelog v2.5.0 — "Kerjakan Semua (Analisa)": 4 Tab Analisa Baru + Drill-Down Semua Tab
+
+Dipicu audit analisa: 12 sinyal solid sebagai **detektor pola**, tapi ada 6 blind spot terukur — event single-day terbesar (96.480 GR BASIC MIE hari-9) lolos berlabel "Normal", baris Prioritas Tinggi hanya 0,5% dari total waste, peer mati untuk event langka (median termasuk cabang nol), tanpa analisa temporal (padahal pola weekend +35% ada di data), 119 baris waste tanpa BOM invisibel, dan agregat mencampur satuan. v2.5.0 menambal semuanya dengan **4 modul analisa murni baru + 4 tab UI baru + perluasan drill-down**.
+
+### P1 — Tab "📅 Temporal" (analisa dimensi waktu)
+- `waste_anomaly/temporal.py`: `waste_per_day`, `weekday_pattern` (kelas hari % 7), `weekday_effect` (deteksi pasangan kelas peak siklik), `reason_by_day` (matrix alasan×hari), `reason_weekday_ratio` (efek peak per alasan), `unit_summary`.
+- Chart: **waste per hari** (hari peak di-highlight merah + catatan "+N%"), **weekday effect** (mean per baris aktif per kelas + garis rata-rata), **heatmap alasan×hari** (top-9 alasan, kapan terjadi). Tabel rasio alasan.
+- Angka nyata pada data sampel: kelas peak (5,6) → +35% (369,7 vs 273,6); SUSUT +42%, Cancel Nota +39% di hari peak; TRIAL datar 1,00×; Kualitas Internal justru 0,58×.
+
+### P2 — Tab "💰 Money View" (prioritas magnitude)
+- `waste_anomaly/priority.py`: `money_view` (top waste rows APA PUN statusnya + Share %/Kumulatif %), `focus_score` (60% magnitude percentile + 40% anomali, 0-100), `focus_class` (Fokus Utama ≥ 70 / Sekunder ≥ 50 / Rutin), `benchmark_items`, `reason_profile`, `reason_share`, `susut_benchmark`.
+- Chart: **top money rows** (diwarnai FOCUS CLASS), **Pareto item** (satuan eksplisit di label). Tabel money (top 100) + benchmark.
+- Mengisi gap audit: top row KULIT PANGSIT GGPDAA 299.855 kini tampil teratas (sebelumnya "Normal" dan tak terlihat di view prioritas).
+
+### P4 — Benchmark peer AKTIF (di tab Money View)
+- Peer median dihitung **hanya dari cabang yang punya waste** pada item tsb — memperbaiki blind-spot peer lama (median termasuk cabang nol → rasio 0 → S8/S9/S10 mati justru untuk event langka).
+- Data sampel: **239 pasangan item×cabang** kini ter-flag "Di Atas Peer" (≥ 2× median peer aktif) — dulu invisibel.
+
+### P6 — Tab "🧹 Data Quality" (pemeriksaan otomatis)
+- `waste_anomaly/data_quality.py` — 7 pemeriksaan defensif: nilai negatif (error); SATUAN spasi-tersembunyi/NBSP; SOURCE DATA varian kapital (memecah peer group); KETERANGAN terfragmentasi (prefix); waste tanpa BOM; grup resto×item terpecah antar source (dilute sinyal); baris nol (info struktur).
+- Angka data sampel: 2.039 baris satuan 'PACK'NBSP, 12.086 baris source varian 'dan/DAN', 119 baris waste tanpa BOM (190.836 qty), 318 grup terpecah, 97 baris 'Kualitas' terfragmentasi.
+
+### P9 — Tab "🔀 Compare Periode" (bulan ke bulan)
+- `waste_anomaly/period_compare.py`: `auto_key_akhir` (deteksi hari aktif terbesar file B), `compare_periods` — summary 7 metrik, per-JENIS, cabang mover, item mover (top-100 |delta|), item baru/hilang.
+- Worker thread + progress log + guard anti-run-bersamaan; hasil di 6 halaman tabel.
+
+### P3/P5/P7 — Ekstensi Compare, KPI jujur, satuan
+- Tab Compare: **chart profil alasan share %** 2 cabang + **tabel profil alasan semua cabang + benchmark SUSUT** (rank & share per cabang).
+- KPI Dashboard: breakdown **per satuan** (GR/PCS/PACK + catatan campuran) + label serupa di Money View; Pareto item menulis satuan di label.
+
+### P8 — Drill-down di SEMUA tab
+- **Visualisasi**: 4 chart galeri (Status/Cabang/Top Items/Pareto Alasan) kini bisa **diklik** → set filter + lompat ke Dashboard (handler `on_click` baru di charts.py, kontrak sama dengan dashboard).
+- **Hasil**: double-click baris Detail/Anomali → filter cabang+item + lompat.
+- **Quadrant**: double-click baris item → filter item (semua cabang).
+- **Money View**: double-click baris → filter cabang+item.
+- **Dashboard**: dropdown filter **KETERANGAN** baru (sync 2 arah dengan chip/klik chart).
+
+### Export & infrastruktur
+- Export Excel kini **10 sheet**: +Waste per Hari, +Alasan×Hari, +Money View, +Data Quality (param `extra_sheets` di exporter — backward-compatible, default tetap 6).
+- Bug diperbaiki saat pengembangan: `_wire_patch_click` meng-unpack `patch.contains()` (tuple truthy — patch pertama selalu match); item queue `period_done` 3-tuple (kontrak dispatcher); `load_rekap_mentah` butuh arg config.
+- `ui/app.py` kini 15 mixin (14 tab); test struktural diperbarui (MRO dinamis, bukan posisi hard-coded).
+- **320 test** (naik dari 150): 51 temporal + 40 priority + 58 data_quality + 21 period_compare + struktur diperbarui. CI: ruff fatal clean. Verifikasi E2E runtime (Xvfb): 14 tab render, drill-down 5 jalur, compare-periode 24 detik, export 10 sheet.
 
 ## Changelog v2.4.1 — "Double Check": Fix Path Frozen-Mode PyInstaller
 

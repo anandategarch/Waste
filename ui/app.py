@@ -1,8 +1,9 @@
 """ui/app.py — komposisi class utama + entry point.
 
-WasteAnomalyApp = 11 mixin (infrastruktur + 10 tab) + tk.Tk. Metode
+WasteAnomalyApp = 15 mixin (infrastruktur + 14 tab) + tk.Tk. Metode
 dipindah VERBATIM dari ui_app.py lama (3.2k baris god-object) — lihat
-ui/shared.py untuk konstanta & registry font.
+ui/shared.py untuk konstanta & registry font. v2.5.0 menambah 4 mixin
+tab analisa baru (Temporal, Money, Quality, Period) + 1 ekstensi Compare.
 """
 
 from __future__ import annotations
@@ -16,31 +17,39 @@ from .tab_compare import CompareTabMixin
 from .tab_config import ConfigTabMixin
 from .tab_dashboard import DashboardTabMixin
 from .tab_help import HelpTabMixin
+from .tab_money import MoneyTabMixin
+from .tab_period import PeriodTabMixin
+from .tab_quality import QualityTabMixin
 from .tab_quadrant import QuadrantTabMixin
 from .tab_rate import RateLeagueTabMixin
 from .tab_result import ResultTabMixin
 from .tab_run import RunTabMixin
 from .tab_summary import SummaryTabMixin
+from .tab_temporal import TemporalTabMixin
 from .tab_viz import VizTabMixin
 
 
 class WasteAnomalyApp(
     AppBase,
     DashboardTabMixin,
+    TemporalTabMixin,
+    MoneyTabMixin,
     CompareTabMixin,
     QuadrantTabMixin,
     RateLeagueTabMixin,
     ResultTabMixin,
     VizTabMixin,
+    QualityTabMixin,
+    PeriodTabMixin,
     SummaryTabMixin,
     RunTabMixin,
     ConfigTabMixin,
     HelpTabMixin,
     tk.Tk,
 ):
-    """Aplikasi utama — komposisi 11 modul mixin (10 tab + infrastruktur).
+    """Aplikasi utama — komposisi 15 modul mixin (14 tab + infrastruktur).
 
-    Menambah tab ke-11 = buat file mixin baru + daftar di sini (SATU tempat,
+    Menambah tab baru = buat file mixin baru + daftar di sini (SATU tempat,
     dulu 5+ situs tersebar di god-object).
     """
 

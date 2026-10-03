@@ -90,6 +90,8 @@ class QuadrantTabMixin:
         sb_x.grid(row=1, column=0, sticky="ew")
 
         self._quadrant_canvases = []
+        # P8 (v2.5.0): double-click baris item → drill-down filter item di Dashboard.
+        self.tree_quadrant.bind("<Double-1>", self._on_quadrant_row_double_click)
 
 
     def _render_quadrant_charts(self):
@@ -196,6 +198,29 @@ class QuadrantTabMixin:
             text=f"{count} item (menampilkan {min(200, count)} pertama)"
         )
 
+
+    def _on_quadrant_row_double_click(self, event):
+        """P8 (v2.5.0): double-click baris item → set filter item di Dashboard
+        + lompat ke sana (semua cabang utk item tsb — konteks analisa item)."""
+        selection = self.tree_quadrant.selection()
+        if not selection:
+            return
+        vals = self.tree_quadrant.item(selection[0], "values")
+        if not vals:
+            return
+        cols = self.tree_quadrant["columns"]
+        try:
+            item_name = vals[cols.index("NAMA BARANG")] if "NAMA BARANG" in cols else None
+        except (ValueError, IndexError):
+            return
+        if not item_name:
+            return
+        self.active_filters["item"] = item_name
+        self._apply_dashboard_filter()
+        try:
+            self.notebook.select(0)  # tab Dashboard
+        except Exception:  # noqa: BLE001 — lompatan best-effort
+            pass
 
     def _export_quadrant_charts(self):
         """M24: export PNG via helper shared (dulu loop duplikat)."""

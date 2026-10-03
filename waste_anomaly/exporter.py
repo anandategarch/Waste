@@ -95,6 +95,7 @@ def export_to_excel(
     config: dict,
     key_akhir: int,
     log_lines: list[str],
+    extra_sheets: dict[str, pd.DataFrame] | None = None,
 ) -> dict:
     """Tulis multi-sheet xlsx. Return summary dict.
 
@@ -105,6 +106,11 @@ def export_to_excel(
         "File output sedang dibuka di Excel — tutup dulu lalu ulangi".
     Akses kolom opsional (ANOMALY STATUS, ANOMALY SCORE, NAMA RESTO, dst.)
     di-guard — sheet terkait di-skip/dikosongkan secara graceful (H8-c).
+
+    v2.5.0: ``extra_sheets`` (opsional) = dict nama sheet → DataFrame;
+    ditulis SETELAH 'Pareto Alasan' dan SEBELUM 'Log Run' (dipakai UI untuk
+    sheet analisa baru: Waste per Hari, Alasan x Hari, Money View, Data
+    Quality). Sheet kosong/None di-skip; nama didedupe otomatis.
     """
     output_path = Path(output_path)
     try:
@@ -168,6 +174,17 @@ def export_to_excel(
         df_pareto = _build_pareto(df)
         _write(wb, pareto_name, df_pareto, freeze="A2")
 
+        # ---- 5b. Extra sheets analisa (v2.5.0) ----
+        # Urutan insert: setelah ringkasan turunan, sebelum Log Run. Nama
+        # sheet didedupe oleh _write (via _dedupe_sheet_name) sehingga tidak
+        # bentrok bila user memakai nama yang sudah ada.
+        n_extra = 0
+        for sheet_name, extra_df in (extra_sheets or {}).items():
+            if extra_df is None or getattr(extra_df, "empty", False):
+                continue
+            _write(wb, str(sheet_name), extra_df, freeze="A2")
+            n_extra += 1
+
         # ---- 6. Log Run ----
         log_name = sheet_cfg.get("log_sheet", "Log Run")
         df_log = _build_log(df, key_akhir, log_lines)
@@ -224,6 +241,7 @@ def export_to_excel(
         "normal_count": normal_count,
         "cabang_count": int(df["NAMA RESTO"].nunique()) if "NAMA RESTO" in df.columns else 0,
         "item_count": int(df["NAMA BARANG"].nunique()) if "NAMA BARANG" in df.columns else 0,
+        "extra_sheets_count": n_extra,
     }
 
 

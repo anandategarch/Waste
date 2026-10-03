@@ -14,6 +14,7 @@ import ast
 from pathlib import Path
 
 import pytest
+import tkinter
 
 REPO = Path(__file__).resolve().parent.parent
 UI = REPO / "ui"
@@ -21,14 +22,18 @@ MANIFEST = Path(__file__).resolve().parent / "fixtures" / "ui_methods_manifest.t
 
 EXPECTED_MODULES = [
     "shared.py", "widgets.py", "base.py", "app.py",
-    "tab_dashboard.py", "tab_compare.py", "tab_quadrant.py",
-    "tab_rate.py", "tab_result.py", "tab_viz.py", "tab_summary.py",
+    "tab_dashboard.py", "tab_temporal.py", "tab_money.py",
+    "tab_compare.py", "tab_quadrant.py",
+    "tab_rate.py", "tab_result.py", "tab_viz.py", "tab_quality.py",
+    "tab_period.py", "tab_summary.py",
     "tab_run.py", "tab_config.py", "tab_help.py",
 ]
 
 EXPECTED_MIXINS = [
-    "AppBase", "DashboardTabMixin", "CompareTabMixin", "QuadrantTabMixin",
-    "RateLeagueTabMixin", "ResultTabMixin", "VizTabMixin", "SummaryTabMixin",
+    "AppBase", "DashboardTabMixin", "TemporalTabMixin", "MoneyTabMixin",
+    "CompareTabMixin", "QuadrantTabMixin",
+    "RateLeagueTabMixin", "ResultTabMixin", "VizTabMixin",
+    "QualityTabMixin", "PeriodTabMixin", "SummaryTabMixin",
     "RunTabMixin", "ConfigTabMixin", "HelpTabMixin",
 ]
 
@@ -43,6 +48,17 @@ def _mixin_methods(cls):
         if callable(raw):
             out[name] = raw
     return out
+
+
+def _mixin_classes():
+    """Semua mixin WasteAnomalyApp sebelum Tk (urutan MRO)."""
+    from ui.app import WasteAnomalyApp
+    classes = []
+    for cls in WasteAnomalyApp.__mro__[1:]:
+        if cls is tkinter.Tk:
+            break
+        classes.append(cls)
+    return classes
 
 
 class TestUiStructure:
@@ -60,34 +76,30 @@ class TestUiStructure:
         content = (REPO / "ui_app.py").read_text(encoding="utf-8")
         assert "from ui.app import" in content
 
-    def test_mro_11_mixin_dan_tk(self):
+    def test_mro_15_mixin_dan_tk(self):
         from ui.app import WasteAnomalyApp
-        import tkinter
 
         names = [c.__name__ for c in WasteAnomalyApp.__mro__]
-        # 11 mixin di posisi 1..11, lalu Tk
+        n_mixins = len(EXPECTED_MIXINS)
         assert names[0] == "WasteAnomalyApp"
-        assert names[1:12] == EXPECTED_MIXINS
-        assert names[12] == "Tk"
-        assert WasteAnomalyApp.__mro__[12] is tkinter.Tk
+        assert names[1:1 + n_mixins] == EXPECTED_MIXINS
+        assert WasteAnomalyApp.__mro__[1 + n_mixins] is tkinter.Tk
 
     def test_set_metode_identik_dengan_manifest(self):
         """102 metode asli god-object TIDAK BOLEH hilang satu pun."""
-        from ui.app import WasteAnomalyApp
         manifest = MANIFEST.read_text(encoding="utf-8").strip().splitlines()
         assert len(manifest) == 102
 
         composed = set()
-        for cls in WasteAnomalyApp.__mro__[1:12]:
+        for cls in _mixin_classes():
             composed |= set(_mixin_methods(cls))
         missing = set(manifest) - composed
         assert not missing, f"Metode HILANG: {sorted(missing)}"
 
     def test_tidak_ada_metode_duplikat_antarmixin(self):
         """Metode yang sama di 2 mixin = bug MRO bayang (silent override)."""
-        from ui.app import WasteAnomalyApp
         seen = {}
-        for cls in WasteAnomalyApp.__mro__[1:12]:
+        for cls in _mixin_classes():
             for name in _mixin_methods(cls):
                 assert name not in seen, (
                     f"{name} didefinisikan di {seen[name]} DAN {cls.__name__}"
@@ -113,7 +125,6 @@ class TestUiStructure:
         dilakukan saat refactor; test ini cukup memastikan signature def
         tiap metode ada di file mixin yang benar.)
         """
-        from ui.app import WasteAnomalyApp
         manifest = MANIFEST.read_text(encoding="utf-8").strip().splitlines()
         all_src = "\n".join(
             (UI / f).read_text(encoding="utf-8") for f in EXPECTED_MODULES
@@ -128,7 +139,6 @@ class TestUiStructure:
 
     def test_font_registry_mekanisme(self):
         """rebind_fonts menyuntik nilai ke modul konsumen terdaftar."""
-        import sys
         from ui import shared
         import ui.tab_help  # modul dengan font consumer terdaftar
 
