@@ -38,7 +38,7 @@ def bundle_res_dir() -> Path:
     return _bundle_dir()
 
 
-APP_VERSION = "2.6.0"
+APP_VERSION = "2.6.1"
 APP_TITLE = "Waste Anomaly Detection"
 
 # Logger UI bersama — exception senyap tercatat ke logs/waste_anomaly.log.

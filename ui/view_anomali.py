@@ -29,10 +29,16 @@ from .state import AppContext
 from .theme import STATUS_COLORS
 from .widgets import Card, DataTable, KpiStrip, StatusChip, WLabel, status_chip_for
 
-# Kolom tabel anomali — ramping (detail lengkap ada di panel bawah)
+# Kolom tabel anomali — ramping (detail lengkap ada di panel bawah).
+# v2.6.1: 10 → 7 kolom. MAX / HARI MAX / RANGKING WASTE dihapus dari tabel
+# karena duplikatif: ketiganya tampil lengkap di panel detail (DETAIL_COLS),
+# Jelajah, dan export Excel; RANGKING WASTE mengulang ranking tabel itu
+# sendiri (tabel sudah terurut skor). 7 kolom membuat semua header muat
+# TANPA scrollbar horizontal pada ukuran default (1440×900) maupun laptop
+# umum (1366×768) — mandat zero-terpotong.
 TABLE_COLS = [
     "ANOMALY SCORE", "ANOMALY STATUS", "NAMA RESTO", "NAMA BARANG",
-    "JENIS", "KETERANGAN", "TOTAL", "MAX", "HARI MAX", "RANGKING WASTE",
+    "JENIS", "KETERANGAN", "TOTAL",
 ]
 
 # 12 sinyal — label persis signals.py (bagian REASON TEXT)
@@ -305,7 +311,8 @@ class AnomaliView(QWidget):
             return
         cols = [c for c in TABLE_COLS if c in df.columns]
         view_df = df[cols] if cols else df
-        self._table.set_dataframe(view_df, sort_desc="ANOMALY SCORE")
+        self._table.set_dataframe(view_df, sort_desc="ANOMALY SCORE",
+                                  narrow_hide=["JENIS"])
         full = len(self._ctx.df) if self._ctx.df is not None else 0
         if len(view_df) == 0:
             self._lbl_count.setText("0 anomali lolos filter — longgarkan filter atau ambang skor.")

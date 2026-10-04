@@ -184,10 +184,13 @@ class MainWindow(QMainWindow):
         # bahkan di jendela 1000px.
         self._tabs.setElideMode(Qt.TextElideMode.ElideRight)
         self._tabs.setUsesScrollButtons(True)
-        split.setStretchFactor(0, 0)
-        split.setStretchFactor(1, 1)
         split.setSizes([300, 1200])
-        self._sidebar.setMinimumWidth(260)
+        # v2.6.1: sidebar menyusut PROPORSIONAL saat window kecil (dulu
+        # menahan ~300px & memiskinkan view → tabel kehilangan ruang; di
+        # window 1024 viewport tabel cuma 662px). Rasio 3:12 ≈ 300:1200.
+        split.setStretchFactor(0, 3)
+        split.setStretchFactor(1, 12)
+        self._sidebar.setMinimumWidth(230)
         self._sidebar.setMaximumWidth(380)
         self.setCentralWidget(split)
 

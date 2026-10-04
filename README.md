@@ -2,6 +2,8 @@
 
 Python + PySide6 (Qt) **anomaly workbench** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif lintas-tab**, **filter profile persistence**, **comparison mode 2 cabang**, **analisa temporal (hari/minggu)**, **money view (prioritas magnitude)**, **benchmark peer aktif**, **data quality otomatis**, **compare periode bulan-ke-bulan**, **quadrant & rate league**, dan **27+ grafik** matplotlib embedded.
 
+> **v2.6.1** — fix installer Windows: **`SETUP.bat` kini otomatis membuat `.venv` lokal** (virtual environment) sebelum `pip install` — menutup batas panjang path Windows 260 karakter yang membuat instalasi `PySide6` gagal dengan `OSError: [Errno 2]` di Python Microsoft Store (site-packages-nya terlalu dalam), sekaligus tidak mencemari Python global; `MULAI.bat` otomatis memakai `.venv`; `BUILD_EXE.bat` ikut memakai `.venv`; pesan error install kini memberi 2 solusi konkret (repo di path pendek / aktifkan `LongPathsEnabled` + restart); banner `MULAI.bat` disegarkan ke 8 view v2.6.x. Plus **hardening anti-terpotong UI**: header tabel kini punya lantai lebar = lebar teksnya (tak pernah ter-elide lagi — dulu "NAMA RESTO" tampil "MA REST" di jendela sempit), tabel re-fit saat window di-resize, tabel anomali dirampingkan 10→7 kolom (kolom duplikat panel detail dihapus — mandat "hapus yang tidak perlu"), sidebar menyusut proporsional, kolom JENIS disembunyikan responsif saat sempit — 0 scrollbar horizontal di 1440×900 maupun 1024×700 (dulu 2 kolom tersembunyi di balik scroll bahkan di ukuran default). Core `waste_anomaly/` tak tersentuh.
+>
 > **v2.6.0** — hasil "rebuild ulang UI": **UI baru PySide6/Qt berorientasi penemuan anomali** — landing langsung ke tabel anomali ter-ranking (skor ↓) + panel detail (12 sinyal, peer, uang, drill-down 1-klik), KPI mengikuti filter, **8 view** (Anomali · Jelajah · Waktu · Uang · Peer · Kualitas Data · Banding Periode · Pipeline) menggantikan 14 tab Tkinter, tabel tanpa cap baris (25.901 baris di-render virtualized + wrap + pewarnaan severity), **jaminan anti-terpotong struktural** (word-wrap semua teks; chart punya lantai ukuran + scroll; kolom tabel auto-fit proporsional; grid chart responsif 2↔1 kolom; tab tidak di-elide tanpa ellips), tombol duplikat/tak perlu dihapus (refresh global & popup log), tombol & fitur lama dipertahankan SEMUA (profil filter, export 10 sheet, compare periode, threshold editor), 2 bug core chart ikut diperbaiki (legend rate-league terpotong sejak lama; label tick weekday saling tumpuk). Core `waste_anomaly/` TIDAK tersentuh — golden regression utuh (25.901/399/41). Dependensi UI baru: `PySide6` (offline, satu kali `pip install`).
 >
 > **v2.5.1** — hasil "deep audit fitur baru + fix": audit ulang v2.5.0 atas kode asli (23 temuan: 4 HIGH / 12 MEDIUM / 7 LOW) → **isolasi exception per-chart di Dashboard** (DD-H1: sebelumnya satu chart gagal = chip ter-update + chart kosong + tabel stale), **sinkronisasi dropdown KETERANGAN lengkap di 6 titik** (DD-H2: Clear Filter & Muat Profil dulu membiarkan dropdown bohong), **KPI mengikuti filter + label konteks "X dari N baris"** (DD-M3), **rentang hari ketat** (DD-M1: 23.470 baris nol tidak lagi lolos — chip "(baris aktif)"), **search tak lagi cocok 'nan'/'&lt;NA&gt;'** (DD-L4), **FOCUS SCORE rank di subset aktif** (MO-M2: komponen magnitude kini berdaya-pembeda penuh, dulu terkompresi 90,6–100 oleh baris nol), **satuan eksplisit di money_top/judul temporal** (MO-M1), **normalisasi whitespace KETERANGAN** di dropdown/filter/agregat (DQ-M1), **min 30 entri aktif untuk tabel rasio alasan** (TE-M3: rasio sampel-kecil = artefak), **Compare Periode + kolom Hari Data & Waste/Hari** (PE-M1: bias 30-vs-31 hari), **split-source jujur "318 aktif dari 8.221 grup"** (DQ-L1), **format angka Indonesia tunggal** (IN-L1), **coalesce klik ganda** (DD-L2), + hardening `_on_pick` try/except + logging, label 'weekend' → 'pola hari mod-7' + catatan asumsi (TE-M1), + **test kontrak chart interaktif** (klik disimulasikan di Agg → nilai on_click ∈ kolom data; PR-H2).
@@ -15,10 +17,13 @@ Python + PySide6 (Qt) **anomaly workbench** untuk deteksi anomali waste di caban
 ## Cara Pakai
 
 ### 1. Setup (sekali saja)
-Jalankan `SETUP.bat` di root folder. Install dependencies:
+Jalankan `SETUP.bat` di root folder. Script otomatis membuat **`.venv`** (virtual environment lokal) lalu menginstall dependencies ke situ:
 - pandas, numpy (data processing)
 - openpyxl (Excel I/O)
 - matplotlib (visualisasi grafik)
+- PySide6 (framework UI Qt6)
+
+> **Kenapa `.venv`? (v2.6.1)** Python dari Microsoft Store menyimpan package di path sangat dalam (`C:\Users\...\AppData\Local\Packages\PythonSoftwareFoundation...\LocalCache\local-packages\...`, ±137 karakter), sedangkan wheel PySide6 memuat file dengan path internal ±143 karakter. 137+143 = 280 > batas Windows **260 (MAX_PATH)** → `pip install PySide6` gagal `OSError: [Errno 2] No such file or directory`. Install ke `.venv` di folder repo memotong total path ±100 karakter → aman, sekaligus mengisolasi dari Python global Anda. `MULAI.bat` otomatis memakai `.venv` kalau ada. Kalau masih gagal: (a) pindahkan repo ke path pendek seperti `C:\Waste`, atau (b) aktifkan Windows Long Path sebagai admin — `reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f` — lalu restart PC.
 
 ### 2. Siapkan Workbook Input — `DATA_WASTE.xlsx`
 
@@ -385,10 +390,29 @@ Edit `waste_anomaly/config.json` → section `thresholds`. Atau pakai tab "⚙ K
 | `DATABASE_SATUAN tidak ditemukan` | Kolom HELPER/STATUS dari input dipertahankan; kalau tidak ada sama sekali tidak bisa dihitung ulang. Tambahkan sheet `DATABASE_SATUAN` untuk mengaktifkan. |
 | `File .xls` | Tidak didukung — save-as `.xlsx` dulu. |
 | `File output sedang dibuka di Excel` | Tutup filenya di Excel, lalu klik Export ulang (pesan errornya sekarang jelas). |
-| `ModuleNotFoundError: pandas / matplotlib` | Jalankan `SETUP.bat` dulu. Atau manual: `pip install pandas numpy openpyxl matplotlib`. |
+| `ModuleNotFoundError: pandas / matplotlib / PySide6` | Jalankan `SETUP.bat` dulu. Atau manual di dalam `.venv`: `pip install -r requirements.txt`. |
+| `pip install PySide6` gagal `OSError: [Errno 2] ... qrc_...cpp.obj` (Windows) | Batas path 260 karakter (MAX_PATH). Jalankan `SETUP.bat` v2.6.1+ (otomatis pakai `.venv`). Kalau masih gagal: pindahkan repo ke path pendek, atau aktifkan `LongPathsEnabled` (admin + restart) — lihat bagian Setup. |
 | Tab Visualisasi kosong | Pastikan sudah run pipeline. Klik "⟳ Refresh Grafik" manual kalau tidak auto-load. |
-| Grafik matplotlib error di Linux headless | Set env: `export MPLBACKEND=TkAgg` sebelum jalankan `python ui_app.py`. |
+| Grafik matplotlib error di Linux headless | Set env: `export QT_QPA_PLATFORM=offscreen` sebelum `python ui_app.py` (UI sekarang Qt/PySide6, bukan Tkinter). |
 | UI tidak terbuka | Pastikan Python 3.10+ terpasang (`python --version`). |
+
+## Changelog v2.6.1 — Fix Installer Windows (venv otomatis)
+
+**Pemicu nyata dari pengguna:** instalasi v2.6.0 di Windows gagal — `pip install -r requirements.txt` mati di `PySide6` dengan `OSError: [Errno 2] No such file or directory: ...\PySide6\qml\Qt\labs\assetdownloader\objects-Debug\...\.qt\rcc\qrc_..._init.cpp.obj`; hint pip sendiri menyebut *Windows Long Path support*.
+
+**Akar masalah (bukan bug aplikasi):** Python Microsoft Store menaruh package di path ±137 karakter; wheel PySide6 6.11 memuat file dengan path internal ±143 karakter; total 280 > batas 260 karakter Windows (MAX_PATH) → OS menolak membuat file.
+
+**Fix:**
+- **`SETUP.bat`**: cek Python → buat **`.venv`** di folder repo (sekali; dipakai ulang kalau sudah ada) → upgrade pip → install `requirements.txt` **ke `.venv`** → verifikasi import termasuk `PySide6`. Branch error khusus `:pipfail` menjelaskan 2 solusi: pindah repo ke path pendek (mis. `C:\Waste`) atau aktifkan `LongPathsEnabled` (admin + restart).
+- **`MULAI.bat`**: otomatis pakai `.venv\Scripts\python.exe` kalau ada (fallback: `python` global); banner disegarkan dari jadul v2.4.1/"10 tab" ke v2.6.x/8-view.
+- **`BUILD_EXE.bat`**: PyInstaller di-install & dijalankan dari `.venv`; error jelas kalau SETUP.bat belum dijalankan.
+- **README**: bagian Setup menjelaskan kenapa `.venv` (dengan matematika panjang path), tabel troubleshooting + row khusus error long-path + fix baris Linux headless yang masih menyebut Tkinter/TkAgg.
+- **Hardening anti-terpotong UI** — audit ulang VLM berukuran kecil (zoom 3× + ground-truth numerik widget) menemukan pelanggaran yang lolos audit 13/13 v2.6.0: header kolom ter-elide TENGAH di jendela sempit ("NAMA RESTO"→"MA REST", "KETERANGAN"→"TERANGA") dan tabel tidak re-fit saat window di-resize (kolom terakhir terpotong di tepi + scrollbar sia-sia):
+  - `ui/widgets.py` `DataTable._auto_columns`: **lantai lebar kolom = lebar teks header** (sel bisa wrap, header tidak — lantai header satu-satunya jaminan struktural); pass-2 menekan kolom konten-lebar ke arah lantai SEBELUM menyerah pada scrollbar; dukungan `narrow_hide` (kolom disembunyikan responsif saat sempit, muncul kembali saat melebar — disembunyikan ≠ terpotong); re-fit saat lebar viewport berubah >24px (ambang anti loop umpan balik scrollbar ~14px).
+  - `ui/app.py`: sidebar menyusut PROPORSIONAL saat window kecil (stretch 3:12, min 260→230px) — dulu menahan ~300px & memiskinkan view (viewport tabel hanya 662px di window 1024).
+  - `ui/view_anomali.py`: tabel anomali 10→7 kolom — MAX, HARI MAX, RANGKING WASTE dihapus (semuanya tampil di panel detail + Jelajah + export; RANGKING mengulang ranking tabel itu sendiri); JENIS masuk daftar `narrow_hide`.
+  - Hasil terukur: **0 scrollbar horizontal di 1440×900 (7 kolom penuh) dan 1024×700 (6 kolom inti penuh)** — verifikasi E2E + VLM PASS kedua ukuran; 366 test tetap hijau.
+- Core `waste_anomaly/` TIDAK tersentuh — golden regression utuh (25.901 baris / 399 anomali / 41 prioritas).
 
 ## Changelog v2.6.0 — "Rebuild Ulang": PySide6 Anomaly Workbench
 

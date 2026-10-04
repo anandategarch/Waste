@@ -1,41 +1,70 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 chcp 65001 >nul
 title Waste Anomaly Detection - SETUP (One-Time)
 color 0B
 cls
 echo ============================================================
-echo   SETUP - Install Dependencies (One-Time)
+echo   SETUP - Install Dependencies (One-Time) - v2.6.1
 echo ============================================================
 echo.
 echo  Menginstall dependencies untuk Waste Anomaly Detection:
-echo    - pandas         (data processing)
+echo    - pandas          (data processing)
 echo    - numpy           (numerical computation)
-echo    - openpyxl        (Excel metadata - list_sheets)
-echo    - python-calamine (Excel READ engine cepat - Rust-based, 7-10x faster)
+echo    - openpyxl        (Excel I/O)
+echo    - python-calamine (Excel READ engine cepat, Rust-based)
 echo    - matplotlib      (visualisasi grafik)
+echo    - PySide6         (framework UI Qt6)
+echo.
+echo  v2.6.1: install dilakukan ke .venv lokal di folder ini.
+echo  Keuntungan: tidak mencemari Python global, dan menghindari
+echo  batas panjang path Windows 260 karakter yang bikin pip gagal
+echo  menulis file PySide6 di Python Microsoft Store.
 echo.
 echo  Tekan ENTER untuk mulai install...
 pause >nul
 
-echo.
-echo [1/2] Install Python packages...
-python -m pip install --upgrade pip
-REM F5 v2.3.2: install dari requirements.txt (pinned) — konsisten dengan README,
-REM matplotlib >= 3.9 dijamin (tick_labels), bukan versi acak dari PyPI.
-python -m pip install -r requirements.txt
+cd /d "%~dp0"
+
+echo [1/5] Cek Python...
+python --version >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] Gagal install Python packages. Cek instalasi Python Anda.
-    echo         Pastikan Python 3.10+ terpasang: python --version
+    echo [ERROR] Perintah "python" tidak ditemukan di PATH.
+    echo         Install Python 3.10+ dari https://python.org atau dari
+    echo         Microsoft Store, lalu jalankan SETUP.bat lagi.
     pause
     exit /b 1
 )
+python --version
 
 echo.
-echo [2/2] Verifikasi instalasi...
-python -c "import pandas, numpy, openpyxl, matplotlib; import python_calamine; print('OK: pandas', pandas.__version__, '| numpy', numpy.__version__, '| openpyxl', openpyxl.__version__, '| matplotlib', matplotlib.__version__, '| calamine OK')"
+echo [2/5] Buat virtual environment .venv...
+if exist ".venv\Scripts\python.exe" (
+    echo        .venv sudah ada - dipakai ulang.
+) else (
+    python -m venv .venv
+    if errorlevel 1 (
+        echo [ERROR] Gagal membuat .venv. Cek error di atas.
+        pause
+        exit /b 1
+    )
+)
+set "PY=%~dp0.venv\Scripts\python.exe"
+
+echo.
+echo [3/5] Upgrade pip...
+"%PY%" -m pip install --upgrade pip
+
+echo.
+echo [4/5] Install dependencies ke .venv...
+"%PY%" -m pip install -r requirements.txt
+if errorlevel 1 goto :pipfail
+
+echo.
+echo [5/5] Verifikasi instalasi...
+"%PY%" -c "import pandas, numpy, openpyxl, matplotlib, python_calamine, PySide6; print('OK: pandas', pandas.__version__, '| numpy', numpy.__version__, '| openpyxl', openpyxl.__version__, '| matplotlib', matplotlib.__version__, '| PySide6', PySide6.__version__, '| calamine OK')"
 if errorlevel 1 (
-    echo [ERROR] Verifikasi gagal. Coba install ulang manual.
+    echo [ERROR] Verifikasi gagal. Coba jalankan SETUP.bat ulang.
     pause
     exit /b 1
 )
@@ -43,8 +72,34 @@ if errorlevel 1 (
 echo.
 echo ============================================================
 echo   SETUP SELESAI!
+echo   Dependensi terpasang di .venv - aplikasi tetap offline.
 echo   Sekarang jalankan MULAI.bat untuk membuka aplikasi.
 echo ============================================================
 echo.
 pause
 endlocal
+exit /b 0
+
+:pipfail
+echo.
+echo [ERROR] Gagal install Python packages ke .venv.
+echo.
+echo  Kalau errornya menyebut "No such file or directory" di file
+echo  PySide6, itu batas panjang path Windows = 260 karakter
+echo  MAX_PATH. Pilih salah satu solusi:
+echo.
+echo   A. Pindahkan folder repo ini ke path pendek, contoh:
+echo         C:\Waste
+echo      lalu jalankan SETUP.bat lagi dari lokasi baru.
+echo.
+echo   B. Aktifkan Windows Long Path support:
+echo      1. Jalankan CMD sebagai Administrator
+echo      2. Copy perintah ini lalu Enter:
+echo         reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
+echo      3. RESTART PC
+echo      4. Jalankan SETUP.bat lagi.
+echo.
+echo  Info lengkap: https://pip.pypa.io/warnings/enable-long-paths
+echo.
+pause
+exit /b 1

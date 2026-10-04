@@ -205,6 +205,8 @@ class DataTable(QTableView):
         self.verticalHeader().setVisible(False)
         self.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
         self._pending_fit = False
+        self._last_fit_w = -1  # v2.6.1: lebar viewport saat fit terakhir
+        self._narrow_hide: list[str] = []  # v2.6.1: kolom boleh-disebunyikan
         self.doubleClicked.connect(self._on_double)
         # Sort by header → tinggi baris harus dihitung ulang (baris visual
         # berganti isi; tinggi lama tidak cocok → teks wrap terpotong).
@@ -224,6 +226,8 @@ class DataTable(QTableView):
         for r in range(n):
             need = default_h
             for c in range(model.columnCount()):
+                if self.isColumnHidden(c):  # v2.6.1: kolom responsif tak dihitung
+                    continue
                 text = str(model.data(model.index(r, c), Qt.DisplayRole) or "")
                 if not text:
                     continue
@@ -243,8 +247,16 @@ class DataTable(QTableView):
             self.double_clicked.emit(rec)
 
     def set_dataframe(self, df: pd.DataFrame | None,
-                      sort_desc: str | None = None) -> None:
-        """Tampilkan df; ``sort_desc`` = nama kolom utk sort default DESC."""
+                      sort_desc: str | None = None,
+                      narrow_hide: list[str] | None = None) -> None:
+        """Tampilkan df; ``sort_desc`` = nama kolom utk sort default DESC.
+
+        ``narrow_hide`` (v2.6.1): nama kolom yang BOLEH disembunyikan —
+        secara berurutan — bila lantai header tak muat di viewport sempit
+        (tabel responsif). Disembunyikan ≠ terpotong: kolom inti tetap
+        tampil; kolom disembunyikan muncul kembali saat window melebar.
+        """
+        self._narrow_hide = list(narrow_hide or [])
         self._model.set_dataframe(df)
         if sort_desc and df is not None and sort_desc in df.columns:
             col = list(df.columns).index(sort_desc)
@@ -258,12 +270,20 @@ class DataTable(QTableView):
         super().resizeEvent(event)
         # Kolom belum ter-fit pas saat data pertama kali datang (viewport
         # belum berukuran final) → fit ulang sekali saat ukuran stabil.
-        if self._pending_fit and self.isVisible() and self.viewport().width() > 50:
+        # v2.6.1: re-fit JUGA saat lebar viewport berubah (window di-resize) —
+        # tanpa ini kolom memakai lebar window lama: kolom terakhir terpotong
+        # di tepi + scrollbar muncul padahal sebenarnya muat. Ambang 24px
+        # mencegah loop umpan-balik kemunculan scrollbar (~14px).
+        vw = self.viewport().width()
+        if vw > 50 and self.isVisible() and (
+                self._pending_fit or abs(vw - self._last_fit_w) > 24):
             self._auto_columns()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        if self._pending_fit and self.viewport().width() > 50:
+        vw = self.viewport().width()
+        if vw > 50 and (
+                self._pending_fit or abs(vw - self._last_fit_w) > 24):
             self._auto_columns()
 
     def selected_record(self) -> pd.Series | None:
@@ -277,16 +297,27 @@ class DataTable(QTableView):
         """Lebar kolom dari sampel isi + header, lalu di-FIT ke viewport.
 
         ANTI-TERPOTONG (aturan v2.6.0): bila total lebar melebihi viewport,
-        seluruh kolom diskalakan proporsional (batas bawah per kolom = min_w)
-        supaya semua kolom terlihat tanpa terpotong. Scrollbar horizontal
-        hanya untuk sheet ekstrem (mis. Detail 53 kolom) — itu memang
-        tak terhindarkan dan didampingi tooltip + wrap."""
+        seluruh kolom diskalakan proporsional supaya semua kolom terlihat.
+
+        LANTAI HEADER (aturan v2.6.1): kolom TIDAK pernah menyusut di bawah
+        lebar teks HEADERNYA sendiri. Tanpa ini, penyekalaan proporsional di
+        jendela sempit memaksa Qt me-elide header TENGAH ("NAMA RESTO" tampil
+        "MA REST", "KETERANGAN" → "TERANGA") — terpotong, melanggar jaminan.
+        Sel bisa wrap (baris memanjang), header TIDAK bisa — lantai header
+        adalah satu-satunya jaminan struktural. Bila jumlah lantai melebihi
+        viewport, kolom tetap di lantai + scrollbar horizontal muncul
+        (scroll ≠ terpotong; sama seperti sheet ekstrem mis. Detail 53
+        kolom — didampingi tooltip + wrap sel)."""
         model = self._model
         n_rows = min(sample, model.rowCount())
         fm = self.fontMetrics()
         widths: list[int] = []
+        floors: list[int] = []
         for c in range(model.columnCount()):
-            w = fm.horizontalAdvance(str(model.headerData(c, Qt.Horizontal))) + 26
+            hw = fm.horizontalAdvance(
+                str(model.headerData(c, Qt.Horizontal))) + 26
+            floors.append(min(max(min_w, hw), cap))
+            w = hw
             for r in range(n_rows):
                 text = str(model.data(model.index(r, c)) or "")
                 if len(text) > 60:
@@ -298,17 +329,68 @@ class DataTable(QTableView):
         avail = self.viewport().width() - 4
         if avail < 200:
             avail = 200
-        total = sum(widths)
+        # v2.6.1 RESPONSIVE: bila lantai header tak muat, sembunyikan kolom
+        # boleh-disebunyikan (urutan narrow_hide) sampai muat — kolom inti
+        # tetap tampil. Bila SETELAH itu masih tak muat → scrollbar
+        # horizontal (scroll ≠ terpotong).
+        n_cols = model.columnCount()
+        hidden: set[int] = set()
+        if self._narrow_hide and n_cols:
+            names = [str(model.headerData(c, Qt.Horizontal))
+                     for c in range(n_cols)]
+            total_f = sum(floors)
+            for want in self._narrow_hide:
+                if total_f <= avail:
+                    break
+                if want in names:
+                    c = names.index(want)
+                    if c not in hidden:
+                        hidden.add(c)
+                        total_f -= floors[c]
+        for c in range(n_cols):
+            self.setColumnHidden(c, c in hidden)
+        keep = [c for c in range(n_cols) if c not in hidden]
+        total = sum(widths[c] for c in keep)
+        final: dict[int, int] = {}
         if total > avail:
-            # Skala proporsional → semua kolom masuk viewport (tidak terpotong)
+            # Skala proporsional → semua kolom masuk viewport (tidak
+            # terpotong), tapi TIDAK menyusut di bawah lantai header (v2.6.1).
             scale = avail / total
-            widths = [max(int(w * scale), min_w) for w in widths]
-        for c, w in enumerate(widths):
-            self.setColumnWidth(c, w)
-        if sum(widths) <= avail + 2:
+            for c in keep:
+                final[c] = max(int(widths[c] * scale), floors[c])
+            # PASS-2 (v2.6.1): lantai bisa menahan Σ di atas avail padahal
+            # kolom konten-lebar masih punya slack — tekan proporsional
+            # terhadap slack sampai muat / semua kolom sudah di lantai
+            # (baru scrollbar mengambil alih; sel wrap menangani sisanya).
+            over = sum(final.values()) - avail
+            if over > 0:
+                slack = {c: final[c] - floors[c] for c in keep}
+                total_slack = sum(slack.values())
+                if total_slack > 0:
+                    cut = min(over, total_slack)
+                    for c in keep:
+                        if slack[c] > 0:
+                            share = int(round(cut * slack[c] / total_slack))
+                            final[c] = max(final[c] - share, floors[c])
+            # Sisa pembulatan (≤ beberapa px): potong dari kolom ber-slack
+            # terbesar satu-per-satu supaya scrollbar tak muncul sia-sia.
+            over = sum(final.values()) - avail
+            while over > 0:
+                cand = max(keep, key=lambda c: final[c] - floors[c])
+                if final[cand] <= floors[cand]:
+                    break  # semua di lantai — scrollbar memang tak terhindarkan
+                final[cand] -= 1
+                over -= 1
+        else:
+            for c in keep:
+                final[c] = widths[c]
+        for c in keep:
+            self.setColumnWidth(c, final[c])
+        self._last_fit_w = self.viewport().width()  # v2.6.1
+        if sum(final.values()) <= avail + 2:
             self._pending_fit = False  # sudah pas — tidak perlu fit ulang
-        if n_rows == 0 and model.columnCount():
-            self.setColumnWidth(0, max(widths[0], 240))
+        if n_rows == 0 and keep:
+            self.setColumnWidth(keep[0], max(final[keep[0]], 240))
         # Wrap baris: teks panjang (RANGKING WASTE, Detail/Contoh KQ) tampil
         # UTUH — tinggi baris dihitung manual (lihat _refit_rows). Di-skip
         # utk tabel raksasa (25k×53) demi kecepatan (tooltip + fit kolom).

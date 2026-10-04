@@ -15,17 +15,26 @@ echo  Hasil: dist\WasteAnomalyDetection.exe
 echo.
 echo  Persyaratan:
 echo    - Python 3.10+ terpasang + SETUP.bat sudah dijalankan
-echo    - PyInstaller akan di-install otomatis kalau belum ada
+echo      (build memakai .venv yang dibuat SETUP.bat)
+echo    - PyInstaller akan di-install otomatis ke .venv kalau belum ada
 echo.
 echo  Tekan ENTER untuk mulai build...
 pause >nul
 
 cd /d "%~dp0"
 
-python -m pip show pyinstaller >nul 2>&1
+if not exist ".venv\Scripts\python.exe" (
+    echo [ERROR] .venv tidak ditemukan. Jalankan SETUP.bat dulu -
+    echo         build memakai virtual environment yang dibuat SETUP.bat.
+    pause
+    exit /b 1
+)
+set "PY=%~dp0.venv\Scripts\python.exe"
+
+"%PY%" -m pip show pyinstaller >nul 2>&1
 if errorlevel 1 (
     echo [1/3] Install PyInstaller...
-    python -m pip install pyinstaller
+    "%PY%" -m pip install pyinstaller
     if errorlevel 1 (
         echo [ERROR] Gagal install PyInstaller. Cek koneksi internet.
         pause
@@ -37,7 +46,7 @@ if errorlevel 1 (
 
 echo.
 echo [2/3] Build EXE (±2-5 menit)...
-python -m PyInstaller waste_anomaly.spec --noconfirm
+"%PY%" -m PyInstaller waste_anomaly.spec --noconfirm
 if errorlevel 1 (
     echo.
     echo [ERROR] Build gagal. Baca pesan error di atas.
