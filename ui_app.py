@@ -1,19 +1,20 @@
 """
 ui_app.py — ENTRY POINT aplikasi (tetap dipakai MULAI.bat / shortcut lama).
 
-Sejak v2.4.0 kode UI dipecah ke paket `ui/` (anti god-object — dulu satu
-class 102 metode / 3.256 baris):
+v2.6.0: UI di-rebuild total dengan PySide6 (lihat paket ui/). Pintu masuk
+tetap file ini supaya `python ui_app.py` / MULAI.bat tidak berubah.
 
-    ui/shared.py       — konstanta + registry font + helper murni
-    ui/widgets.py      — SimpleLogPopup, KPICard, FilterChip
-    ui/base.py         — infrastruktur app (styling, tab scaffolding, log)
-    ui/tab_*.py        — 10 modul tab (dashboard, compare, quadrant, rate,
-                         result, viz, summary, run, config, help)
-    ui/app.py          — komposisi class WasteAnomalyApp (11 mixin) + main()
-
-File ini tetap menjadi pintu masuk supaya `MULAI.bat` dan kebiasaan user
-(`python ui_app.py`) tidak berubah. Semua metode lama dipindah VERBATIM —
-perilaku runtime identik.
+Struktur baru:
+    ui/shared.py       — konstanta + helper murni (kontrak test lama dijaga)
+    ui/theme.py        — palet warna + QSS global
+    ui/state.py        — AppContext: state tunggal + signal Qt
+    ui/models.py       — PandasTableModel (tabel virtualized tanpa cap)
+    ui/workers.py      — pipeline/export/periode di QThread
+    ui/widgets.py      — blok anti-terpotong (WLabel, MplCanvas, ChartCard,
+                         DataTable, KPI)
+    ui/view_*.py       — 8 view (Anomali default, Jelajah, Waktu, Uang,
+                         Peer, Kualitas, Banding Periode, Pipeline)
+    ui/app.py          — MainWindow + main()
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from pathlib import Path
 # Defensive: jalan dari cwd mana pun tetap menemukan paket ui/ & waste_anomaly/
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from ui.app import WasteAnomalyApp, main  # noqa: E402,F401 — re-export API lama
+from ui.app import main  # noqa: E402
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

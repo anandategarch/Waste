@@ -1,165 +1,486 @@
-"""Widget UI reusable: popup log, KPI card, filter chip.
+"""widgets.py — blok bangunan UI anti-terpotong (v2.6.0).
 
-Dipakai mixin-mixin tab via komposisi (ui/app.py)."""
+Jaminan struktural "tidak ada teks/grafik terpotong":
+- WLabel: word-wrap default — teks selalu pindah baris, bukan terpotong
+- MplCanvas: ukuran minimum = ukuran desain figure; melebar saat window
+  besar; QScrollArea menjamin window kecil → scrollbar, BUKAN chart terpotong
+- ChartCard: kartu chart dengan judul wrap + area scroll
+- DataTable: QTableView virtualized (tanpa cap 500 baris), lebar kolom dari
+  sampel isi + wrap teks panjang + tooltip sel
+- KpiCard/KpiStrip: kartu KPI dengan wrap
+"""
 from __future__ import annotations
 
-from .shared import C_BORDER
-from .shared import C_TERM_BG
-from .shared import C_TEXT_MUTED
-from .shared import FONT_NAME
-from .shared import F_HINT
-from .shared import F_KPI_LABEL
-from .shared import F_KPI_NUM
-from .shared import F_LOG
-from .shared import _LOGGER
-from datetime import datetime
-import tkinter as tk
-from tkinter import ttk
+from typing import Callable
+
+import pandas as pd
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QFrame,
+    QHeaderView,
+    QLabel,
+    QScrollArea,
+    QTableView,
+    QVBoxLayout,
+    QWidget,
+    QSizePolicy,
+)
+
+from .models import PandasTableModel
+from .shared import fmt_id
+from .theme import C_TEXT_MUTED, STATUS_COLORS
 
 
-class SimpleLogPopup(tk.Toplevel):
-    def __init__(self, parent, title="Log Proses"):
+class Card(QFrame):
+    """Kartu dasar (border + radius via QSS objectName 'card')."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.title(title)
-        self.geometry("800x500")
-        self.minsize(600, 300)
-        # C2: tombol X hanya menyembunyikan popup (semantics sama dengan tombol
-        # "Tutup") — reference di app tetap valid, tidak jadi stale lalu TclError.
-        self.protocol("WM_DELETE_WINDOW", self.withdraw)
+        self.setObjectName("card")
+
+
+class WLabel(QLabel):
+    """QLabel dengan word-wrap aktif default — teks tidak pernah terpotong."""
+
+    def __init__(self, text: str = "", parent: QWidget | None = None,
+                 muted: bool = False) -> None:
+        super().__init__(text, parent)
+        self.setWordWrap(True)
+        self.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        if muted:
+            self.setObjectName("muted")
+
+
+# ============================================================
+# MATPLOTLIB CANVAS — jantung jaminan chart tidak terpotong
+# ============================================================
+
+class MplCanvas(FigureCanvasQTAgg):
+    """Canvas matplotlib dengan lantai ukuran (70% lebar / 90% tinggi desain).
+
+    - Window lebih besar → figure melebar penuh (mengisi ruang)
+    - Window lebih kecil → figure mengecil GRADATIF sampai lantai; di bawah
+      lantai QScrollArea menampilkan scrollbar — chart TIDAK pernah dipotong
+      atau diperas hingga tak terbaca. (Jaminan v2.6.0)
+    """
+
+    W_FLOOR = 0.85
+    H_FLOOR = 1.0
+
+    def __init__(self, fig: Figure, parent: QWidget | None = None) -> None:
+        super().__init__(fig)
+        dpi = fig.dpi
+        w, h = fig.get_size_inches()
+        self._min_w = max(int(w * dpi * self.W_FLOOR), 300)
+        self._min_h = max(int(h * dpi * self.H_FLOOR), 220)
+        self.setMinimumSize(self._min_w, self._min_h)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+    def _sync_size(self) -> None:
+        """Sesuaikan ukuran figure dengan canvas (batas bawah = lantai)."""
+        dpi = self.figure.dpi
+        w = max(self._min_w, self.width()) / dpi
+        h = max(self._min_h, self.height()) / dpi
+        cur = self.figure.get_size_inches()
+        if abs(cur[0] - w) > 0.05 or abs(cur[1] - h) > 0.05:
+            self.figure.set_size_inches(w, h, forward=False)
+            self.draw_idle()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._sync_size()
+
+    def _draw_idle(self) -> None:
+        """Guard race teardown: singleShot matplotlib bisa menembak SETELAH
+        canvas di-deleteLater (libshikoken raise RuntimeError) — telan senyap,
+        canvas memang sudah dibongkar."""
         try:
-            self.transient(parent)  # M20: ikuti parent — tanpa focus_force()
-        except Exception:
-            _LOGGER.debug("Suppressed: Exception", exc_info=True)
-        self._build()
+            super()._draw_idle()
+        except RuntimeError:
+            pass
 
-    def _build(self):
-        frm = ttk.Frame(self)
-        frm.pack(fill="both", expand=True, padx=8, pady=8)
 
-        self.text = tk.Text(
-            frm, wrap="word", state="disabled",
-            bg=C_TERM_BG, fg="#d1d5db", font=F_LOG,
-            padx=10, pady=10, relief="flat",
-        )
-        sb = ttk.Scrollbar(frm, orient="vertical", command=self.text.yview)
-        self.text.configure(yscrollcommand=sb.set)
-        self.text.grid(row=0, column=0, sticky="nsew")
-        sb.grid(row=0, column=1, sticky="ns")
-        frm.rowconfigure(0, weight=1)
-        frm.columnconfigure(0, weight=1)
+class ChartCard(Card):
+    """Kartu berisi satu chart: judul wrap + QScrollArea + MplCanvas.
 
-        frm_btn = ttk.Frame(self)
-        frm_btn.pack(fill="x", padx=8, pady=(0, 8))
-        ttk.Button(frm_btn, text="Bersihkan", command=self.clear).pack(side="right", padx=4)
-        ttk.Button(frm_btn, text="Salin Log", command=self.copy_log).pack(side="right", padx=4)
-        ttk.Button(frm_btn, text="Tutup", command=self.withdraw).pack(side="right", padx=4)
+    ``replace_fig(fig)`` melepas figure lama (dispose + disconnect cid —
+    pola H3 anti-leak) lalu menanam figure baru.
+    """
 
-    def append(self, msg: str):
-        if not self.winfo_exists():  # C2: popup mungkin sudah di-destroy
+    def __init__(self, title: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+        self._title = WLabel(title, self)
+        self._title.setObjectName("cardTitle")
+        lay.addWidget(self._title)
+        self._scroll = QScrollArea(self)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        lay.addWidget(self._scroll, 1)
+        self._canvas: MplCanvas | None = None
+        self._placeholder: QWidget | None = None
+        self.set_message("")
+
+    def set_title(self, title: str) -> None:
+        self._title.setText(title)
+
+    def set_message(self, msg: str, error: bool = False) -> None:
+        """Tampilkan pesan (data kosong / error) menggantikan chart."""
+        self._dispose_canvas()
+        lbl = WLabel(msg, self)
+        lbl.setAlignment(Qt.AlignCenter)
+        if error:
+            lbl.setStyleSheet("color:#dc2626;")
+        else:
+            lbl.setStyleSheet(f"color:{C_TEXT_MUTED};")
+        wrap = QWidget()
+        v = QVBoxLayout(wrap)
+        v.setContentsMargins(24, 24, 24, 24)
+        v.addWidget(lbl, 1)
+        self._placeholder = wrap
+        self._scroll.setWidget(wrap)
+
+    def replace_fig(self, fig: Figure) -> None:
+        self._dispose_canvas()
+        if self._placeholder is not None:
+            self._placeholder.deleteLater()
+            self._placeholder = None
+        self._canvas = MplCanvas(fig, self)
+        self._scroll.setWidget(self._canvas)
+
+    def _dispose_canvas(self) -> None:
+        """Lepas + dispose figure lama (disconnect cid → close figure)."""
+        if self._canvas is None:
             return
-        self.text.configure(state="normal")
-        ts = datetime.now().strftime("%H:%M:%S")
-        self.text.insert("end", f"[{ts}] {msg}\n")
-        self.text.see("end")
-        self.text.configure(state="disabled")
-
-    def clear(self):
-        if not self.winfo_exists():  # C2
-            return
-        self.text.configure(state="normal")
-        self.text.delete("1.0", "end")
-        self.text.configure(state="disabled")
-
-    def copy_log(self):
-        content = self.text.get("1.0", "end").strip()
-        if content:
-            self.clipboard_clear()
-            self.clipboard_append(content)
-
-
-class KPICard(tk.Frame):
-    """KPI card dengan angka besar + label + warna tema."""
-
-    def __init__(self, parent, label: str, value: str = "0", color: str = "#0f172a", bg: str = "#ffffff"):
-        super().__init__(parent, bg=bg, relief="flat",
-                         highlightbackground=C_BORDER, highlightthickness=1)
-        self._label_var = tk.StringVar(value=label)
-        self._value_var = tk.StringVar(value=value)
-        self._color = color
-
-        # Padding
-        self.columnconfigure(0, weight=1)
-        # Label
-        lbl = tk.Label(self, textvariable=self._label_var, font=F_KPI_LABEL,
-                       fg=C_TEXT_MUTED, bg=bg, anchor="w")
-        lbl.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 0))
-        # Value — L13: wraplength supaya angka panjang wrap ke 2 baris, bukan
-        # kepotong (KPI card sempit di layar kecil).
-        self.val_lbl = tk.Label(self, textvariable=self._value_var, font=F_KPI_NUM,
-                                fg=color, bg=bg, anchor="w", wraplength=120)
-        self.val_lbl.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 8))
-
-    def set_value(self, value: str):
-        self._value_var.set(value)
-
-
-class FilterChip(tk.Frame):
-    """Chip filter aktif — M7: SELURUH chip clickable (klik di mana pun =
-    remove, sama dengan klik ×), cursor hand2 + bg berubah saat hover.
-    Glyph × tetap ada sebagai affordance visual."""
-
-    _BG = "#fef3c7"        # amber-100
-    _BG_HOVER = "#fde68a"  # amber-200
-    _BORDER = "#fcd34d"    # amber-300
-    _FG = "#92400e"        # amber-800
-
-    def __init__(self, parent, label: str, on_remove):
-        super().__init__(parent, bg=self._BG, relief="flat", cursor="hand2",
-                         highlightbackground=self._BORDER, highlightthickness=1)
-        self._on_remove_cb = on_remove
-        self._lbl = tk.Label(self, text=label, font=F_HINT, fg=self._FG,
-                             bg=self._BG, cursor="hand2")
-        self._lbl.pack(side="left", padx=(6, 2), pady=2)
-        self._x = tk.Label(self, text="×", font=(FONT_NAME, 10, "bold"),
-                           fg=self._FG, bg=self._BG, cursor="hand2")
-        self._x.pack(side="left", padx=(0, 6))
-        # M7: hit area = seluruh chip (frame + kedua label), bukan cuma ×
-        for w in (self, self._lbl, self._x):
-            w.bind("<Button-1>", self._on_click)
-            w.bind("<Enter>", lambda _e: self._set_hover(True))
-            w.bind("<Leave>", self._on_leave)
-
-    def _on_click(self, _event):
-        try:
-            self._on_remove_cb()
-        except tk.TclError:
-            _LOGGER.debug("Suppressed: chip sudah di-destroy oleh handler remove-nya", exc_info=True)
-        return "break"
-
-    def _on_leave(self, _event):
-        # Pointer mungkin hanya pindah frame → label anak (memicu Leave frame
-        # + Enter label) — matikan hover hanya bila pointer benar-benar keluar.
-        try:
-            x, y = self.winfo_pointerxy()
-            node = self.winfo_containing(x, y)
-            while node is not None:
-                if node is self:
-                    return  # masih di dalam chip
-                node = getattr(node, "master", None)
-        except tk.TclError:
-            _LOGGER.debug("Suppressed: tk.TclError", exc_info=True)
-        self._set_hover(False)
-
-    def _set_hover(self, hovered: bool):
-        bg = self._BG_HOVER if hovered else self._BG
-        for w in (self, self._lbl, self._x):
+        fig = self._canvas.figure
+        for cid in getattr(fig, "_waste_cids", []):
             try:
-                w.configure(bg=bg)
-            except tk.TclError:
-                _LOGGER.debug("Suppressed: widget mungkin sudah di-destroy", exc_info=True)
+                fig.canvas.mpl_disconnect(cid)
+            except Exception:
+                pass
+        self._canvas.setParent(None)
+        self._canvas.deleteLater()
+        self._canvas = None
+        try:
+            fig.close()
+        except Exception:
+            pass
 
-# Registry font (v2.4.0): _init_fonts me-rebind F_*/FONT_NAME/MONO_NAME di
-# namespace modul INI saat startup — pengganti pola `global` satu-file lama.
-import sys as _sys  # noqa: E402
-from . import shared as _shared  # noqa: E402
-_shared.register_font_consumer(_sys.modules[__name__])
+    def disconnect_figs(self) -> None:
+        """Dispose tanpa mengganti (dipanggil saat view dibongkar)."""
+        self._dispose_canvas()
+
+
+# ============================================================
+# TABEL DATA
+# ============================================================
+
+class DataTable(QTableView):
+    """QTableView + PandasTableModel — tanpa cap baris, sort klik header,
+    kolom auto-width dari sampel, tooltip + wrap utk teks panjang."""
+
+    double_clicked = Signal(object)  # pd.Series (record baris)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._model = PandasTableModel(parent=self)
+        self.setModel(self._model)
+        self.setSortingEnabled(True)
+        self.setAlternatingRowColors(True)
+        self.setWordWrap(True)  # teks panjang wrap — baris tumbuh, tidak terpotong
+        self.setTextElideMode(Qt.TextElideMode.ElideNone)  # tidak pernah '…'
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.horizontalHeader().setStretchLastSection(True)
+        self.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Interactive)
+        self.verticalHeader().setVisible(False)
+        self.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
+        self._pending_fit = False
+        self.doubleClicked.connect(self._on_double)
+        # Sort by header → tinggi baris harus dihitung ulang (baris visual
+        # berganti isi; tinggi lama tidak cocok → teks wrap terpotong).
+        self.horizontalHeader().sortIndicatorChanged.connect(
+            lambda *_: self._refit_rows())
+
+    def _refit_rows(self) -> None:
+        """Hitung tinggi baris utk teks wrap (ukuran sendiri — QTableView's
+        resizeRowsToContents tidak memperhitungkan wrap multi-baris sehingga
+        baris ke-2 terpotong; diukur via QFontMetrics.boundingRect)."""
+        model = self._model
+        n = model.rowCount()
+        if not (0 < n <= 3000):
+            return
+        fm = self.fontMetrics()
+        default_h = self.verticalHeader().defaultSectionSize()
+        for r in range(n):
+            need = default_h
+            for c in range(model.columnCount()):
+                text = str(model.data(model.index(r, c), Qt.DisplayRole) or "")
+                if not text:
+                    continue
+                w = self.columnWidth(c) - 18  # padding sel (QSS 3px 8px)
+                if w < 24:
+                    continue
+                if fm.horizontalAdvance(text) > w:
+                    rect = fm.boundingRect(
+                        0, 0, w, 10_000, Qt.TextFlag.TextWordWrap, text)
+                    need = max(need, rect.height() + 12)
+            if abs(self.rowHeight(r) - need) > 1:
+                self.setRowHeight(r, need)
+
+    def _on_double(self, index) -> None:
+        rec = self._model.record(index.row())
+        if rec is not None:
+            self.double_clicked.emit(rec)
+
+    def set_dataframe(self, df: pd.DataFrame | None,
+                      sort_desc: str | None = None) -> None:
+        """Tampilkan df; ``sort_desc`` = nama kolom utk sort default DESC."""
+        self._model.set_dataframe(df)
+        if sort_desc and df is not None and sort_desc in df.columns:
+            col = list(df.columns).index(sort_desc)
+            self.horizontalHeader().setSortIndicator(
+                col, Qt.DescendingOrder)
+            self._model.sort(col, Qt.DescendingOrder)
+        self._pending_fit = True
+        self._auto_columns()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        # Kolom belum ter-fit pas saat data pertama kali datang (viewport
+        # belum berukuran final) → fit ulang sekali saat ukuran stabil.
+        if self._pending_fit and self.isVisible() and self.viewport().width() > 50:
+            self._auto_columns()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._pending_fit and self.viewport().width() > 50:
+            self._auto_columns()
+
+    def selected_record(self) -> pd.Series | None:
+        idx = self.selectionModel().currentIndex()
+        if idx.isValid():
+            return self._model.record(idx.row())
+        return None
+
+    def _auto_columns(self, sample: int = 250, cap: int = 420,
+                      min_w: int = 84) -> None:
+        """Lebar kolom dari sampel isi + header, lalu di-FIT ke viewport.
+
+        ANTI-TERPOTONG (aturan v2.6.0): bila total lebar melebihi viewport,
+        seluruh kolom diskalakan proporsional (batas bawah per kolom = min_w)
+        supaya semua kolom terlihat tanpa terpotong. Scrollbar horizontal
+        hanya untuk sheet ekstrem (mis. Detail 53 kolom) — itu memang
+        tak terhindarkan dan didampingi tooltip + wrap."""
+        model = self._model
+        n_rows = min(sample, model.rowCount())
+        fm = self.fontMetrics()
+        widths: list[int] = []
+        for c in range(model.columnCount()):
+            w = fm.horizontalAdvance(str(model.headerData(c, Qt.Horizontal))) + 26
+            for r in range(n_rows):
+                text = str(model.data(model.index(r, c)) or "")
+                if len(text) > 60:
+                    text = text[:60]
+                w = max(w, fm.horizontalAdvance(text) + 26)
+            widths.append(min(w, cap))
+        if not widths:
+            return
+        avail = self.viewport().width() - 4
+        if avail < 200:
+            avail = 200
+        total = sum(widths)
+        if total > avail:
+            # Skala proporsional → semua kolom masuk viewport (tidak terpotong)
+            scale = avail / total
+            widths = [max(int(w * scale), min_w) for w in widths]
+        for c, w in enumerate(widths):
+            self.setColumnWidth(c, w)
+        if sum(widths) <= avail + 2:
+            self._pending_fit = False  # sudah pas — tidak perlu fit ulang
+        if n_rows == 0 and model.columnCount():
+            self.setColumnWidth(0, max(widths[0], 240))
+        # Wrap baris: teks panjang (RANGKING WASTE, Detail/Contoh KQ) tampil
+        # UTUH — tinggi baris dihitung manual (lihat _refit_rows). Di-skip
+        # utk tabel raksasa (25k×53) demi kecepatan (tooltip + fit kolom).
+        self._refit_rows()
+
+
+# ============================================================
+# KPI
+# ============================================================
+
+class KpiCard(QFrame):
+    """Kartu KPI: label kecil + angka besar + konteks (wrap)."""
+
+    def __init__(self, title: str, color: str = "#0f172a",
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("kpiframe")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(2)
+        self._title = WLabel(title, self)
+        self._title.setObjectName("hint")
+        lay.addWidget(self._title)
+        self._value = WLabel("0", self)
+        self._value.setStyleSheet(
+            f"color:{color}; font-size:20px; font-weight:700; border:none;")
+        lay.addWidget(self._value)
+        self._context = WLabel("", self)
+        self._context.setObjectName("hint")
+        lay.addWidget(self._context)
+
+    def set_value(self, text: str) -> None:
+        self._value.setText(text)
+
+    def set_context(self, text: str) -> None:
+        self._context.setText(text)
+
+
+class KpiStrip(QWidget):
+    """6 KPI + breakdown satuan (logika _update_kpi_values v2.5.1).
+
+    Nilai mengikuti df TERFILTER (DD-M3) — konteks "[X dari N baris]" jujur.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        row = QWidget(self)
+        from PySide6.QtWidgets import QGridLayout
+        gl = QGridLayout(row)
+        gl.setContentsMargins(0, 0, 0, 0)
+        gl.setSpacing(8)
+        self.kpi_total = KpiCard("TOTAL BARIS", "#0f172a")
+        self.kpi_prioritas = KpiCard("PRIORITAS TINGGI", "#dc2626")
+        self.kpi_potensi = KpiCard("POTENSI ANOMALI", "#ea580c")
+        self.kpi_review = KpiCard("PERLU REVIEW", "#b45309")
+        self.kpi_waste = KpiCard("TOTAL WASTE", "#0f766e")
+        self.kpi_cabang = KpiCard("CABANG", "#9333ea")
+        for i, card in enumerate((self.kpi_total, self.kpi_prioritas,
+                                  self.kpi_potensi, self.kpi_review,
+                                  self.kpi_waste, self.kpi_cabang)):
+            gl.addWidget(card, 0, i)
+        lay.addWidget(row)
+        self.lbl_units = WLabel("", self)
+        self.lbl_units.setObjectName("hint")
+        lay.addWidget(self.lbl_units)
+        self.lbl_context = WLabel("", self)
+        self.lbl_context.setObjectName("hint")
+        lay.addWidget(self.lbl_context)
+
+    def update_from(self, df: pd.DataFrame, full_len: int) -> None:
+        """Perbarui nilai KPI dari df terfilter (konteks = full_len)."""
+        if df is None:
+            return
+        total = len(df)
+        if "ANOMALY STATUS" in df.columns:
+            prioritas = int((df["ANOMALY STATUS"] == "Prioritas Tinggi").sum())
+            potensi = int((df["ANOMALY STATUS"] == "Potensi Anomali").sum())
+            review = int((df["ANOMALY STATUS"] == "Perlu Review").sum())
+        else:
+            prioritas = potensi = review = 0
+        total_waste = float(df["TOTAL"].sum()) if "TOTAL" in df.columns else 0.0
+        cabang = df["NAMA RESTO"].nunique() if "NAMA RESTO" in df.columns else 0
+
+        self.kpi_total.set_value(fmt_id(total))
+        self.kpi_prioritas.set_value(fmt_id(prioritas))
+        self.kpi_potensi.set_value(fmt_id(potensi))
+        self.kpi_review.set_value(fmt_id(review))
+        self.kpi_waste.set_value(fmt_id(total_waste, 1))
+        self.kpi_cabang.set_value(fmt_id(cabang))
+        self.lbl_context.setText(
+            f"[KPI terfilter: {fmt_id(total)} dari {fmt_id(full_len)} baris]")
+        # P5: breakdown satuan — total waste mencampur satuan (indikatif)
+        self.lbl_units.setText(self._unit_note(df))
+
+    def _unit_note(self, df: pd.DataFrame) -> str:
+        try:
+            from waste_anomaly.temporal import unit_summary
+            us = unit_summary(df)
+            if us is None or us.empty:
+                return ""
+            parts = []
+            cols = list(us.columns)
+            name_col = cols[0]
+            val_col = "Total_Waste" if "Total_Waste" in cols else (
+                cols[1] if len(cols) > 1 else None)
+            for _, r in us.head(3).iterrows():
+                if val_col:
+                    parts.append(f"{r[name_col]}: {fmt_id(float(r[val_col]), 1)}")
+                else:
+                    parts.append(str(r[name_col]))
+            if parts:
+                return "Satuan — " + " • ".join(parts) + " (agregat lintas satuan, indikatif)"
+        except Exception:
+            return ""
+        return ""
+
+
+# ============================================================
+# CHIP STATUS (detail panel)
+# ============================================================
+
+class StatusChip(QFrame):
+    """Chip kecil berwarna utk status / sinyal — teks wrap, tidak terpotong."""
+
+    def __init__(self, text: str, fg: str, bg: str,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setStyleSheet(
+            f"background:{bg}; color:{fg}; border-radius:6px; border:none;")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 4, 10, 4)
+        lbl = QLabel(text, self)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet("background:transparent; color:inherit; border:none;")
+        lay.addWidget(lbl)
+
+
+def status_chip_for(status: str, parent=None) -> StatusChip:
+    fg, bg = STATUS_COLORS.get(status, ("#334155", "#f1f5f9"))
+    return StatusChip(status, fg, bg, parent)
+
+
+def place_charts_responsive(grid, entries, width: int) -> None:
+    """(Re)tempatkan kartu chart secara responsif (aturan v2.6.0).
+
+    - Lebar cukup (≥ 860px) → 2 kolom; lebih sempit → 1 kolom (jendela
+      kecil tidak mempersempit chart hingga terpotong).
+    - Chart dengan desain lebar (≥ 700px) SELALU menempati satu baris
+      penuh — legend/judul di tepi kanan tidak pernah setengah terpotong.
+    - ``entries``: list berurutan (card, fig_atau_None).
+    """
+    from PySide6.QtWidgets import QGridLayout  # noqa: F401 — tipe grid
+    cols = 2 if width >= 860 else 1
+    while grid.count():
+        grid.takeAt(0)
+    # Stretch kolom harus mengikuti jumlah kolom AKTIF — kolom kosong yang
+    # memegang stretch membuat chart hanya mendapat setengah lebar (bug).
+    grid.setColumnStretch(0, 1)
+    grid.setColumnStretch(1, 1 if cols == 2 else 0)
+    row = col = 0
+    for card, fig in entries:
+        wide = (fig is not None
+                and fig.get_size_inches()[0] * fig.dpi >= 700)
+        span = 2 if (wide and cols == 2) else 1
+        if col + span > cols:
+            col = 0
+            row += 1
+        grid.addWidget(card, row, col, 1, span)
+        col += span
+        if col >= cols:
+            col = 0
+            row += 1

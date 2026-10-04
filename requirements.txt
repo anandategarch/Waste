@@ -4,6 +4,9 @@
 # (SETUP.bat juga memanggil file ini)
 #
 # PIN RASIONAL (diuji end-to-end, bukan sekadar versi terbaru):
+# - PySide6 (v2.6.0): framework UI baru (rebuild dari Tkinter). Diverifikasi
+#   penuh offscreen (E2E + audit visual) di 6.11; API yang dipakai stabil
+#   sejak 6.6 (QAbstractTableModel, QThread, QSS, FigureCanvasQTAgg).
 # - matplotlib >= 3.9 WAJIB: charts.py boxplot pakai parameter `tick_labels`
 #   (pengganti `labels` yang deprecated di 3.9). Versi < 3.9 → TypeError.
 # - pandas 2.2.x: pipeline diuji penuh di 2.2.3; pandas 3.x belum diverifikasi
@@ -16,3 +19,4 @@ numpy>=1.26
 openpyxl>=3.1
 matplotlib>=3.9
 python-calamine>=0.2
+PySide6>=6.6

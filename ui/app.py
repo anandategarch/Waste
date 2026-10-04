@@ -1,65 +1,616 @@
-"""ui/app.py — komposisi class utama + entry point.
+"""app.py — MainWindow + main() (v2.6.0 rebuild PySide6).
 
-WasteAnomalyApp = 15 mixin (infrastruktur + 14 tab) + tk.Tk. Metode
-dipindah VERBATIM dari ui_app.py lama (3.2k baris god-object) — lihat
-ui/shared.py untuk konstanta & registry font. v2.5.0 menambah 4 mixin
-tab analisa baru (Temporal, Money, Quality, Period) + 1 ekstensi Compare.
+Struktur:
+- Toolbar: Export Excel + Bantuan (satu tombol export global — tidak
+  duplikat di banyak tab seperti UI lama)
+- Sidebar kiri: filter (cari, cabang, status, keterangan, rentang hari,
+  chip aktif) + profil filter tersimpan
+- QTabWidget 8 view: Anomali (default) · Jelajah · Waktu · Uang · Peer ·
+  Kualitas · Banding Periode · Pipeline — render lazy per-view (H2)
+- Status bar: pesan status + hitungan baris/anomali permanen
 """
-
 from __future__ import annotations
 
-import tkinter as tk
+import sys
+import traceback
+from datetime import datetime
+from pathlib import Path
 
-from waste_anomaly.logging_setup import install_tk_exception_hook, setup_logging
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QAction, QIcon
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QSplitter,
+    QStatusBar,
+    QTabWidget,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
+)
 
-from .base import AppBase
-from .tab_compare import CompareTabMixin
-from .tab_config import ConfigTabMixin
-from .tab_dashboard import DashboardTabMixin
-from .tab_help import HelpTabMixin
-from .tab_money import MoneyTabMixin
-from .tab_period import PeriodTabMixin
-from .tab_quality import QualityTabMixin
-from .tab_quadrant import QuadrantTabMixin
-from .tab_rate import RateLeagueTabMixin
-from .tab_result import ResultTabMixin
-from .tab_run import RunTabMixin
-from .tab_summary import SummaryTabMixin
-from .tab_temporal import TemporalTabMixin
-from .tab_viz import VizTabMixin
+from waste_anomaly.filters import (
+    delete_profile,
+    list_profile_names,
+    restore_filters,
+    save_profile,
+    snapshot_filters,
+)
+from waste_anomaly.logging_setup import setup_logging
+from waste_anomaly.utils import load_config, norm_text
+
+from .shared import APP_DIR, APP_TITLE, APP_VERSION, bundle_res_dir, fmt_id
+from .state import AppContext
+from .theme import QSS
+from .view_anomali import AnomaliView
+from .view_jelajah import JelajahView
+from .view_kualitas import KualitasView
+from .view_peer import PeerView
+from .view_periode import PeriodeView
+from .view_pipeline import PipelineView
+from .view_uang import UangView
+from .view_waktu import WaktuView
+from .widgets import Card, WLabel
+from .workers import ExportWorker
+
+_HELP_HTML = """
+<h2>Panduan Singkat</h2>
+<p><b>Alur kerja:</b> tab <b>Pipeline</b> → pilih workbook → <b>Mulai Pipeline</b>
+→ buka tab <b>Anomali</b> untuk mulai memburu anomali.</p>
+<h3>Tab Anomali (pemburu anomali)</h3>
+<ul>
+<li>Tabel anomali ter-ranking (skor tertinggi di atas; klik header kolom untuk sort).</li>
+<li>Pilih baris → panel detail menampilkan 12 sinyal, angka peer, dan konteks lengkap.</li>
+<li>Tombol drill-down: fokus cabang / item / alasan dari baris terpilih.</li>
+<li>"Skor ≥" menyembunyikan anomali ber-skor rendah (skor maksimum = 19).</li>
+</ul>
+<h3>Filter (sidebar kiri)</h3>
+<ul>
+<li>Cari, cabang, status, keterangan, rentang hari — berlaku di tab Anomali & chart interaktif Jelajah.</li>
+<li>Chart interaktif di tab Jelajah bisa DIKLIK untuk drill-down; klik ulang untuk melepas.</li>
+<li>Profil filter bisa disimpan & dipulihkan.</li>
+</ul>
+<h3>Tab lain</h3>
+<ul>
+<li><b>Jelajah</b> — tabel data semua sheet + 12 chart statistik.</li>
+<li><b>Waktu</b> — pola waste per hari / kelas hari / alasan×hari.</li>
+<li><b>Uang</b> — baris & item waste terbesar + benchmark peer.</li>
+<li><b>Peer</b> — kuadran sistemik, rate league, banding 2 cabang.</li>
+<li><b>Kualitas</b> — pemeriksaan kualitas data.</li>
+<li><b>Banding Periode</b> — run saat ini vs workbook bulan lalu.</li>
+</ul>
+<p><b>Export</b>: tombol <b>💾 Export Excel</b> di toolbar (selalu tersedia).</p>
+<p>Semua teks & chart dirancang anti-terpotong: teks panjang otomatis
+berpindah baris; chart minimal sebesar ukuran desainnya (scroll bila jendela
+kecil); tabel tanpa cap baris.</p>
+"""
 
 
-class WasteAnomalyApp(
-    AppBase,
-    DashboardTabMixin,
-    TemporalTabMixin,
-    MoneyTabMixin,
-    CompareTabMixin,
-    QuadrantTabMixin,
-    RateLeagueTabMixin,
-    ResultTabMixin,
-    VizTabMixin,
-    QualityTabMixin,
-    PeriodTabMixin,
-    SummaryTabMixin,
-    RunTabMixin,
-    ConfigTabMixin,
-    HelpTabMixin,
-    tk.Tk,
-):
-    """Aplikasi utama — komposisi 15 modul mixin (14 tab + infrastruktur).
+class MainWindow(QMainWindow):
+    """Jendela utama: toolbar + sidebar filter + 8 tab view + status bar."""
 
-    Menambah tab baru = buat file mixin baru + daftar di sini (SATU tempat,
-    dulu 5+ situs tersebar di god-object).
-    """
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle(f"{APP_TITLE} v{APP_VERSION} — Pencari Anomali Waste")
+        self._set_icon()
+
+        self.ctx = AppContext(load_config(), self)
+        self._export_worker: ExportWorker | None = None
+        self._exporting = False
+
+        # Ukuran awal: clamp ke layar (M15) + posisi tengah
+        screen = self.screen().availableGeometry() if self.screen() else None
+        if screen is not None:
+            w = min(1500, max(1024, screen.width() - 100))
+            h = min(900, max(700, screen.height() - 80))
+            self.resize(w, h)
+            self.move(max(0, (screen.width() - w) // 2),
+                      max(0, (screen.height() - h) // 2))
+        self.setMinimumSize(1024, 700)
+
+        self._build_toolbar()
+        self._build_body()
+        self._build_statusbar()
+        self._wire_context()
+
+        # Ctrl+F → fokus kotak Cari
+        shortcut = QAction(self)
+        shortcut.setShortcut("Ctrl+F")
+        shortcut.triggered.connect(self._focus_search)
+        self.addAction(shortcut)
+
+    # ------------------------------------------------------------
+    # BANGUN UI
+    # ------------------------------------------------------------
+    def _set_icon(self) -> None:
+        for icon_path in (bundle_res_dir() / "assets" / "app_icon_64.png",
+                          APP_DIR / "assets" / "app_icon_64.png"):
+            if icon_path.exists():
+                self.setWindowIcon(QIcon(str(icon_path)))
+                break
+
+    def _build_toolbar(self) -> None:
+        bar = self.addToolBar("Utama")
+        bar.setMovable(False)
+        bar.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        title = QLabel(f"  📊 {APP_TITLE}  ")
+        title.setStyleSheet("color:#f1f5f9; font-size:15px; font-weight:700; background:transparent;")
+        bar.addWidget(title)
+        sep = QWidget()
+        sep.setFixedWidth(12)
+        bar.addWidget(sep)
+
+        act_export = QAction("💾 Export Excel", self)
+        act_export.setToolTip("Simpan laporan Excel (6 sheet inti + sheet analisa)")
+        act_export.triggered.connect(self._export_excel)
+        bar.addAction(act_export)
+        self._act_export = act_export
+
+        act_help = QAction("❓ Bantuan", self)
+        act_help.triggered.connect(self._show_help)
+        bar.addAction(act_help)
+
+    def _build_body(self) -> None:
+        split = QSplitter(Qt.Orientation.Horizontal, self)
+        split.addWidget(self._build_sidebar())
+        self._tabs = QTabWidget(split)
+        self._views: list[tuple[str, QWidget]] = [
+            ("Anomali", AnomaliView(self.ctx)),
+            ("Jelajah", JelajahView(self.ctx)),
+            ("Waktu", WaktuView(self.ctx)),
+            ("Uang", UangView(self.ctx)),
+            ("Peer", PeerView(self.ctx)),
+            ("Kualitas Data", KualitasView(self.ctx)),
+            ("Banding Periode", PeriodeView(self.ctx)),
+            ("Pipeline", PipelineView(self.ctx)),
+        ]
+        for name, view in self._views:
+            self._tabs.addTab(view, name)
+        self._tabs.currentChanged.connect(self._on_tab_changed)
+        # Anti-terpotong: bila tab bar sempit, teks di-elide dengan '…'
+        # (konvensi jelas) + tombol panah scroll — TIDAK pernah dipotong
+        # mentah mid-character. Padding ramping (QSS) membuat 8 tab muat
+        # bahkan di jendela 1000px.
+        self._tabs.setElideMode(Qt.TextElideMode.ElideRight)
+        self._tabs.setUsesScrollButtons(True)
+        split.setStretchFactor(0, 0)
+        split.setStretchFactor(1, 1)
+        split.setSizes([300, 1200])
+        self._sidebar.setMinimumWidth(260)
+        self._sidebar.setMaximumWidth(380)
+        self.setCentralWidget(split)
+
+    def _build_sidebar(self) -> QWidget:
+        self._sidebar = QScrollArea()
+        self._sidebar.setWidgetResizable(True)
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(8)
+
+        # ===== Kartu FILTER =====
+        filt = Card(host)
+        fl = QVBoxLayout(filt)
+        fl.setContentsMargins(12, 10, 12, 10)
+        fl.setSpacing(8)
+        t = WLabel("🔍 Filter Drill-Down", filt)
+        t.setObjectName("cardTitle")
+        fl.addWidget(t)
+
+        fl.addWidget(WLabel("Cari (semua kolom):", filt))
+        self._ent_search = QLineEdit(filt)
+        self._ent_search.setPlaceholderText("ketik lalu tunggu 0,3 detik…")
+        self._ent_search.setClearButtonEnabled(True)
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(300)
+        self._search_timer.timeout.connect(self._apply_search)
+        self._ent_search.textChanged.connect(
+            lambda _t: self._search_timer.start())
+        self._ent_search.returnPressed.connect(self._apply_search_now)
+        fl.addWidget(self._ent_search)
+
+        fl.addWidget(WLabel("Cabang:", filt))
+        self._cb_cabang = QComboBox(filt)
+        self._cb_cabang.setMaximumWidth(260)
+        self._cb_cabang.currentIndexChanged.connect(
+            lambda _i: self._on_combo("cabang", self._cb_cabang))
+        fl.addWidget(self._cb_cabang)
+
+        fl.addWidget(WLabel("Status anomali:", filt))
+        self._cb_status = QComboBox(filt)
+        for s in ("(Semua)", "Prioritas Tinggi", "Potensi Anomali",
+                  "Perlu Review", "Normal"):
+            self._cb_status.addItem(s)
+        self._cb_status.currentIndexChanged.connect(
+            lambda _i: self._on_combo("status", self._cb_status))
+        fl.addWidget(self._cb_status)
+
+        fl.addWidget(WLabel("Keterangan (alasan):", filt))
+        self._cb_ket = QComboBox(filt)
+        self._cb_ket.setMaximumWidth(260)
+        self._cb_ket.currentIndexChanged.connect(
+            lambda _i: self._on_combo("keterangan", self._cb_ket))
+        fl.addWidget(self._cb_ket)
+
+        rng = QWidget(filt)
+        rl = QVBoxLayout(rng)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(4)
+        self._chk_hari = QCheckBox("Rentang hari kejadian (HARI MAX)", rng)
+        self._chk_hari.toggled.connect(self._on_hari_toggled)
+        rl.addWidget(self._chk_hari)
+        spins = QWidget(rng)
+        sl = QHBoxLayout(spins)
+        sl.setContentsMargins(8, 0, 0, 0)
+        sl.setSpacing(6)
+        self._spin_dmin = QSpinBox(spins)
+        self._spin_dmax = QSpinBox(spins)
+        for s in (self._spin_dmin, self._spin_dmax):
+            s.setRange(1, 31)
+            s.valueChanged.connect(self._on_hari_changed)
+        sl.addWidget(self._spin_dmin)
+        sl.addWidget(WLabel("–", spins))
+        sl.addWidget(self._spin_dmax)
+        sl.addStretch(1)
+        rl.addWidget(spins)
+        fl.addWidget(rng)
+
+        self._btn_clear = QPushButton("✕ Hapus Semua Filter", filt)
+        self._btn_clear.clicked.connect(self._clear_filters)
+        fl.addWidget(self._btn_clear)
+
+        self._lbl_chips = WLabel("Tidak ada filter aktif.", filt)
+        self._lbl_chips.setObjectName("hint")
+        fl.addWidget(self._lbl_chips)
+        lay.addWidget(filt)
+
+        # ===== Kartu PROFIL =====
+        prof = Card(host)
+        pl2 = QVBoxLayout(prof)
+        pl2.setContentsMargins(12, 10, 12, 10)
+        pl2.setSpacing(8)
+        t2 = WLabel("Profil Filter Tersimpan", prof)
+        t2.setObjectName("cardTitle")
+        pl2.addWidget(t2)
+        self._cb_profile = QComboBox(prof)
+        self._cb_profile.setMaximumWidth(260)
+        self._cb_profile.currentIndexChanged.connect(self._on_profile_picked)
+        pl2.addWidget(self._cb_profile)
+        prow = QWidget(prof)
+        prl = QHBoxLayout(prow)
+        prl.setContentsMargins(0, 0, 0, 0)
+        prl.setSpacing(8)
+        b_save = QPushButton("Simpan", prow)
+        b_save.clicked.connect(self._save_profile)
+        prl.addWidget(b_save)
+        b_del = QPushButton("Hapus", prow)
+        b_del.clicked.connect(self._delete_profile)
+        prl.addWidget(b_del)
+        pl2.addWidget(prow)
+        pl2.addWidget(WLabel("Profil = snapshot semua filter aktif (filters.json).", prof))
+        lay.addWidget(prof)
+
+        lay.addStretch(1)
+        self._sidebar.setWidget(host)
+        self._refresh_profile_combo()
+        return self._sidebar
+
+    def _build_statusbar(self) -> None:
+        sb = QStatusBar()
+        self.setStatusBar(sb)
+        self._lbl_status = QLabel("Siap.", self)
+        sb.addWidget(self._lbl_status, 1)
+        self._lbl_perm = QLabel("—", self)
+        sb.addPermanentWidget(self._lbl_perm)
+
+    # ------------------------------------------------------------
+    # KONTEKS → UI
+    # ------------------------------------------------------------
+    def _wire_context(self) -> None:
+        self.ctx.status.connect(self._on_status)
+        self.ctx.log_line.connect(lambda _line: None)
+        self.ctx.data_ready.connect(self._on_data_ready)
+        self.ctx.filters_changed.connect(self._sync_filter_widgets)
+
+    def _on_status(self, text: str, kind: str) -> None:
+        color = {"done": "#16a34a", "error": "#dc2626"}.get(kind, "#64748b")
+        self._lbl_status.setStyleSheet(f"color:{color};")
+        self._lbl_status.setText(text)
+
+    def _on_data_ready(self) -> None:
+        df = self.ctx.df
+        if df is None:
+            return
+        # Populate dropdown dari df PENUH (DD-M3 — pilihan tidak menyusut saat drill)
+        if "NAMA RESTO" in df.columns:
+            names = sorted(df["NAMA RESTO"].dropna().astype(str).unique())
+            self._fill_combo(self._cb_cabang, names)
+        if "KETERANGAN" in df.columns:
+            kets = sorted({norm_text(v) for v in df["KETERANGAN"].dropna().astype(str)})
+            self._fill_combo(self._cb_ket, kets)
+        # Permanent status: baris + anomali + waktu run
+        total = len(df)
+        if "ANOMALY STATUS" in df.columns:
+            n_anom = int((df["ANOMALY STATUS"] != "Normal").sum())
+        else:
+            n_anom = 0
+        run_t = self.ctx.last_run_time
+        tstr = run_t.strftime("%H:%M:%S") if run_t else "—"
+        self._lbl_perm.setText(
+            f"{fmt_id(total)} baris • {fmt_id(n_anom)} anomali • run {tstr}")
+        self._act_export.setEnabled(True)
+
+    def _fill_combo(self, combo: QComboBox, values: list[str]) -> None:
+        combo.blockSignals(True)
+        current = combo.currentText()
+        combo.clear()
+        combo.addItem("(Semua)")
+        combo.addItems(values)
+        if current:
+            idx = combo.findText(current)
+            combo.setCurrentIndex(max(0, idx))
+        combo.blockSignals(False)
+
+    # ------------------------------------------------------------
+    # FILTER WIDGETS → STATE
+    # ------------------------------------------------------------
+    def _apply_search(self) -> None:
+        self.ctx.set_search(self._ent_search.text())
+
+    def _apply_search_now(self) -> None:
+        self._search_timer.stop()
+        self.ctx.set_search(self._ent_search.text())
+
+    def _focus_search(self) -> None:
+        self._ent_search.setFocus()
+        self._ent_search.selectAll()
+
+    def _on_combo(self, key: str, combo: QComboBox) -> None:
+        val = combo.currentText()
+        value = None if (not val or val == "(Semua)") else val
+        self.ctx.set_filter(key, value)
+
+    def _on_hari_toggled(self, on: bool) -> None:
+        if on:
+            self.ctx.set_day_range(self._spin_dmin.value(), self._spin_dmax.value())
+        else:
+            self.ctx.set_day_range(None, None)
+
+    def _on_hari_changed(self) -> None:
+        if self._chk_hari.isChecked():
+            lo, hi = self._spin_dmin.value(), self._spin_dmax.value()
+            if lo > hi:
+                lo = hi
+            self.ctx.set_day_range(lo, hi)
+
+    def _clear_filters(self) -> None:
+        self.ctx.reset_filters()
+        self.ctx.filters_changed.emit()
+        self._sync_filter_widgets()
+        self.ctx.set_status("✓ Semua filter dihapus", "done")
+
+    def _sync_filter_widgets(self) -> None:
+        """Sinkronkan widget filter dengan state (mis. setelah drill-down)."""
+        self._ent_search.blockSignals(True)
+        self._ent_search.setText(self.ctx.search)
+        self._ent_search.blockSignals(False)
+        self._combo_set(self._cb_cabang, self.ctx.active_filters.get("cabang"))
+        self._combo_set(self._cb_status, self.ctx.active_filters.get("status"))
+        self._combo_set(self._cb_ket, self.ctx.active_filters.get("keterangan"))
+        active = self.ctx.day_min is not None
+        self._chk_hari.blockSignals(True)
+        self._chk_hari.setChecked(active)
+        self._chk_hari.blockSignals(False)
+        if active:
+            self._spin_dmin.setValue(int(self.ctx.day_min or 1))
+            self._spin_dmax.setValue(int(self.ctx.day_max or 31))
+        self._lbl_chips.setText(self.ctx.filter_summary() or "Tidak ada filter aktif.")
+
+    def _combo_set(self, combo: QComboBox, value) -> None:
+        combo.blockSignals(True)
+        if value is None or (isinstance(value, list) and not value):
+            combo.setCurrentIndex(0)
+        else:
+            idx = combo.findText(str(value))
+            combo.setCurrentIndex(max(0, idx))
+        combo.blockSignals(False)
+
+    # ------------------------------------------------------------
+    # PROFIL
+    # ------------------------------------------------------------
+    def _refresh_profile_combo(self) -> None:
+        self._cb_profile.blockSignals(True)
+        self._cb_profile.clear()
+        self._cb_profile.addItem("(pilih profil)")
+        for name in list_profile_names():
+            self._cb_profile.addItem(name)
+        self._cb_profile.blockSignals(False)
+
+    def _on_profile_picked(self) -> None:
+        name = self._cb_profile.currentText()
+        if not name or name == "(pilih profil)":
+            return
+        from waste_anomaly.filters import get_profile
+        profile = get_profile(name)
+        if not profile:
+            QMessageBox.information(self, "Profil", f"Profil '{name}' tidak ditemukan.")
+            return
+        restored = restore_filters(profile)
+        self.ctx.search = restored.get("search", "")
+        for k in self.ctx.active_filters:
+            self.ctx.active_filters[k] = restored.get(k)
+        self.ctx.day_min = restored.get("day_min")
+        self.ctx.day_max = restored.get("day_max")
+        self.ctx.filters_changed.emit()
+        self.ctx.set_status(f"✓ Profil '{name}' dipulihkan", "done")
+
+    def _save_profile(self) -> None:
+        name, ok = QInputDialog.getText(
+            self, "Simpan Profil", "Nama profil filter:")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        existing = list_profile_names()
+        if name in existing:
+            ans = QMessageBox.question(
+                self, "Timpa profil?", f"Profil '{name}' sudah ada. Timpa?")
+            if ans != QMessageBox.StandardButton.Yes:
+                return
+        profile = snapshot_filters(
+            search=self.ctx.search,
+            cabang=self.ctx.active_filters.get("cabang"),
+            item=self.ctx.active_filters.get("item"),
+            jenis=self.ctx.active_filters.get("jenis") or [],
+            keterangan=self.ctx.active_filters.get("keterangan"),
+            status=self.ctx.active_filters.get("status"),
+            day_min=self.ctx.day_min, day_max=self.ctx.day_max,
+        )
+        if save_profile(name, profile):
+            self._refresh_profile_combo()
+            self.ctx.set_status(f"✓ Profil '{name}' disimpan", "done")
+        else:
+            QMessageBox.critical(self, "Error Profil",
+                                 f"Gagal simpan profil '{name}'.")
+
+    def _delete_profile(self) -> None:
+        name = self._cb_profile.currentText()
+        if not name or name == "(pilih profil)":
+            return
+        ans = QMessageBox.question(
+            self, "Hapus Profil", f"Hapus profil '{name}'?")
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        if delete_profile(name):
+            self._refresh_profile_combo()
+            self.ctx.set_status(f"✓ Profil '{name}' dihapus", "done")
+
+    # ------------------------------------------------------------
+    # TAB
+    # ------------------------------------------------------------
+    def _on_tab_changed(self, _index: int) -> None:
+        widget = self._tabs.currentWidget()
+        on_shown = getattr(widget, "on_shown", None)
+        if callable(on_shown):
+            try:
+                on_shown()
+            except Exception as e:  # noqa: BLE001 — render 1 tab ≠ crash app
+                self.ctx.set_status(f"⚠ Render tab gagal: {e}", "error")
+
+    # ------------------------------------------------------------
+    # EXPORT
+    # ------------------------------------------------------------
+    def _export_excel(self) -> None:
+        if self._exporting:
+            return
+        df = self.ctx.df
+        if df is None or df.empty:
+            QMessageBox.information(self, "Export",
+                                    "Belum ada data. Jalankan pipeline dulu.")
+            return
+        from PySide6.QtWidgets import QFileDialog
+        initialdir = Path.home() / "Documents"
+        if not initialdir.exists():
+            initialdir = Path.home()
+        suggested = f"Waste_Anomaly_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Laporan Excel", str(initialdir / suggested),
+            "Excel files (*.xlsx);;All files (*.*)")
+        if not path:
+            return
+        self._exporting = True
+        self._act_export.setEnabled(False)
+        self.ctx.set_status("Menyimpan laporan Excel…", "running")
+        self.ctx.log(f"=== Export Excel → {path} ===")
+        self._export_worker = ExportWorker(
+            df, path, dict(self.ctx.config), self.ctx.key_akhir,
+            list(self.ctx.log_lines[-200:]), self)
+        self._export_worker.set_log(self.ctx.log)
+        self._export_worker.done.connect(self._on_export_done)
+        self._export_worker.failed.connect(self._on_export_failed)
+        self._export_worker.start()
+
+    def _on_export_done(self, result: dict) -> None:
+        self._exporting = False
+        self._act_export.setEnabled(True)
+        if result.get("success"):
+            out = result.get("output_path", "")
+            n_extra = result.get("extra_sheets_count", 0)
+            self.ctx.set_status(f"✓ Laporan Excel tersimpan: {out}", "done")
+            self.ctx.log(f"=== Export selesai: {out} ===")
+            QMessageBox.information(
+                self, "Export Selesai",
+                f"Laporan Excel ({6 + n_extra} sheet) tersimpan:\n{out}")
+        else:
+            self._on_export_failed(result.get("error", "Unknown error"))
+
+    def _on_export_failed(self, err: str) -> None:
+        self._exporting = False
+        self._act_export.setEnabled(True)
+        self.ctx.set_status(f"⚠ Export gagal: {err}", "error")
+        self.ctx.log(f"!!! Export gagal: {err}")
+        QMessageBox.critical(self, "Export Gagal", err)
+
+    # ------------------------------------------------------------
+    # LAIN-LAIN
+    # ------------------------------------------------------------
+    def _show_help(self) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Bantuan — Waste Anomaly Detection")
+        dlg.resize(640, 560)
+        lay = QVBoxLayout(dlg)
+        browser = QTextBrowser(dlg)
+        browser.setHtml(_HELP_HTML)
+        lay.addWidget(browser)
+        close = QPushButton("Tutup", dlg)
+        close.clicked.connect(dlg.accept)
+        lay.addWidget(close)
+        dlg.exec()
+
+    def closeEvent(self, event) -> None:  # noqa: N802 — Qt API
+        pipeline_view = self._views[-1][1]
+        if getattr(pipeline_view, "_running", False) or self._exporting:
+            ans = QMessageBox.question(
+                self, "Proses masih berjalan",
+                "Pipeline/export masih berjalan. Tetap keluar?")
+            if ans != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+        event.accept()
 
 
-def main():
-    # F11 (v2.4.0): logging rotating-file aktif SEBELUM app dibangun —
-    # exception selama startup pun tercatat ke logs/waste_anomaly.log.
-    log_path = setup_logging()
-    app = WasteAnomalyApp()
-    install_tk_exception_hook(app)
-    if log_path:
-        app.log(f"File log: {log_path}")
-    app.mainloop()
+def _qt_excepthook(exc_type, exc_value, exc_tb) -> None:
+    """Semua exception tak tertangani → log file (F11) + stderr."""
+    text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    try:
+        import logging
+        logging.getLogger("waste_anomaly.ui").error("Unhandled exception:\n%s", text)
+    except Exception:
+        pass
+    sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+
+def main() -> int:
+    setup_logging()
+    sys.excepthook = _qt_excepthook
+    app = QApplication(sys.argv)
+    app.setStyleSheet(QSS)
+    app.setApplicationName(APP_TITLE)
+    win = MainWindow()
+    win.show()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

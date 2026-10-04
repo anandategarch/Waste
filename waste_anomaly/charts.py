@@ -1117,8 +1117,11 @@ def chart_weekday_effect(df: pd.DataFrame, key_akhir: int | None = None) -> Figu
     bars = ax.bar(x, pat["mean_per_active"], color=colors,
                   edgecolor="white", linewidth=1.5)
     ax.set_xticks(x)
+    # v2.6.0: label hari dipadatkan ("1, 8, 15, 22, 29" → "1,8,15,22,29") —
+    # 7 kelas × label panjang saling tumpang tindih pada lebar desain 7 in.
     ax.set_xticklabels([
-        f"mod {int(m)}\n({days})" for m, days in zip(pat["mod_class"], pat["days"])
+        f"mod {int(m)}\n({str(days).replace(' ', '')})"
+        for m, days in zip(pat["mod_class"], pat["days"])
     ])
     for bar, val in zip(bars, pat["mean_per_active"]):
         if val == 0 or pd.isna(val):

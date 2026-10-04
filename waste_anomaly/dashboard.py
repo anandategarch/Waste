@@ -1139,16 +1139,21 @@ def chart_rate_league(
                 ha="left", va="center", fontsize=7, fontweight="bold", color="#0f172a")
 
     # Reference line at 5%
-    ax.axvline(5, color="#dc2626", linestyle="--", linewidth=1, alpha=0.6, label="5% threshold (blatant)")
-    ax.axvline(1, color="#ea580c", linestyle="--", linewidth=0.8, alpha=0.5, label="1% threshold (warning)")
+    # v2.6.0: legend dipindah ke BAWAH chart (ncol=2, label ringkas) —
+    # legend lama di luar sisi kanan terpotong di tepi figure bahkan pada
+    # ukuran desain ("5% threshold (blata…").
+    ax.axvline(5, color="#dc2626", linestyle="--", linewidth=1, alpha=0.6, label="≥5% (blatant)")
+    ax.axvline(1, color="#ea580c", linestyle="--", linewidth=0.8, alpha=0.5, label="≥1% (warning)")
 
     ax.set_xlabel("Waste Rate (%) = Waste Qty / BOM Qty × 100", fontsize=9)
     ax.set_title(f"Top {top_n} Waste Rate League — per bahan", pad=10)
     # Pattern D: extra headroom for long "(waste X / bom Y)" labels
     add_xlim_headroom(ax, factor=1.25, side="right")
-    # Pattern A + B: legend outside + bottom padding + left padding for wrapped items
-    apply_layout(fig, ax, legend_outside=True, bottom_pad=0.16,
-                 left_pad=0.30, right_pad=0.75, top_pad=0.88)
+    # Pattern A: padding bawah diperbesar utk legend 1 baris di bawah
+    apply_layout(fig, ax, bottom_pad=0.22,
+                 left_pad=0.30, right_pad=0.95, top_pad=0.88)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.10), ncol=2,
+              fontsize=8, frameon=False)
     return fig
 
 
