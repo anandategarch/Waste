@@ -9,11 +9,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
-    QGridLayout,
     QHBoxLayout,
     QLineEdit,
     QMessageBox,
@@ -49,9 +47,6 @@ _SUMMARY_LABELS = {
 
 class PipelineView(QWidget):
     """Kontrol pipeline: input, parameter, run/cancel, progress, log, ringkasan."""
-
-    # MainWindow memantau ini (tombol export global perlu tahu status run)
-    run_state_changed = Signal(bool)
 
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -248,7 +243,6 @@ class PipelineView(QWidget):
             return
         ka = self._spin_ka.value()
         self._running = True
-        self.run_state_changed.emit(True)
         self._btn_run.setText("⏹ Batalkan Run")
         self._btn_run.setObjectName("danger")
         self._btn_run.style().unpolish(self._btn_run)
@@ -274,7 +268,6 @@ class PipelineView(QWidget):
 
     def _finish_run(self) -> None:
         self._running = False
-        self.run_state_changed.emit(False)
         self._btn_run.setEnabled(True)
         self._btn_run.setText("▶ Mulai Pipeline")
         self._btn_run.setObjectName("accent")
@@ -348,6 +341,14 @@ class PipelineView(QWidget):
     # CONFIG
     # ------------------------------------------------------------
     def _save_config(self) -> None:
+        """Simpan config.json — atomic (tmp + replace) + VALIDASI nilai.
+
+        Regresi v2.6.0 (audit Task 1): teks non-numerik ("0,5" koma Indonesia,
+        "abc") dulunya disimpan sebagai STRING ke config.json → run berikutnya
+        membaca threshold string (perilaku sinyal berubah senyap). Validasi
+        v2.5.1 (tab_config.py) dipulihkan: wajib int/float DAN > 0 — salah
+        satu gagal → dialog error + BATAL simpan (file tidak tersentuh).
+        """
         target = APP_DIR / "waste_anomaly" / "config.json"
         if not target.parent.exists():  # frozen exe: sidecar di samping exe
             target = APP_DIR / "config.json"
@@ -358,7 +359,16 @@ class PipelineView(QWidget):
                     val = float(text)
                     val = int(val) if val == int(val) else val
                 except ValueError:
-                    val = text
+                    QMessageBox.critical(self, "Config Error",
+                                         f"Nilai untuk {key} tidak valid: {text}")
+                    return
+                # F2 v2.3.2: validasi rentang — nilai <= 0 mengubah perilaku
+                # sinyal diam-diam. (NaN juga tertangkap di sini: NaN bukan
+                # int/float valid — int(nan) raise ValueError di atas.)
+                if val <= 0:
+                    QMessageBox.critical(self, "Config Error",
+                                         f"Nilai {key} harus > 0 (dapat: {text})")
+                    return
                 self._ctx.config.setdefault("thresholds", {})[key] = val
             tmp_path = target.with_suffix(".json.tmp")
             with open(tmp_path, "w", encoding="utf-8") as f:
@@ -371,6 +381,12 @@ class PipelineView(QWidget):
             QMessageBox.critical(self, "Config Error", f"Gagal menyimpan config:\n{e}")
 
     def _reset_config(self) -> None:
+        """Reset form threshold ke default (20/20 key — belum disimpan).
+
+        Sumber default: _DEFAULT_CONFIG di waste_anomaly/utils.py — kini
+        berisi SELURUH 20 key (v2.7.0, dulu 14 → 6 key v2.3.1 tidak pernah
+        ter-reset: STATUS_*, S2_SCORE2_MIN, S10_BOM_MIN, QUADRANT_THRESHOLD).
+        """
         from waste_anomaly.utils import _DEFAULT_CONFIG
         defaults = _DEFAULT_CONFIG.get("thresholds", {})
         for key, ent in self._config_vars.items():

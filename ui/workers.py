@@ -15,8 +15,10 @@ import pandas as pd
 from PySide6.QtCore import QThread, Signal
 
 from waste_anomaly.exporter import export_to_excel
+from waste_anomaly.loader import load_rekap_mentah
 from waste_anomaly.period_compare import auto_key_akhir, compare_periods
 from waste_anomaly.pipeline import run_pipeline
+from waste_anomaly.utils import load_config
 
 
 def _extra_sheets(df: pd.DataFrame, key_akhir: int, log) -> dict:
@@ -135,31 +137,71 @@ class ExportWorker(QThread):
 
 class PeriodWorker(QThread):
     """P9: jalankan pipeline untuk workbook B (key_akhir otomatis) lalu
-    bandingkan periode A (dataset aktif) vs B."""
+    bandingkan periode A (dataset aktif) vs B.
+
+    v2.7.0 (regresi v2.6.0 vs v2.5.1 tab_period.py): key_akhir B dideteksi
+    dari sheet mentah SEBELUM run_pipeline. Dulu key_akhir=None → pipeline
+    memakai default 31 → bila workbook B hanya berisi data s.d. hari 20,
+    sinyal S11 (LAST DAY SHARE) dihitung vs hari 31 yang kosong → S11
+    tidak pernah terpicu untuk periode B. Plus cancel_check (V26-L5).
+    """
 
     done = Signal(dict)
     failed = Signal(str, str)
 
     def __init__(self, df_a: pd.DataFrame, workbook_b: str,
-                 key_akhir_a: int, parent=None) -> None:
+                 key_akhir_a: int, config: dict | None = None,
+                 parent=None) -> None:
         super().__init__(parent)
         self._df_a = df_a
         self._workbook_b = workbook_b
         self._ka_a = key_akhir_a
+        # Config utk loader mentah (sheet/named-range resolution) — default
+        # load_config() sama seperti jalur run_pipeline tanpa config_path.
+        self._config = config if config is not None else load_config()
+        self._cancel = False
+
+    def cancel(self) -> None:
+        """V26-L5: batalkan — efektif di gate antar-stage pipeline B."""
+        self._cancel = True
+
+    def _detect_key_akhir_b(self) -> int:
+        """Hari aktif terbesar workbook B dari sheet mentah (via
+        load_rekap_mentah + auto_key_akhir — fungsi yang sama dipakai
+        run_pipeline utk membaca sheet). Fallback 31 bila gagal/kosong."""
+        try:
+            raw_b = load_rekap_mentah(self._workbook_b, self._config)
+            ka_b = auto_key_akhir(raw_b)
+        except Exception:  # noqa: BLE001 — defensif: pipeline tetap jalan
+            ka_b = 31
+        try:
+            ka_b = int(ka_b)
+        except (TypeError, ValueError):
+            ka_b = 31
+        return ka_b if 1 <= ka_b <= 31 else 31
 
     def run(self) -> None:
         try:
+            ka_b = self._detect_key_akhir_b()
+            if self._cancel:
+                self.failed.emit("Perbandingan dibatalkan pengguna", "")
+                return
             summary_b = run_pipeline(
                 workbook_path=self._workbook_b,
-                key_akhir=None,
+                key_akhir=ka_b,
                 progress_callback=lambda msg, pct: None,
+                cancel_check=lambda: self._cancel,
             )
+            if summary_b.get("cancelled") or self._cancel:
+                self.failed.emit("Perbandingan dibatalkan pengguna", "")
+                return
             if not summary_b.get("success"):
                 self.failed.emit(
                     summary_b.get("error", "Pipeline periode B gagal"), "")
                 return
             df_b = summary_b["df"]
-            ka_b = auto_key_akhir(df_b)
+            # ka_b hasil deteksi mentah dipakai BAIK utk pipeline B maupun
+            # normalisasi perbandingan (compare_periods) — konsisten.
             result = compare_periods(
                 self._df_a, df_b,
                 key_akhir_a=self._ka_a, key_akhir_b=ka_b,

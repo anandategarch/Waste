@@ -1,28 +1,27 @@
 """
-charts.py — generator grafik untuk tab Visualisasi.
+charts.py — generator grafik matplotlib (galeri statis + analisa).
 
-Menggunakan matplotlib + FigureCanvasTkAgg untuk embed di Tkinter.
-Setiap fungsi return Figure yang siap di-embed.
-
-Dipanggil oleh ui_app.py saat user buka tab Visualisasi.
+Setiap fungsi return Figure yang siap di-embed — embedding dilakukan oleh
+ui/widgets.MplCanvas (FigureCanvasQTAgg, PySide6) di dalam ChartCard
+(sejak v2.6.0; helper embed FigureCanvasTkAgg lama dihapus di v2.7.0 —
+UI Tkinter sudah tidak ada).
 
 NOTE (L14 dependency pin): modul ini membutuhkan matplotlib >= 3.9
 (chart_box_total_per_jenis memakai boxplot(tick_labels=...); kwarg
-"labels" dihapus di matplotlib 3.9). Tidak ada requirements.txt di repo —
-pin dicatat di sini sampai file dependency dibuat.
+"labels" dihapus di matplotlib 3.9). Pin dicatat di requirements.txt.
 
 Semua figure dibangun langsung dari matplotlib.figure.Figure — tidak ada
-pyplot global state (aman untuk multi-embed di Tkinter).
+pyplot global state (plt hanya dipakai untuk rcParams global).
 """
 
 from __future__ import annotations
 
 import logging
 from collections import Counter
-from typing import Any, Callable
+from typing import Callable
 
-# Backend di-set oleh ui_app.py (TkAgg) SEBELUM import modul ini.
-# plt hanya dipakai untuk rcParams global, bukan untuk membuat figure.
+# plt hanya dipakai untuk rcParams global, bukan untuk membuat figure
+# (semua figure dibangun dari objek Figure murni — aman multi-embed).
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -78,20 +77,6 @@ def _dominant_unit_note(df: pd.DataFrame, top: int = 2) -> str:
         return " • ".join(parts)
     except Exception:  # noqa: BLE001 — catatan best-effort
         return ""
-
-# Lazy import FigureCanvasTkAgg — hanya ketika embed ke Tkinter (di UI).
-# Di headless test environment, import ini bisa gagal karena tidak ada Tcl/Tk.
-_FigureCanvasTkAgg = None
-
-
-def _get_canvas_class():
-    """Lazy load FigureCanvasTkAgg. Dipanggil hanya dari embed_figure()."""
-    global _FigureCanvasTkAgg
-    if _FigureCanvasTkAgg is None:
-        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-        _FigureCanvasTkAgg = FigureCanvasTkAgg
-    return _FigureCanvasTkAgg
-
 
 # ============================================================
 # STYLE
@@ -1323,40 +1308,6 @@ def chart_money_top(df: pd.DataFrame, top_n: int = 15) -> Figure:
     add_xlim_headroom(ax, factor=1.18, side="right")
     apply_layout(fig, ax, left_pad=0.34, bottom_pad=0.10)
     return fig
-
-
-# ============================================================
-# EMBED HELPER
-# ============================================================
-
-def embed_figure(parent: Any, fig: Figure):
-    """Embed Figure ke Tkinter parent. Return canvas widget.
-
-    Contract: (parent, fig) → FigureCanvasTkAgg yang sudah di-draw.
-    Lifecycle canvas (destroy widget, dispose figure saat swap chart)
-    adalah tanggung jawab pemanggil (ui_app.py) — pasangkan dengan
-    dispose_figure(fig).
-    """
-    canvas_cls = _get_canvas_class()
-    canvas = canvas_cls(fig, master=parent)
-    canvas.draw()
-    return canvas
-
-
-def dispose_figure(fig: Figure | None) -> None:
-    """Bersihkan semua artist dari sebuah Figure (teardown aman, tanpa pyplot).
-
-    Dipakai ui_app.py saat mengganti chart embedded: panggil SETELAH canvas
-    widget lama di-destroy. fig.clf() melepas axes/legend/colorbar; tidak
-    ada pyplot global state yang terlibat (semua chart dibangun langsung
-    di atas objek Figure).
-    """
-    if fig is None:
-        return
-    try:
-        fig.clf()
-    except Exception:
-        pass  # best-effort cleanup — figure sudah tidak dipakai lagi
 
 
 # ============================================================

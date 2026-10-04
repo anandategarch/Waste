@@ -20,14 +20,13 @@ from PySide6.QtWidgets import (
     QSplitter,
     QVBoxLayout,
     QWidget,
-    QSizePolicy,
 )
 
 from .models import fmt_cell
 from .shared import fmt_id
 from .state import AppContext
-from .theme import STATUS_COLORS
 from .widgets import Card, DataTable, KpiStrip, StatusChip, WLabel, status_chip_for
+from waste_anomaly.signals import SIGNAL_PARTS
 
 # Kolom tabel anomali — ramping (detail lengkap ada di panel bawah).
 # v2.6.1: 10 → 7 kolom. MAX / HARI MAX / RANGKING WASTE dihapus dari tabel
@@ -41,20 +40,28 @@ TABLE_COLS = [
     "JENIS", "KETERANGAN", "TOTAL",
 ]
 
-# 12 sinyal — label persis signals.py (bagian REASON TEXT)
-SIGNALS: list[tuple[str, str]] = [
-    ("_s1", "S1 · Spike vs AVG"),
-    ("_s2", "S2 · MAX ≫ AVG aktif"),
-    ("_s3", "S3 · MAX ≫ MEDIAN aktif"),
-    ("_s4", "S4 · Konsentrasi MAX"),
-    ("_s5", "S5 · Gap MAX vs SECOND"),
-    ("_s6", "S6 · MAX/BOM tinggi"),
-    ("_s7", "S7 · TOTAL/BOM tinggi"),
-    ("_s8", "S8 · MAX outlier peer"),
-    ("_s9", "S9 · TOTAL outlier peer"),
-    ("_s10", "S10 · Single-day event"),
-    ("_s11", "S11 · Dominasi hari akhir"),
-    ("_s12", "S12 · Potensi salah skala"),
+# 12 sinyal — label ringkas utk chip + fragmen teks ANOMALY REASONS
+# (sumber tunggal fragmen: SIGNAL_PARTS di waste_anomaly/signals.py).
+# v2.7.0 (lanjutan V26-C1): kolom _s1.._s12 DI-DROP pipeline sebelum df
+# sampai UI, jadi status terpicu chip dibaca dari fragmen di teks
+# ANOMALY REASONS; nilai _s* hanya fallback bila kolom ada (fixture
+# test sintetis) — sebelum fix ini 12 chip SELALU abu-abu di data riil.
+_CHIP_LABELS = {
+    "_s1": "S1 · Spike vs AVG",
+    "_s2": "S2 · MAX ≫ AVG aktif",
+    "_s3": "S3 · MAX ≫ MEDIAN aktif",
+    "_s4": "S4 · Konsentrasi MAX",
+    "_s5": "S5 · Gap MAX vs SECOND",
+    "_s6": "S6 · MAX/BOM tinggi",
+    "_s7": "S7 · TOTAL/BOM tinggi",
+    "_s8": "S8 · MAX outlier peer",
+    "_s9": "S9 · TOTAL outlier peer",
+    "_s10": "S10 · Single-day event",
+    "_s11": "S11 · Dominasi hari akhir",
+    "_s12": "S12 · Potensi salah skala",
+}
+SIGNALS: list[tuple[str, str, str]] = [
+    (col, _CHIP_LABELS[col], frag) for col, frag in SIGNAL_PARTS
 ]
 
 # Metrik konteks yang ditampilkan di panel detail (bila kolomnya ada)
@@ -71,13 +78,17 @@ DETAIL_COLS = [
 class DetailPanel(Card):
     """Panel detail satu baris anomali: identitas + sinyal + drill-down."""
 
+    # Prompt default — dipakai __init__ DAN clear() (V26-L12)
+    _PROMPT = ("Pilih baris anomali di tabel atas untuk melihat detail "
+               "lengkapnya (12 sinyal, peer, uang).")
+
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._ctx = ctx
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(8)
-        self._title = WLabel("Pilih baris anomali di tabel atas untuk melihat detail lengkapnya (12 sinyal, peer, uang).", self)
+        self._title = WLabel(self._PROMPT, self)
         self._title.setObjectName("cardTitle")
         lay.addWidget(self._title)
 
@@ -87,6 +98,19 @@ class DetailPanel(Card):
         lay.addWidget(self._scroll, 1)
         self._content = QWidget()
         self._scroll.setWidget(self._content)
+
+    def clear(self) -> None:
+        """Kosongkan panel (V26-L12): df terfilter berubah → record yang
+        sedang ditampilkan bisa jadi sudah tidak lolos filter — jangan
+        biarkan panel menampilkan data basi (pola teardown show_record)."""
+        self._title.setText(self._PROMPT)
+        old = self._content.layout()
+        if old is not None:
+            while old.count():
+                item = old.takeAt(0)
+                w = item.widget()
+                if w is not None:
+                    w.deleteLater()
 
     def show_record(self, rec: pd.Series) -> None:
         """Render ulang konten detail dari record baris terpilih."""
@@ -124,21 +148,29 @@ class DetailPanel(Card):
         hl.addStretch(1)
         lay.addWidget(head)
 
-        # Grid 12 sinyal — chip merih bila terpicu
+        # Grid 12 sinyal — chip merah bila terpicu
+        reasons_raw = rec.get("ANOMALY REASONS")
+        reasons_text = "" if reasons_raw is None else str(reasons_raw)
+        if reasons_text in ("nan", "None", "<NA>"):
+            reasons_text = ""
         grid = QWidget()
         gl = QGridLayout(grid)
         gl.setContentsMargins(0, 0, 0, 0)
         gl.setSpacing(6)
-        for i, (col, label) in enumerate(SIGNALS):
+        for i, (col, label, fragment) in enumerate(SIGNALS):
             val = rec.get(col, 0)
             try:
                 val = float(pd.to_numeric(pd.Series([val])).iloc[0])
             except Exception:
                 val = 0.0
-            triggered = val and val > 0
+            # v2.7.0: baca dari fragmen ANOMALY REASONS (data riil) ATAU
+            # nilai _s* bila kolom hadir (fixture sintetis) — lihat komentar
+            # SIGNALS di atas.
+            triggered = (val > 0) or (fragment in reasons_text)
             if triggered:
                 fg, bg = "#dc2626", "#fef2f2"
-                text = f"{label} ✓ ({fmt_id(val, 0)})"
+                text = (f"{label} ✓ ({fmt_id(val, 0)})" if val > 0
+                        else f"{label} ✓")
             else:
                 fg, bg = "#64748b", "#f1f5f9"
                 text = label
@@ -264,6 +296,9 @@ class AnomaliView(QWidget):
         # render saat dibuka (on_shown). View default biasanya terlihat saat
         # pipeline selesai → render langsung.
         self._dirty = True
+        # v2.7.0 (V26-L4): guard coalesce — _on_double menerapkan dua filter
+        # sekaligus TANPA render perantara (satu render di akhir).
+        self._batch_filters = False
         ctx.data_ready.connect(self._on_data_ready)
         ctx.filters_changed.connect(self._on_filters_changed)
 
@@ -274,6 +309,8 @@ class AnomaliView(QWidget):
             self._dirty = True
 
     def _on_filters_changed(self) -> None:
+        if self._batch_filters:
+            return  # render di-coalesce oleh _on_double (V26-L4)
         if self.isVisible():
             self._refresh_table()
         else:
@@ -299,6 +336,12 @@ class AnomaliView(QWidget):
         self._ctx.set_score_min(value)
 
     def _refresh_table(self) -> None:
+        # v2.7.0 (V26-L12): dataset/filter berubah → seleksi + panel detail
+        # lama bisa basi (record terpilih mungkin sudah tak lolos filter) —
+        # kosongkan keduanya (model reset mengosongkan seleksi; panel tidak
+        # dibersihkan oleh siapa pun sebelum ini).
+        self._table.clearSelection()
+        self._detail.clear()
         # Sinkron spin ambang skor (reset eksternal, mis. tombol Hapus Filter)
         if self._spin_score.value() != self._ctx.score_min:
             self._spin_score.blockSignals(True)
@@ -310,15 +353,18 @@ class AnomaliView(QWidget):
             self._lbl_count.setText("Belum ada data — buka tab Pipeline, pilih workbook, jalankan.")
             return
         cols = [c for c in TABLE_COLS if c in df.columns]
-        view_df = df[cols] if cols else df
-        self._table.set_dataframe(view_df, sort_desc="ANOMALY SCORE",
-                                  narrow_hide=["JENIS"])
+        # v2.7.0 (V26-C1): model memegang df PENUH (bukan irisan TABLE_COLS
+        # lagi) — kolom non-tabel disembunyikan via visible_cols. Record
+        # terpilih / double-klik tetap membawa SEMUA kolom (12 sinyal,
+        # ANOMALY REASONS, peer, MAX, ...) ke panel detail + drill-down.
+        self._table.set_dataframe(df, sort_desc="ANOMALY SCORE",
+                                  narrow_hide=["JENIS"], visible_cols=cols)
         full = len(self._ctx.df) if self._ctx.df is not None else 0
-        if len(view_df) == 0:
+        if len(df) == 0:
             self._lbl_count.setText("0 anomali lolos filter — longgarkan filter atau ambang skor.")
         else:
             self._lbl_count.setText(
-                f"{fmt_id(len(view_df))} anomali tampil (dari {fmt_id(full)} baris data)")
+                f"{fmt_id(len(df))} anomali tampil (dari {fmt_id(full)} baris data)")
         self._refresh_kpi()
 
     def _refresh_kpi(self) -> None:
@@ -333,8 +379,19 @@ class AnomaliView(QWidget):
             self._detail.show_record(rec)
 
     def _on_double(self, rec: pd.Series) -> None:
-        """Klik 2×: fokus cabang+item sekaligus (drill-down P8)."""
-        if rec.get("NAMA RESTO") is not None:
-            self._ctx.set_filter("cabang", rec.get("NAMA RESTO"))
-        if rec.get("NAMA BARANG") is not None:
-            self._ctx.set_filter("item", rec.get("NAMA BARANG"))
+        """Klik 2×: fokus cabang+item sekaligus (drill-down P8).
+
+        v2.7.0 (V26-L4): dua set_filter = dua broadcast filters_changed =
+        dua render (regresi coalesce v2.5.1 DD-L2). Guard _batch_filters
+        menelan render perantara; kedua filter tetap diterapkan lalu tabel
+        di-render SEKALI di akhir (tanpa menyentuh ui/state.py).
+        """
+        self._batch_filters = True
+        try:
+            if rec.get("NAMA RESTO") is not None:
+                self._ctx.set_filter("cabang", rec.get("NAMA RESTO"))
+            if rec.get("NAMA BARANG") is not None:
+                self._ctx.set_filter("item", rec.get("NAMA BARANG"))
+        finally:
+            self._batch_filters = False
+        self._refresh_table()

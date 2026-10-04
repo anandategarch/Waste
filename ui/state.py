@@ -32,9 +32,14 @@ def _build_derived_sheets(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """
     sheets: dict[str, pd.DataFrame] = {"Detail": df}
     if "ANOMALY STATUS" in df.columns:
-        sheets["Anomali Prioritas"] = df[df["ANOMALY STATUS"].isin(
-            ["Prioritas Tinggi", "Potensi Anomali"]
-        )].sort_values("ANOMALY SCORE", ascending=False)
+        # v2.7.0 (V26-L11): sort ANOMALY SCORE dibungkus try — sama seperti
+        # blok lain. STATUS ada tapi SCORE absen → dulu KeyError (tanpa try).
+        try:
+            sheets["Anomali Prioritas"] = df[df["ANOMALY STATUS"].isin(
+                ["Prioritas Tinggi", "Potensi Anomali"]
+            )].sort_values("ANOMALY SCORE", ascending=False)
+        except Exception:  # SCORE hilang / dtype tak bisa di-sort → kosong
+            sheets["Anomali Prioritas"] = df.head(0)
     else:
         sheets["Anomali Prioritas"] = df.head(0)
 
@@ -42,8 +47,16 @@ def _build_derived_sheets(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
                 "Anomali_Prioritas", "Anomali_Potensi", "Anomali_Review"]
     if "NAMA RESTO" in df.columns:
         try:
+            # v2.7.0: koersi numerik TOTAL/MAX — dtype object (string "10")
+            # membuat agg 'sum' MENGgabungkan teks senyap (audit Task ID 1).
+            sub = df[[c for c in ("NAMA RESTO", "NAMA BARANG", "TOTAL", "MAX",
+                                   "ANOMALY STATUS") if c in df.columns]].copy()
+            if "TOTAL" in sub.columns:
+                sub["TOTAL"] = pd.to_numeric(sub["TOTAL"], errors="coerce")
+            if "MAX" in sub.columns:
+                sub["MAX"] = pd.to_numeric(sub["MAX"], errors="coerce")
             sheets["Per Cabang"] = (
-                df.groupby("NAMA RESTO", dropna=False).agg(
+                sub.groupby("NAMA RESTO", dropna=False).agg(
                     Jumlah_Barang=("NAMA BARANG", "size"),
                     Total_Waste=("TOTAL", "sum"),
                     Max_Waste_Harian=("MAX", "max"),
@@ -62,8 +75,15 @@ def _build_derived_sheets(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
                 "Cabang_Terpengaruh", "Anomali_Prioritas"]
     if "NAMA BARANG" in df.columns:
         try:
+            # v2.7.0: koersi numerik TOTAL/MAX — alasan sama dgn 'Per Cabang'.
+            sub = df[[c for c in ("NAMA BARANG", "JENIS", "TOTAL", "MAX",
+                                   "NAMA RESTO", "ANOMALY STATUS") if c in df.columns]].copy()
+            if "TOTAL" in sub.columns:
+                sub["TOTAL"] = pd.to_numeric(sub["TOTAL"], errors="coerce")
+            if "MAX" in sub.columns:
+                sub["MAX"] = pd.to_numeric(sub["MAX"], errors="coerce")
             top = (
-                df.groupby(["NAMA BARANG", "JENIS"], dropna=False).agg(
+                sub.groupby(["NAMA BARANG", "JENIS"], dropna=False).agg(
                     Total_Waste=("TOTAL", "sum"),
                     Max_Waste=("MAX", "max"),
                     Cabang_Terpengaruh=("NAMA RESTO", "nunique"),
@@ -81,8 +101,15 @@ def _build_derived_sheets(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
                 "Persentase", "Cumulative"]
     if "KETERANGAN" in df.columns:
         try:
+            # v2.7.0: koersi numerik TOTAL — konsisten dgn 'Per Cabang' /
+            # 'Top Items' (string TOTAL membuat agg 'sum' menggabungkan
+            # teks senyap; dulu blok ini hanya ter-degrade via try/except).
+            sub = df[[c for c in ("KETERANGAN", "NAMA BARANG", "TOTAL")
+                      if c in df.columns]].copy()
+            if "TOTAL" in sub.columns:
+                sub["TOTAL"] = pd.to_numeric(sub["TOTAL"], errors="coerce")
             pareto = (
-                df.groupby("KETERANGAN", dropna=False).agg(
+                sub.groupby("KETERANGAN", dropna=False).agg(
                     Total_Waste=("TOTAL", "sum"),
                     Jumlah_Barang=("NAMA BARANG", "size"),
                 ).reset_index().sort_values("Total_Waste", ascending=False)
@@ -119,6 +146,9 @@ class AppContext(QObject):
         self.key_akhir: int = 31
         self.last_run_time: datetime | None = None
         self.log_lines: list[str] = []
+        # v2.7.0: versi dataset — bertambah tiap set_dataset; dipakai view
+        # (mis. Banding Periode) utk tahu hasil lama dibuat dari dataset lama.
+        self.data_version = 0
 
         # Drill-down state (bentuk IDENTIK v2.5.1 — dikonsumsi _apply_filters)
         self.active_filters: dict[str, str | list[str] | None] = {
@@ -130,6 +160,14 @@ class AppContext(QObject):
         self.search = ""
         # v2.6.0: ambang skor minimum (khusus tabel anomali — fitur hunting)
         self.score_min = 0
+        # v2.7.0 (perf, audit Task ID 1): memo hasil filtered_df — dulu
+        # _apply_filters dijalankan 2× per refresh (anomali_df + KPI view)
+        # atas df 25.901×53. Divalidasi oleh set_filter/set_search/
+        # set_day_range/set_score_min/reset_filters/set_dataset. Pemanggil
+        # hanya membaca (mask/slice kolom = copy) — kontrak aman tanpa copy
+        # ekstra per hit.
+        self._filtered_cache: pd.DataFrame | None = None
+        self._filter_cache_valid = False
 
     # ------------------------------------------------------------
     # DATA
@@ -144,21 +182,42 @@ class AppContext(QObject):
         except (TypeError, ValueError):
             self.key_akhir = 31
         self.last_run_time = datetime.now()
-        self.reset_filters()
+        self.data_version += 1
+        self.reset_filters()  # juga meng-invalidasi memo filtered_df
         self.data_ready.emit()
+        # v2.7.0 (V26-H2): siarkan reset filter SEKALI SETELAH data_ready —
+        # views pendengar filters_changed (Anomali/Jelajah) menandai dirty
+        # secara konsisten. Urutan setelah data_ready dipilih karena pada
+        # alur tipikal re-run user ada di tab Pipeline (view tidak terlihat
+        # → kedua handler hanya menandai dirty, TANPA render ganda); bila
+        # kebetulan terlihat, handler filters_changed hanya partial refresh
+        # (bukan refresh penuh ganda).
+        self.filters_changed.emit()
 
     # ------------------------------------------------------------
     # FILTER
     # ------------------------------------------------------------
     def filtered_df(self) -> pd.DataFrame | None:
-        """df hasil filter lengkap (search + dropdown + rentang hari)."""
+        """df hasil filter lengkap (search + dropdown + rentang hari).
+
+        v2.7.0: hasil di-memo — dipakai ulang sampai filter/data berubah
+        (lihat invalidasi di setter + invalidate_filter_cache).
+        """
         if self.df is None:
             return None
-        return _apply_filters(
-            self.df, self.active_filters,
-            day_min=self.day_min, day_max=self.day_max,
-            search=self.search,
-        )
+        if not self._filter_cache_valid:
+            self._filtered_cache = _apply_filters(
+                self.df, self.active_filters,
+                day_min=self.day_min, day_max=self.day_max,
+                search=self.search,
+            )
+            self._filter_cache_valid = True
+        return self._filtered_cache
+
+    def invalidate_filter_cache(self) -> None:
+        """Batalkan memo filtered_df — WAJIB dipanggil bila filter state
+        dimutasi langsung (bypass setter), mis. pemulihan profil filter."""
+        self._filter_cache_valid = False
 
     def anomali_df(self) -> pd.DataFrame | None:
         """df terfilter, hanya baris ANOMALY STATUS ≠ Normal, skor ≥ min."""
@@ -175,19 +234,23 @@ class AppContext(QObject):
     def set_filter(self, key: str, value) -> None:
         """Set satu filter (drill-down atau dropdown) lalu broadcast."""
         self.active_filters[key] = value
+        self._filter_cache_valid = False
         self.filters_changed.emit()
 
     def set_day_range(self, day_min: int | None, day_max: int | None) -> None:
         self.day_min = day_min
         self.day_max = day_max
+        self._filter_cache_valid = False
         self.filters_changed.emit()
 
     def set_search(self, text: str) -> None:
         self.search = text
+        self._filter_cache_valid = False
         self.filters_changed.emit()
 
     def set_score_min(self, score: int) -> None:
         self.score_min = score
+        self._filter_cache_valid = False  # tak dipakai _apply_filters, tetap aman
         self.filters_changed.emit()
 
     def reset_filters(self) -> None:
@@ -199,6 +262,7 @@ class AppContext(QObject):
         self.day_max = None
         self.search = ""
         self.score_min = 0
+        self._filter_cache_valid = False
 
     def filter_summary(self) -> str:
         """Deskripsi filter aktif (utk chip / status bar)."""

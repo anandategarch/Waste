@@ -8,6 +8,8 @@ Kontrak yang dikunci:
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -256,7 +258,12 @@ class TestJenisDanDefensif:
 class TestRealDataSmoke:
     def test_agregat_item_sama_dengan_total(self):
         """Sum TOTAL baris aktif == sum agregat item (invarian konsistensi)."""
-        raw = pd.read_excel("/home/z/Waste-audit/DATA_WASTE.xlsx", sheet_name="Sheet1")
+        # v2.7.0: path repo-relatif (dulu hardcode /home/z/Waste-audit —
+        # clone lama; hilang di clone baru → test gagal di lingkungan lain).
+        path = Path(__file__).resolve().parents[1] / "DATA_WASTE.xlsx"
+        if not path.exists():
+            pytest.skip("DATA_WASTE.xlsx tidak ada di repo — smoke data riil dilewati")
+        raw = pd.read_excel(path, sheet_name="Sheet1")
         res = compare_periods(raw, raw)
         s = res["summary"].set_index("Metrik")
         total_expected = float(raw["TOTAL"].sum())

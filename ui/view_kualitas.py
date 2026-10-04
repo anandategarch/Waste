@@ -31,7 +31,8 @@ class KualitasView(QWidget):
         hint = WLabel(
             "Temuan fragmentasi/inkonsistensi yang bisa membuat analisa menyesatkan "
             "(varian spasi tersembunyi, label kembar visual, waste tanpa BOM, dst.). "
-            "Klik ▶ pada Severity utk penjelasan — semua kolom bisa di-sort.", card)
+            "Semua kolom bisa di-sort — penjelasan tiap temuan di kolom Detail, "
+            "contoh baris terdampak di kolom Contoh.", card)
         hint.setObjectName("hint")
         cl.addWidget(hint)
         row = QWidget(card)
@@ -49,6 +50,8 @@ class KualitasView(QWidget):
         cl.addWidget(self._table, 1)
         lay.addWidget(card, 1)
         ctx.data_ready.connect(self._on_data_ready)
+        # V26-M6: empty-state pra-run pertama (sejajar view chart lain)
+        self._lbl_count.setText("Belum ada data — jalankan pipeline dulu.")
 
     def on_shown(self) -> None:
         if self._dirty:

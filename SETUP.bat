@@ -5,7 +5,7 @@ title Waste Anomaly Detection - SETUP (One-Time)
 color 0B
 cls
 echo ============================================================
-echo   SETUP - Install Dependencies (One-Time) - v2.6.1
+echo   SETUP - Install Dependencies (One-Time) - v2.7.0
 echo ============================================================
 echo.
 echo  Menginstall dependencies untuk Waste Anomaly Detection:
@@ -16,7 +16,7 @@ echo    - python-calamine (Excel READ engine cepat, Rust-based)
 echo    - matplotlib      (visualisasi grafik)
 echo    - PySide6         (framework UI Qt6)
 echo.
-echo  v2.6.1: install dilakukan ke .venv lokal di folder ini.
+echo  Install dilakukan ke .venv lokal di folder ini.
 echo  Keuntungan: tidak mencemari Python global, dan menghindari
 echo  batas panjang path Windows 260 karakter yang bikin pip gagal
 echo  menulis file PySide6 di Python Microsoft Store.
@@ -27,22 +27,30 @@ pause >nul
 cd /d "%~dp0"
 
 echo [1/5] Cek Python...
+REM v2.7.0: fallback launcher "py -3" bila "python" tidak ada di PATH
+REM (umum di Windows: python.org installer hanya memasang py.exe).
+set "PYCMD="
 python --version >nul 2>&1
-if errorlevel 1 (
-    echo [ERROR] Perintah "python" tidak ditemukan di PATH.
+if not errorlevel 1 set "PYCMD=python"
+if not defined PYCMD (
+    py -3 --version >nul 2>&1
+    if not errorlevel 1 set "PYCMD=py -3"
+)
+if not defined PYCMD (
+    echo [ERROR] Perintah "python" maupun "py -3" tidak ditemukan di PATH.
     echo         Install Python 3.10+ dari https://python.org atau dari
     echo         Microsoft Store, lalu jalankan SETUP.bat lagi.
     pause
     exit /b 1
 )
-python --version
+%PYCMD% --version
 
 echo.
 echo [2/5] Buat virtual environment .venv...
 if exist ".venv\Scripts\python.exe" (
     echo        .venv sudah ada - dipakai ulang.
 ) else (
-    python -m venv .venv
+    %PYCMD% -m venv .venv
     if errorlevel 1 (
         echo [ERROR] Gagal membuat .venv. Cek error di atas.
         pause
@@ -51,9 +59,39 @@ if exist ".venv\Scripts\python.exe" (
 )
 set "PY=%~dp0.venv\Scripts\python.exe"
 
+REM v2.7.0: validasi .venv benar-benar bisa jalan — .venv setengah jadi
+REM (instalasi python Microsoft Store di-upgrade / antivirus menghapus
+REM file) membuat langkah berikutnya gagal dengan pesan membingungkan.
+"%PY%" -c "import sys; print(sys.version)"
+if errorlevel 1 (
+    echo [WARN] .venv rusak / tidak bisa dijalankan.
+    echo        Membuat ulang .venv satu kali secara otomatis...
+    rd /s /q ".venv"
+    %PYCMD% -m venv .venv
+    if errorlevel 1 (
+        echo [ERROR] Gagal membuat ulang .venv. Hapus folder .venv secara
+        echo         manual, lalu jalankan SETUP.bat lagi.
+        pause
+        exit /b 1
+    )
+    "%PY%" -c "import sys; print(sys.version)"
+    if errorlevel 1 (
+        echo [ERROR] .venv baru tetap tidak bisa dijalankan - cek
+        echo         instalasi Python %PYCMD%, lalu jalankan SETUP.bat lagi.
+        pause
+        exit /b 1
+    )
+)
+
 echo.
 echo [3/5] Upgrade pip...
 "%PY%" -m pip install --upgrade pip
+if errorlevel 1 (
+    echo [ERROR] Gagal upgrade pip. Cek koneksi internet, lalu jalankan
+    echo         SETUP.bat ulang.
+    pause
+    exit /b 1
+)
 
 echo.
 echo [4/5] Install dependencies ke .venv...

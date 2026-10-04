@@ -11,12 +11,10 @@ Jaminan struktural "tidak ada teks/grafik terpotong":
 """
 from __future__ import annotations
 
-from typing import Callable
-
 import pandas as pd
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -128,9 +126,6 @@ class ChartCard(Card):
         self._placeholder: QWidget | None = None
         self.set_message("")
 
-    def set_title(self, title: str) -> None:
-        self._title.setText(title)
-
     def set_message(self, msg: str, error: bool = False) -> None:
         """Tampilkan pesan (data kosong / error) menggantikan chart."""
         self._dispose_canvas()
@@ -207,11 +202,23 @@ class DataTable(QTableView):
         self._pending_fit = False
         self._last_fit_w = -1  # v2.6.1: lebar viewport saat fit terakhir
         self._narrow_hide: list[str] = []  # v2.6.1: kolom boleh-disebunyikan
+        self._visible_cols: list[str] | None = None  # v2.7.0: kolom tampak (V26-C1)
+        self._in_fit = False  # v2.7.0 (V26-M4): guard umpan-balik sectionResized
+        # v2.7.0 (V26-M4/L9): resize kolom manual → tinggi baris wrap harus
+        # dihitung ulang; DEBOUNCE 120ms mencegah refit berkali-kali selama
+        # drag (flicker). Lebar yang dipasang sendiri oleh _auto_columns /
+        # _refit_rows diabaikan via _in_fit (loop umpan-balik).
+        self._refit_timer = QTimer(self)
+        self._refit_timer.setSingleShot(True)
+        self._refit_timer.setInterval(120)
+        self._refit_timer.timeout.connect(lambda: self._refit_rows())
         self.doubleClicked.connect(self._on_double)
         # Sort by header → tinggi baris harus dihitung ulang (baris visual
         # berganti isi; tinggi lama tidak cocok → teks wrap terpotong).
         self.horizontalHeader().sortIndicatorChanged.connect(
             lambda *_: self._refit_rows())
+        self.horizontalHeader().sectionResized.connect(
+            self._on_section_resized)
 
     def _refit_rows(self) -> None:
         """Hitung tinggi baris utk teks wrap (ukuran sendiri — QTableView's
@@ -223,23 +230,38 @@ class DataTable(QTableView):
             return
         fm = self.fontMetrics()
         default_h = self.verticalHeader().defaultSectionSize()
-        for r in range(n):
-            need = default_h
-            for c in range(model.columnCount()):
-                if self.isColumnHidden(c):  # v2.6.1: kolom responsif tak dihitung
-                    continue
-                text = str(model.data(model.index(r, c), Qt.DisplayRole) or "")
-                if not text:
-                    continue
-                w = self.columnWidth(c) - 18  # padding sel (QSS 3px 8px)
-                if w < 24:
-                    continue
-                if fm.horizontalAdvance(text) > w:
-                    rect = fm.boundingRect(
-                        0, 0, w, 10_000, Qt.TextFlag.TextWordWrap, text)
-                    need = max(need, rect.height() + 12)
-            if abs(self.rowHeight(r) - need) > 1:
-                self.setRowHeight(r, need)
+        self._in_fit = True  # jangan picu sectionResized-handler saat setRowHeight
+        try:
+            for r in range(n):
+                need = default_h
+                for c in range(model.columnCount()):
+                    if self.isColumnHidden(c):  # v2.6.1: kolom responsif tak dihitung
+                        continue
+                    text = str(model.data(model.index(r, c), Qt.DisplayRole) or "")
+                    if not text:
+                        continue
+                    w = self.columnWidth(c) - 18  # padding sel (QSS 3px 8px)
+                    if w < 24:
+                        continue
+                    if fm.horizontalAdvance(text) > w:
+                        rect = fm.boundingRect(
+                            0, 0, w, 10_000, Qt.TextFlag.TextWordWrap, text)
+                        need = max(need, rect.height() + 12)
+                if abs(self.rowHeight(r) - need) > 1:
+                    self.setRowHeight(r, need)
+        finally:
+            self._in_fit = False
+
+    def _on_section_resized(self, *_args) -> None:
+        """Resize kolom (drag user / program) → jadwal refit tinggi baris.
+
+        Refit di-DEBOUNCE lewat timer single-shot 120ms — selama drag hanya
+        timer yang di-restart (bukan refit penuh per piksel → flicker V26-L9).
+        """
+        if self._in_fit:
+            return  # lebar dipasang oleh _auto_columns/_refit_rows sendiri
+        if 0 < self._model.rowCount() <= 3000:
+            self._refit_timer.start()
 
     def _on_double(self, index) -> None:
         rec = self._model.record(index.row())
@@ -248,16 +270,35 @@ class DataTable(QTableView):
 
     def set_dataframe(self, df: pd.DataFrame | None,
                       sort_desc: str | None = None,
-                      narrow_hide: list[str] | None = None) -> None:
+                      narrow_hide: list[str] | None = None,
+                      visible_cols: list[str] | None = None) -> None:
         """Tampilkan df; ``sort_desc`` = nama kolom utk sort default DESC.
 
         ``narrow_hide`` (v2.6.1): nama kolom yang BOLEH disembunyikan —
         secara berurutan — bila lantai header tak muat di viewport sempit
         (tabel responsif). Disembunyikan ≠ terpotong: kolom inti tetap
         tampil; kolom disembunyikan muncul kembali saat window melebar.
+
+        ``visible_cols`` (v2.7.0, V26-C1): model tetap memegang df PENUH —
+        kolom di LUAR visible_cols disembunyikan (setColumnHidden, persisten
+        lintas _auto_columns) tapi TIDAK dibuang. ``selected_record()`` /
+        ``double_clicked`` lalu mengembalikan record PENUH (semua kolom) —
+        panel detail / drill-down mendapat data lengkap. None/[] = semua
+        kolom tampak (perilaku lama — view lain tak terdampak).
         """
         self._narrow_hide = list(narrow_hide or [])
+        self._visible_cols = list(visible_cols) if visible_cols else None
         self._model.set_dataframe(df)
+        # V26-M3: tabel raksasa (>3000 baris) — _refit_rows di-skip demi
+        # kecepatan; bila word-wrap tetap nyala, teks multi-baris TERPOTONG
+        # VERTIKAL (tinggi baris tetap default). Ganti strategi: wrap mati +
+        # elide kanan '…' — tooltip sel tetap menampilkan teks penuh
+        # (konvensi terdokumentasi), baris tidak terpotong.
+        big = df is not None and len(df) > 3000
+        self.setWordWrap(not big)
+        self.setTextElideMode(
+            Qt.TextElideMode.ElideRight if big
+            else Qt.TextElideMode.ElideNone)
         if sort_desc and df is not None and sort_desc in df.columns:
             col = list(df.columns).index(sort_desc)
             self.horizontalHeader().setSortIndicator(
@@ -311,11 +352,25 @@ class DataTable(QTableView):
         model = self._model
         n_rows = min(sample, model.rowCount())
         fm = self.fontMetrics()
+        n_cols = model.columnCount()
+        names = [str(model.headerData(c, Qt.Horizontal))
+                 for c in range(n_cols)]
+        # v2.7.0 (V26-C1): kolom di luar visible_cols disembunyikan permanen
+        # dan DIKECUALIKAN dari semua perhitungan lebar (lantai/penyekalaan
+        # hanya menghitung kolom yang benar-benar tampak).
+        if self._visible_cols is not None:
+            vis_hidden = {c for c in range(n_cols)
+                          if names[c] not in self._visible_cols}
+        else:
+            vis_hidden = set()
         widths: list[int] = []
         floors: list[int] = []
-        for c in range(model.columnCount()):
-            hw = fm.horizontalAdvance(
-                str(model.headerData(c, Qt.Horizontal))) + 26
+        for c in range(n_cols):
+            if c in vis_hidden:
+                widths.append(0)  # placeholder — kolom hidden tak diukur
+                floors.append(0)
+                continue
+            hw = fm.horizontalAdvance(names[c]) + 26
             floors.append(min(max(min_w, hw), cap))
             w = hw
             for r in range(n_rows):
@@ -332,24 +387,22 @@ class DataTable(QTableView):
         # v2.6.1 RESPONSIVE: bila lantai header tak muat, sembunyikan kolom
         # boleh-disebunyikan (urutan narrow_hide) sampai muat — kolom inti
         # tetap tampil. Bila SETELAH itu masih tak muat → scrollbar
-        # horizontal (scroll ≠ terpotong).
-        n_cols = model.columnCount()
+        # horizontal (scroll ≠ terpotong). narrow_hide menumpuk DI ATAS
+        # visible_cols (kolom yang sudah permanen-hidden tidak dihitung dua
+        # kali — floors-nya 0).
         hidden: set[int] = set()
         if self._narrow_hide and n_cols:
-            names = [str(model.headerData(c, Qt.Horizontal))
-                     for c in range(n_cols)]
             total_f = sum(floors)
             for want in self._narrow_hide:
                 if total_f <= avail:
                     break
                 if want in names:
                     c = names.index(want)
-                    if c not in hidden:
+                    if c not in hidden and c not in vis_hidden:
                         hidden.add(c)
                         total_f -= floors[c]
-        for c in range(n_cols):
-            self.setColumnHidden(c, c in hidden)
-        keep = [c for c in range(n_cols) if c not in hidden]
+        keep = [c for c in range(n_cols)
+                if c not in hidden and c not in vis_hidden]
         total = sum(widths[c] for c in keep)
         final: dict[int, int] = {}
         if total > avail:
@@ -384,13 +437,21 @@ class DataTable(QTableView):
         else:
             for c in keep:
                 final[c] = widths[c]
-        for c in keep:
-            self.setColumnWidth(c, final[c])
-        self._last_fit_w = self.viewport().width()  # v2.6.1
-        if sum(final.values()) <= avail + 2:
-            self._pending_fit = False  # sudah pas — tidak perlu fit ulang
-        if n_rows == 0 and keep:
-            self.setColumnWidth(keep[0], max(final[keep[0]], 240))
+        # Lebar/status kolom dipasang dalam mode _in_fit → handler
+        # sectionResized mengabaikannya (loop umpan-balik, V26-M4).
+        self._in_fit = True
+        try:
+            for c in range(n_cols):
+                self.setColumnHidden(c, c in hidden or c in vis_hidden)
+            for c in keep:
+                self.setColumnWidth(c, final[c])
+            self._last_fit_w = self.viewport().width()  # v2.6.1
+            if sum(final.values()) <= avail + 2:
+                self._pending_fit = False  # sudah pas — tidak perlu fit ulang
+            if n_rows == 0 and keep:
+                self.setColumnWidth(keep[0], max(final[keep[0]], 240))
+        finally:
+            self._in_fit = False
         # Wrap baris: teks panjang (RANGKING WASTE, Detail/Contoh KQ) tampil
         # UTUH — tinggi baris dihitung manual (lihat _refit_rows). Di-skip
         # utk tabel raksasa (25k×53) demi kecepatan (tooltip + fit kolom).
@@ -497,11 +558,22 @@ class KpiStrip(QWidget):
             parts = []
             cols = list(us.columns)
             name_col = cols[0]
-            val_col = "Total_Waste" if "Total_Waste" in cols else (
-                cols[1] if len(cols) > 1 else None)
+            # v2.7.0 (V26-H4): skema unit_summary = SATUAN/rows/active_rows/
+            # items/total/share_pct/raw_values — 'Total_Waste' TIDAK pernah
+            # ada, fallback lama cols[1]='rows' menampilkan JUMLAH BARIS
+            # seolah total waste. Pakai kolom 'total' (waste sesungguhnya)
+            # + share_pct utk konteks.
+            val_col = "total" if "total" in cols else None
+            share_col = "share_pct" if "share_pct" in cols else None
             for _, r in us.head(3).iterrows():
                 if val_col:
-                    parts.append(f"{r[name_col]}: {fmt_id(float(r[val_col]), 1)}")
+                    part = f"{r[name_col]}: {fmt_id(float(r[val_col]), 1)}"
+                    if share_col:
+                        share = float(r[share_col])
+                        if share == share:  # bukan NaN
+                            pct = f"{share:.1f}".replace(".", ",")
+                            part += f" ({pct}%)"
+                    parts.append(part)
                 else:
                     parts.append(str(r[name_col]))
             if parts:

@@ -35,11 +35,14 @@ _PAGES = [
 ]
 
 # key dict result compare_periods → (df, label)
+# v2.7.0 (V26-H3): kunci asli compare_periods = 'branch'/'items' — dulu
+# 'branch_summary'/'item_summary' → tab Cabang Mover & Item Mover selalu
+# kosong (None). Kunci dikunci kontrak waste_anomaly/period_compare.py.
 _RESULT_KEYS = {
     "summary": "summary",
     "per_jenis": "per_jenis",
-    "branch": "branch_summary",
-    "items": "item_summary",
+    "branch": "branch",
+    "items": "items",
     "new_items": "new_items",
     "gone_items": "gone_items",
 }
@@ -51,6 +54,12 @@ class PeriodeView(QWidget):
         self._ctx = ctx
         self._worker: PeriodWorker | None = None
         self._running = False
+        # V26-L6: hasil banding terakhir — data_version dataset yang dipakai
+        # saat hasil dibuat; data_ready dgn versi BEDA → tandai hasil basi
+        # (tabel tidak dihapus; refresh/on_shown dgn versi SAMA → tanpa
+        # warning palsu — hanya ganti tab tidak dianggap data berubah).
+        self._has_result = False
+        self._result_version: int | None = None
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 8, 8, 8)
@@ -113,6 +122,15 @@ class PeriodeView(QWidget):
         if self._ctx.df is not None:
             self._lbl_a.setText(
                 f"{fmt_run_label(self._ctx.summary, self._ctx.key_akhir)}")
+            stale = (self._has_result
+                     and self._ctx.data_version != self._result_version)
+            if stale:
+                # V26-L6: tabel masih menampilkan hasil banding berbasis
+                # periode A LAMA — tandai basi, tabel TIDAK dihapus (user
+                # memutuskan sendiri kapan menjalankan ulang perbandingan).
+                self._lbl_status.setText(
+                    "⚠ Data periode A berubah — hasil banding di atas tidak "
+                    "lagi berlaku (jalankan ulang perbandingan).")
 
     def refresh(self) -> None:
         """Kontrak lazy-render: perbarui label periode A dari state."""
@@ -131,6 +149,8 @@ class PeriodeView(QWidget):
 
     def _run_compare(self) -> None:
         if self._running:
+            # Tombol dua-mode (V26-L5): saat berjalan, tombol yang sama = batal.
+            self._cancel()
             return
         if self._ctx.df is None:
             QMessageBox.information(self, "Banding Periode",
@@ -142,17 +162,47 @@ class PeriodeView(QWidget):
                                  "Workbook periode B belum dipilih atau tidak ditemukan.")
             return
         self._running = True
-        self._btn_run.setEnabled(False)
+        # Dua-mode ala PipelineView: "Bandingkan" berubah jadi "Batalkan"
+        # (V26-L5) — tombol tetap aktif supaya bisa diklik utk membatalkan.
+        self._btn_run.setText("⏹ Batalkan")
+        self._btn_run.setObjectName("danger")
+        self._btn_run.style().unpolish(self._btn_run)
+        self._btn_run.style().polish(self._btn_run)
         self._lbl_status.setText("Menjalankan pipeline periode B di background…")
         self._ctx.set_status("Banding periode: pipeline B berjalan…", "running")
-        self._worker = PeriodWorker(self._ctx.df, wb_b, self._ctx.key_akhir, self)
+        # v2.7.0: config diteruskan agar deteksi key_akhir mentah memakai
+        # konfigurasi sheet/named-range yang sama dengan run_pipeline.
+        self._worker = PeriodWorker(self._ctx.df, wb_b, self._ctx.key_akhir,
+                                    config=dict(self._ctx.config), parent=self)
         self._worker.done.connect(self._on_done)
         self._worker.failed.connect(self._on_failed)
+        # V26-L7: worker selesai → deleteLater (aman post-finish; referensi
+        # _worker dinolkan di _finish sebelum event deleteLater diproses).
+        self._worker.finished.connect(self._worker.deleteLater)
         self._worker.start()
 
-    def _on_done(self, result: dict) -> None:
+    def _cancel(self) -> None:
+        """Minta pembatalan worker banding (efektif di gate antar-stage)."""
+        if not self._running or self._worker is None:
+            return
+        self._worker.cancel()
+        self._btn_run.setEnabled(False)
+        self._ctx.set_status("⏹ Membatalkan banding periode…", "running")
+
+    def _finish(self) -> None:
+        """Kembalikan tombol ke mode "Bandingkan" + lepaskan worker."""
         self._running = False
         self._btn_run.setEnabled(True)
+        self._btn_run.setText("🔀 Bandingkan")
+        self._btn_run.setObjectName("accent")
+        self._btn_run.style().unpolish(self._btn_run)
+        self._btn_run.style().polish(self._btn_run)
+        self._worker = None  # objek dihapus via finished→deleteLater
+
+    def _on_done(self, result: dict) -> None:
+        self._finish()
+        self._has_result = True
+        self._result_version = self._ctx.data_version
         ka_b = result.get("key_akhir_b")
         self._lbl_status.setText(
             f"✓ Selesai — periode B: {result.get('workbook_b', '?')} "
@@ -164,8 +214,12 @@ class PeriodeView(QWidget):
             self._tables[key].set_dataframe(df if isinstance(df, pd.DataFrame) else None)
 
     def _on_failed(self, err: str, tb: str) -> None:
-        self._running = False
-        self._btn_run.setEnabled(True)
+        self._finish()
+        cancelled = (err == "Perbandingan dibatalkan pengguna")
+        if cancelled:
+            self._lbl_status.setText("⏹ Perbandingan dibatalkan pengguna.")
+            self._ctx.set_status("⏹ Banding periode dibatalkan", "error")
+            return
         self._lbl_status.setText(f"⚠ Gagal: {err}")
         self._ctx.set_status(f"⚠ Banding periode gagal: {err}", "error")
         if tb:

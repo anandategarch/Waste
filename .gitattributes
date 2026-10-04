@@ -1,0 +1,2 @@
+# .bat harus CRLF supaya jalur ZIP-download Windows selalu benar (V26-M16)
+*.bat text eol=crlf

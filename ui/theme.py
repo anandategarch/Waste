@@ -10,7 +10,6 @@ C_CARD = "#ffffff"           # kartu
 C_HEADER = "#0f172a"        # slate-900 — teks judul
 C_BORDER = "#e2e8f0"         # border kartu
 C_TEXT_MUTED = "#64748b"    # teks sekunder
-C_TEXT_MAIN = "#1f2937"     # teks utama
 C_ACCENT = "#0f766e"         # teal — tombol aksi utama
 C_ACCENT_HOVER = "#115e59"
 
@@ -31,7 +30,7 @@ QSS = f"""
     font-family: "Segoe UI", "Tahoma", "DejaVu Sans", sans-serif;
     font-size: 13px;
 }}
-QMainWindow, QWidget#root {{ background: {C_BG}; }}
+QMainWindow {{ background: {C_BG}; }}
 QFrame#card {{
     background: {C_CARD};
     border: 1px solid {C_BORDER};
@@ -50,7 +49,6 @@ QLabel#cardTitle {{
 }}
 QLabel#hint {{ color: {C_TEXT_MUTED}; background: transparent; border: none; font-size: 12px; }}
 QLabel#muted {{ color: {C_TEXT_MUTED}; background: transparent; border: none; }}
-QLabel#statusbar-label {{ color: {C_TEXT_MUTED}; background: transparent; border: none; }}
 
 QPushButton {{
     background: #ffffff;

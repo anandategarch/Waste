@@ -12,6 +12,7 @@ state.py::_build_derived_sheets
 view_anomali.py::AnomaliView
 view_anomali.py::DetailPanel
 view_jelajah.py::JelajahView
+view_jelajah.py::_drill_value_ok
 view_kualitas.py::KualitasView
 view_peer.py::PeerView
 view_periode.py::PeriodeView

@@ -22,6 +22,9 @@ from PySide6.QtWidgets import (
 from .state import AppContext
 from .widgets import Card, ChartCard, DataTable, WLabel, place_charts_responsive
 
+# Pesan placeholder pra-run pertama (V26-M6)
+_EMPTY_MSG = "Belum ada data — jalankan pipeline dulu (tab Pipeline)."
+
 
 class PeerView(QWidget):
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
@@ -56,7 +59,6 @@ class PeerView(QWidget):
         scroll.setWidget(inner)
         scroll.setMinimumHeight(400)
         tl.addWidget(scroll)
-        self._chart_scroll = scroll
 
         # ===== TENGAH: banding 2 cabang =====
         mid = Card(self._split)
@@ -129,6 +131,14 @@ class PeerView(QWidget):
         self._split.setStretchFactor(1, 1)
         self._split.setStretchFactor(2, 2)
         ctx.data_ready.connect(self._on_data_ready)
+
+        # V26-M6: tempatkan kartu chart SEJAK KONSTRUKSI dengan pesan
+        # placeholder — dulu kartu baru ber-parent saat render pertama sukses
+        # → area view BLANK sebelum run pertama. refresh() mengganti alami.
+        for c in (self._c_quadrant, self._c_rate):
+            c.set_message(_EMPTY_MSG)
+        self._chart_entries = [(self._c_quadrant, None), (self._c_rate, None)]
+        self._replay_layout()
 
     def _replay_layout(self) -> None:
         w = max(self.width() - 24, 200)  # lebar view final saat resizeEvent

@@ -323,7 +323,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------
     def _wire_context(self) -> None:
         self.ctx.status.connect(self._on_status)
-        self.ctx.log_line.connect(lambda _line: None)
+        # log_line: subscriber sesungguhnya = panel log PipelineView
+        # (view_pipeline.py: ctx.log_line.connect(self._append_log)).
         self.ctx.data_ready.connect(self._on_data_ready)
         self.ctx.filters_changed.connect(self._sync_filter_widgets)
 
@@ -343,6 +344,11 @@ class MainWindow(QMainWindow):
         if "KETERANGAN" in df.columns:
             kets = sorted({norm_text(v) for v in df["KETERANGAN"].dropna().astype(str)})
             self._fill_combo(self._cb_ket, kets)
+        # V26-H2: set_dataset sudah me-reset filter, tapi _fill_combo
+        # me-retain teks lama → combo/search/chip sidebar masih menampilkan
+        # filter LAMA padahal state None (widget berbohong). Sinkronkan ke
+        # state reset (blockSignals → tanpa loop sinyal).
+        self._sync_filter_widgets()
         # Permanent status: baris + anomali + waktu run
         total = len(df)
         if "ANOMALY STATUS" in df.columns:
@@ -456,6 +462,9 @@ class MainWindow(QMainWindow):
             self.ctx.active_filters[k] = restored.get(k)
         self.ctx.day_min = restored.get("day_min")
         self.ctx.day_max = restored.get("day_max")
+        # Penulisan langsung melewati setter → invalidasi memo filter
+        # (v2.7.0) supaya filtered_df() tidak menyajikan cache basi.
+        self.ctx.invalidate_filter_cache()
         self.ctx.filters_changed.emit()
         self.ctx.set_status(f"✓ Profil '{name}' dipulihkan", "done")
 
@@ -542,6 +551,9 @@ class MainWindow(QMainWindow):
         self._export_worker.set_log(self.ctx.log)
         self._export_worker.done.connect(self._on_export_done)
         self._export_worker.failed.connect(self._on_export_failed)
+        # V26-L7: worker QThread selesai → deleteLater (aman post-finish;
+        # guard re-entry pakai flag _exporting, bukan referensi worker).
+        self._export_worker.finished.connect(self._export_worker.deleteLater)
         self._export_worker.start()
 
     def _on_export_done(self, result: dict) -> None:
@@ -582,14 +594,34 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def closeEvent(self, event) -> None:  # noqa: N802 — Qt API
-        pipeline_view = self._views[-1][1]
-        if getattr(pipeline_view, "_running", False) or self._exporting:
+        # V26-H1: kumpulkan SEMUA worker yang masih hidup — dulu hanya
+        # pipeline view + export yang dicek; PeriodWorker (banding periode)
+        # luput → QThread di-destroy saat masih berjalan = UB Qt + file
+        # export bisa parsial. iterasi _views (bukan indeks) = tahan urutan.
+        busy: list[tuple[str, object]] = []
+        for name, view in self._views:
+            if getattr(view, "_running", False):
+                worker = getattr(view, "_worker", None)
+                if worker is not None:
+                    busy.append((name, worker))
+        if self._exporting and self._export_worker is not None:
+            busy.append(("Export Excel", self._export_worker))
+        if busy:
             ans = QMessageBox.question(
                 self, "Proses masih berjalan",
-                "Pipeline/export masih berjalan. Tetap keluar?")
+                "Pipeline/export/perbandingan masih berjalan. Tetap keluar?")
             if ans != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+            # Batal yang bisa dibatalkan + tunggu (maks 5 detik/worker) —
+            # bila masih hidup, log warning lalu lanjut keluar.
+            for name, worker in busy:
+                if hasattr(worker, "cancel"):
+                    worker.cancel()
+                if not worker.wait(5000):
+                    self.ctx.log(
+                        f"⚠ closeEvent: worker '{name}' masih berjalan setelah "
+                        "5 detik — keluar paksa (QThread dihancurkan saat jalan).")
         event.accept()
 
 

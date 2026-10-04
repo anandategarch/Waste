@@ -1,9 +1,13 @@
 """view_jelajah.py — view 'Jelajah': chart drill-down interaktif + tabel data
-+ 12 chart statistik (gabungan tab Dashboard + Hasil + Viz lama).
++ 9 chart statistik (gabungan tab Dashboard + Hasil + Viz lama).
 
 Chart interaktif (status/cabang/top item) re-render saat filter berubah;
 chart statistik render lazy (saat view dibuka / data baru / tombol segarkan)
 supaya UI tetap ringan — pola H2 lama dipertahankan.
+
+v2.7.0 (audit V26-M8): 3 chart statistik duplikat pasangan chart interaktif
+(status pie / waste per cabang / top items — sisa merge tab tanpa dedupe)
+dihapus; versi interaktif (bisa drill-down) yang dipertahankan.
 """
 from __future__ import annotations
 
@@ -33,11 +37,32 @@ SHEET_KEYS = [
     ("Pareto Alasan", "Pareto Alasan"),
 ]
 
-# Chart statistik statis (set Viz lama) — (judul, builder)
+# Pesan placeholder pra-run pertama (V26-M6) — dipakai kartu chart + label
+# tabel saat view dibangun; refresh() menggantinya secara alami.
+_EMPTY_MSG = "Belum ada data — jalankan pipeline dulu (tab Pipeline)."
+
+
+def _drill_value_ok(val) -> bool:
+    """True bila nilai layak menjadi filter drill-down (V26-M9).
+
+    None dan NaN ditolak: guard lama ``is not None`` membiarkan NaN lolos →
+    filter cocok 0 baris → tabel kosong secara senyap. ``pd.isna(None)``
+    adalah True → satu cek ganda; list (bukan skalar) tidak bisa dinilai
+    ``pd.isna`` secara boolean → dianggap layak (penanganan di tempat lain).
+    """
+    if val is None:
+        return False
+    try:
+        return not bool(pd.isna(val))
+    except (TypeError, ValueError):
+        return True
+
+
+# Chart statistik statis (set Viz lama) — (judul, builder).
+# v2.7.0: 3 duplikat DIHAPUS (V26-M8): "Distribusi Status (pie)",
+# "Waste per Cabang", "Top Item Penyumbang Waste" — pasangan interaktifnya
+# (klik → drill-down) sudah dirender di grid atas; data sama 2× = limbah.
 _STAT_CHARTS = [
-    ("Distribusi Status (pie)", "status_pie"),
-    ("Waste per Cabang", "waste_cabang"),
-    ("Top Item Penyumbang Waste", "top_items"),
     ("Pareto Alasan (KETERANGAN)", "pareto_ket"),
     ("Heatmap Cabang × Item", "heatmap"),
     ("Frekuensi Alasan", "reasons_freq"),
@@ -135,7 +160,7 @@ class JelajahView(QWidget):
         brl = QHBoxLayout(brow)
         brl.setContentsMargins(0, 0, 0, 0)
         brl.setSpacing(10)
-        bttl = WLabel("Chart Statistik (12)", brow)
+        bttl = WLabel("Chart Statistik (9)", brow)
         bttl.setObjectName("cardTitle")
         brl.addWidget(bttl)
         btn = QPushButton("🔄 Segarkan Chart Statistik", brow)
@@ -157,7 +182,6 @@ class JelajahView(QWidget):
             self._stat_cards[key] = ChartCard(title)
         scroll_s.setWidget(shost)
         bl.addWidget(scroll_s, 1)
-        self._scroll_stat = scroll_s
 
         self._split.setStretchFactor(0, 3)
         self._split.setStretchFactor(1, 2)
@@ -165,6 +189,21 @@ class JelajahView(QWidget):
 
         ctx.data_ready.connect(self._on_data_ready)
         ctx.filters_changed.connect(self._on_filters_changed)
+
+        # V26-M6: sebelum run pertama, ChartCard dibuat tanpa parent dan grid
+        # masih kosong → area view BLANK. Tempatkan kartu SEJAK KONSTRUKSI
+        # dengan pesan placeholder; refresh()/render menggantinya alami
+        # (replace_fig / set_message — penempatan ulang via place_charts_responsive).
+        for c in (self._c_status, self._c_cabang, self._c_items):
+            c.set_message(_EMPTY_MSG)
+        self._inter_entries = [
+            (self._c_status, None), (self._c_cabang, None), (self._c_items, None),
+        ]
+        for card in self._stat_cards.values():
+            card.set_message(_EMPTY_MSG)
+        self._stat_entries = [(card, None) for card in self._stat_cards.values()]
+        self._lbl_rows.setText(_EMPTY_MSG)
+        self._replay_layout()
 
     def _replay_layout(self) -> None:
         """Re-tempatkan kartu chart sesuai lebar area view saat ini."""
@@ -243,7 +282,22 @@ class JelajahView(QWidget):
         self._replay_layout()
 
     def _on_chart_click(self, key: str, val) -> None:
-        """Klik chart: toggle filter (nilai sama → lepas)."""
+        """Klik chart: toggle filter (nilai sama → lepas).
+
+        V26-M5: dulunya set_filter → filters_changed → re-render berjalan
+        SINKRON di dalam handler button_press_event matplotlib (re-entrancy;
+        klik cepat beruntun bisa menggantung). Kini handler hanya menjadwalkan
+        pekerjaan ke tick event loop berikutnya lalu langsung kembali —
+        klik-ganda-untuk-lepas tetap bekerja (toggle dinilai saat eksekusi).
+        """
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._do_chart_click(key, val))
+
+    def _do_chart_click(self, key: str, val) -> None:
+        """Eksekusi drill-down sesungguhnya (di LUAR handler event matplotlib)."""
+        if not _drill_value_ok(val):  # V26-M9: None/NaN → jangan set filter
+            self._ctx.set_status("⚠ Nilai kosong — tidak bisa drill-down", "error")
+            return
         if self._ctx.active_filters.get(key) == val:
             self._ctx.set_filter(key, None)
         else:
@@ -271,10 +325,14 @@ class JelajahView(QWidget):
         self._lbl_rows.setText(f"{fmt_id(len(df))} baris (tanpa cap — semua baris di-render)")
 
     def _on_double(self, rec: pd.Series) -> None:
-        if rec.get("NAMA RESTO") is not None:
-            self._ctx.set_filter("cabang", rec.get("NAMA RESTO"))
-        if rec.get("NAMA BARANG") is not None:
-            self._ctx.set_filter("item", rec.get("NAMA BARANG"))
+        # V26-M9: guard NaN-aware — dulu ``is not None`` saja, NaN dari sel
+        # lolos → filter 0 baris → tabel kosong senyap.
+        for key, col in (("cabang", "NAMA RESTO"), ("item", "NAMA BARANG")):
+            val = rec.get(col)
+            if _drill_value_ok(val):
+                self._ctx.set_filter(key, val)
+            elif val is not None:
+                self._ctx.set_status("⚠ Nilai kosong — tidak bisa drill-down", "error")
 
     # ------------------------------------------------------------
     # CHART STATISTIK
@@ -288,10 +346,9 @@ class JelajahView(QWidget):
             return
         from waste_anomaly import charts as wa_charts
         from waste_anomaly import dashboard as wa_dash
+        # v2.7.0: status_pie / waste_cabang / top_items DIHAPUS — duplikat
+        # pasangan interaktif (V26-M8; lihat catatan di _STAT_CHARTS).
         builders = {
-            "status_pie": lambda: wa_charts.chart_status_pie(df),
-            "waste_cabang": lambda: wa_charts.chart_waste_per_cabang(df),
-            "top_items": lambda: wa_charts.chart_top_items(df),
             "pareto_ket": lambda: wa_charts.chart_pareto_keterangan(df),
             "heatmap": lambda: wa_charts.chart_heatmap_cabang_item(df),
             "reasons_freq": lambda: wa_charts.chart_reasons_frequency(df),
@@ -323,7 +380,11 @@ class JelajahView(QWidget):
             for _title, key in _STAT_CHARTS if self._stat_cards.get(key)
         ]
         self._replay_layout()
-        note = f"{fmt_id(len(df))} baris (ikut filter aktif)"
+        # V26-L13: note lama mengklaim angkanya mengikuti filter aktif, tapi
+        # menetap basi — chart statistik memang TIDAK otomatis ikut tiap
+        # perubahan filter (lazy + tombol Segarkan); katakan yang selalu benar.
+        note = (f"{fmt_id(len(df))} baris saat render terakhir — chart statistik "
+                "tidak otomatis mengikuti filter; klik 🔄 Segarkan untuk menerapkan")
         if fail:
             note += f" • {fail} chart gagal render (lihat log)"
         self._lbl_stat_note.setText(note)

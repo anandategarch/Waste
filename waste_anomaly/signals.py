@@ -16,6 +16,26 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+# Fragmen teks ANOMALY REASONS per sinyal (S1..S12). Sumber TUNGGAL —
+# UI (ui/view_anomali.py, panel detail) memakai konstanta ini untuk
+# menentukan chip sinyal mana yang terpicu dari teks ANOMALY REASONS
+# (kolom _s1.._s12 sengaja di-drop sebelum df keluar dari pipeline;
+# v2.7.0: chip tidak lagi baca _s* yang memang tidak pernah sampai UI).
+SIGNAL_PARTS: list[tuple[str, str]] = [
+    ("_s1", "Spike vs AVG"),
+    ("_s2", "MAX jauh di atas AVG aktif"),
+    ("_s3", "MAX jauh di atas MEDIAN aktif"),
+    ("_s4", "Konsentrasi MAX tinggi"),
+    ("_s5", "Gap MAX vs SECOND MAX"),
+    ("_s6", "MAX terhadap BOM tinggi"),
+    ("_s7", "TOTAL terhadap BOM tinggi"),
+    ("_s8", "MAX outlier terhadap peer"),
+    ("_s9", "TOTAL outlier terhadap peer"),
+    ("_s10", "Single-day event"),
+    ("_s11", "Dominasi hari terakhir"),
+    ("_s12", "Potensi salah skala"),
+]
+
 
 # ============================================================
 # MAIN ENTRY
@@ -228,20 +248,7 @@ def compute_signals(
     # terbukti identik: part ditambah berurutan S1..S12 hanya bila skor > 0,
     # disambung " | ", kosong bila tidak ada sinyal.
     # ============================================================
-    signal_parts = [
-        ("_s1", "Spike vs AVG"),
-        ("_s2", "MAX jauh di atas AVG aktif"),
-        ("_s3", "MAX jauh di atas MEDIAN aktif"),
-        ("_s4", "Konsentrasi MAX tinggi"),
-        ("_s5", "Gap MAX vs SECOND MAX"),
-        ("_s6", "MAX terhadap BOM tinggi"),
-        ("_s7", "TOTAL terhadap BOM tinggi"),
-        ("_s8", "MAX outlier terhadap peer"),
-        ("_s9", "TOTAL outlier terhadap peer"),
-        ("_s10", "Single-day event"),
-        ("_s11", "Dominasi hari terakhir"),
-        ("_s12", "Potensi salah skala"),
-    ]
+    signal_parts = SIGNAL_PARTS
 
     out["_s1"] = s1
     out["_s2"] = s2_score

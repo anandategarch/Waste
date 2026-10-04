@@ -1,4 +1,4 @@
-"""view_waktu.py — view 'Waktu': pola temporal waste (P1 v2.5.0).
+"""view_waktu.py — view 'Waktu': pola temporal waste (tab Waktu, 1 dari 8 view v2.6).
 
 Chart: waste per hari, efek hari (mod-7), heatmap alasan×hari.
 Tabel: waste per hari, pola mingguan, rasio peak-day per alasan.
@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QLabel,
     QScrollArea,
     QSplitter,
     QTabWidget,
@@ -15,9 +14,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .shared import fmt_id
 from .state import AppContext
 from .widgets import Card, ChartCard, DataTable, WLabel, place_charts_responsive
+
+# Pesan placeholder pra-run pertama (V26-M6)
+_EMPTY_MSG = "Belum ada data — jalankan pipeline dulu (tab Pipeline)."
 
 
 class WaktuView(QWidget):
@@ -55,7 +56,6 @@ class WaktuView(QWidget):
         scroll.setWidget(inner)
         scroll.setMinimumHeight(340)
         chl.addWidget(scroll)
-        self._chart_scroll = scroll
         note = WLabel(
             "Catatan: kelas hari dihitung dari posisi hari mod-7 (asumsi hari-1 = kelas 0); "
             "hubungannya dengan Sabtu/Minggu kalender tergantung posisi hari pertama periode.", charts_host)
@@ -79,6 +79,16 @@ class WaktuView(QWidget):
         self._split.setStretchFactor(0, 3)
         self._split.setStretchFactor(1, 2)
         ctx.data_ready.connect(self._on_data_ready)
+
+        # V26-M6: tempatkan kartu chart SEJAK KONSTRUKSI dengan pesan
+        # placeholder — dulu kartu baru ber-parent saat render pertama sukses
+        # → area view BLANK sebelum run pertama. refresh() mengganti alami.
+        for c in (self._c_per_day, self._c_weekday, self._c_heatmap):
+            c.set_message(_EMPTY_MSG)
+        self._chart_entries = [
+            (self._c_per_day, None), (self._c_weekday, None), (self._c_heatmap, None),
+        ]
+        self._replay_layout()
 
     def _make_page(self, table: DataTable, note: str) -> QWidget:
         page = Card()
@@ -152,6 +162,8 @@ class WaktuView(QWidget):
                 out = fn()
                 table.set_dataframe(out if out is not None else None)
             except Exception as e:  # noqa: BLE001
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "Tabel Waktu", f"Gagal membangun tabel:\n{e}")
+                # V26-M10: refresh() bisa dipicu on_shown (buka tab) — dialog
+                # modal bertumpuk bila beberapa tabel gagal; pesan non-blocking
+                # di status bar saja (tabel dikosongkan, view tetap bisa dipakai).
                 table.set_dataframe(None)
+                self._ctx.set_status(f"⚠ Tabel Waktu gagal dibangun: {e}", "error")

@@ -1,4 +1,4 @@
-"""view_uang.py — view 'Uang': di mana uang terbuang (P2 v2.5.0).
+"""view_uang.py — view 'Uang': di mana uang terbuang (tab Uang, 1 dari 8 view v2.6).
 
 Chart: top baris waste terbesar (money top), Pareto item.
 Tabel: Money View (top 100), benchmark item vs peer aktif, profil alasan.
@@ -16,6 +16,9 @@ from PySide6.QtWidgets import (
 
 from .state import AppContext
 from .widgets import Card, ChartCard, DataTable, WLabel, place_charts_responsive
+
+# Pesan placeholder pra-run pertama (V26-M6)
+_EMPTY_MSG = "Belum ada data — jalankan pipeline dulu (tab Pipeline)."
 
 
 class UangView(QWidget):
@@ -51,7 +54,6 @@ class UangView(QWidget):
         scroll.setWidget(inner)
         scroll.setMinimumHeight(340)
         chl.addWidget(scroll)
-        self._chart_scroll = scroll
         note = WLabel(
             "Catatan: agregat mencampur satuan (GR/PCS/PACK/…) — angka lintas satuan indikatif saja; "
             "satuan dominan tercantum di judul. Share% dihitung dari TOTAL seluruh baris.", charts_host)
@@ -74,6 +76,14 @@ class UangView(QWidget):
         self._split.setStretchFactor(0, 3)
         self._split.setStretchFactor(1, 2)
         ctx.data_ready.connect(self._on_data_ready)
+
+        # V26-M6: tempatkan kartu chart SEJAK KONSTRUKSI dengan pesan
+        # placeholder — dulu kartu baru ber-parent saat render pertama sukses
+        # → area view BLANK sebelum run pertama. refresh() mengganti alami.
+        for c in (self._c_money, self._c_pareto):
+            c.set_message(_EMPTY_MSG)
+        self._chart_entries = [(self._c_money, None), (self._c_pareto, None)]
+        self._replay_layout()
 
     def _page(self, table: DataTable, note: str) -> QWidget:
         page = Card()
@@ -143,6 +153,8 @@ class UangView(QWidget):
                 out = fn()
                 table.set_dataframe(out if out is not None else None)
             except Exception as e:  # noqa: BLE001
+                # V26-M10: refresh() bisa dipicu on_shown (buka tab) — dialog
+                # modal bertumpuk bila beberapa tabel gagal; pesan non-blocking
+                # di status bar saja (tabel dikosongkan, view tetap bisa dipakai).
                 table.set_dataframe(None)
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "Tabel Uang", f"Gagal membangun tabel:\n{e}")
+                self._ctx.set_status(f"⚠ Tabel Uang gagal dibangun: {e}", "error")

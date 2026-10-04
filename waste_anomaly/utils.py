@@ -88,6 +88,15 @@ def _active_config_path() -> Path:
 
 
 # Default config minimal — dipakai baca config gagal (lihat load_config).
+# v2.7.0 (audit Task 1): thresholds kini 20/20 key — dulu hanya 14, padahal
+# config.json bawaan berisi 20. 6 key yang hilang (STATUS_PRIORITAS,
+# STATUS_POTENSI, STATUS_REVIEW, S2_SCORE2_MIN, S10_BOM_MIN,
+# QUADRANT_THRESHOLD) membuat: (a) "Reset Default" UI v2.6.0 hanya me-reset
+# 14/20 (regresi bug v2.3.2), (b) jalur fallback load_config (config rusak)
+# kehilangan 6 key — selamat karena signals.py/stages.py/charts.py memakai
+# .get(key, fallback) dengan nilai fallback identik, tapi duplikasi nilai
+# default di 3 tempat itu rapuh. Nilai di bawah disalin PERSIS dari
+# config.json bawaan.
 _DEFAULT_CONFIG = {
     "thresholds": {
         "TH_SPIKE": 3, "TH_MAX_AVG_AKTIF": 2.5, "TH_MAX_MEDIAN": 3,
@@ -96,6 +105,9 @@ _DEFAULT_CONFIG = {
         "TH_MAX_BOM_HIGH": 0.50, "TH_TOTAL_BOM_WARN": 0.50,
         "TH_TOTAL_BOM_HIGH": 1.00, "TH_PEER_MIN": 3,
         "TH_PEER_WARN": 2, "TH_PEER_HIGH": 3, "TH_LAST_SHARE": 0.70,
+        "STATUS_PRIORITAS": 8, "STATUS_POTENSI": 5, "STATUS_REVIEW": 3,
+        "S2_SCORE2_MIN": 4, "S10_BOM_MIN": 0.10,
+        "QUADRANT_THRESHOLD": 0.50,
     },
     "non_handling_list": [
         "Alat/ Mesin", "Cancel Nota", "Eksternal", "Internal", "Over Stock",

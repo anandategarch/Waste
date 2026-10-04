@@ -9,12 +9,20 @@ mentah). Keunggulan model/view Qt:
 """
 from __future__ import annotations
 
+import logging
+import math
+
+import numpy as np
 import pandas as pd
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QColor, QFont
 
 from .shared import fmt_id
 from .theme import STATUS_COLORS
+
+# Nama logger mengikuti konvensi app ("waste_anomaly.ui" — lihat
+# logging_setup.py dan app.py::_qt_excepthook).
+_LOG = logging.getLogger("waste_anomaly.ui")
 
 _NUM_COLS = {"ANOMALY SCORE", "TOTAL", "MAX", "AVG", "HARI MAX", "RANK",
              "Rank", "PEER COUNT", "PEER MEDIAN TOTAL", "PEER MEDIAN MAX",
@@ -29,16 +37,24 @@ def fmt_cell(value, ndigits: int = 2) -> str:
     """Format sel untuk tampilan — konvensi Indonesia (IN-L1).
 
     Angka float dengan pecahan → fmt_id(x, ndigits); integer → fmt_id(x, 0);
-    NaN/None → ''; teks → str apa adanya.
+    NaN/None/pd.NA/NaT → ''; teks → str apa adanya.
+
+    v2.7.0 (V26-M1/L2): integer/float numpy (np.int64, np.float32, ...) kini
+    terformat seperti int/float python (np.int64 sebelumnya lolos ke str()
+    tanpa pemisah ribuan + rata kiri). pd.NA/NaT dicek DULU —
+    ``pd.NA != pd.NA`` menghasilkan pd.NA (truthy-ambiguous), bukan False.
     """
-    if value is None or (isinstance(value, float) and value != value):
+    if (value is None or value is pd.NA or value is pd.NaT
+            or (isinstance(value, (float, np.floating))
+                and math.isnan(float(value)))):
         return ""
-    if isinstance(value, (int,)) and not isinstance(value, bool):
-        return fmt_id(value, 0)
-    if isinstance(value, float):
-        if value == int(value) and abs(value) < 1e15:
-            return fmt_id(value, 0)
-        return fmt_id(value, ndigits)
+    if isinstance(value, (int, np.integer)) and not isinstance(value, bool):
+        return fmt_id(int(value), 0)
+    if isinstance(value, (float, np.floating)):
+        f = float(value)
+        if f == int(f) and abs(f) < 1e15:
+            return fmt_id(f, 0)
+        return fmt_id(f, ndigits)
     return str(value)
 
 
@@ -104,7 +120,10 @@ class PandasTableModel(QAbstractTableModel):
             text = fmt_cell(value, self._ndigits)
             return text if len(str(text)) > 18 else None
         if role == Qt.TextAlignmentRole:
-            if col_name in _NUM_COLS or isinstance(value, (int, float)):
+            # V26-M1: numpy int/float juga rata kanan (np.int64 dulunya
+            # lolos ke rata kiri karena bukan subclass int/float python).
+            if col_name in _NUM_COLS or isinstance(
+                    value, (int, float, np.integer, np.floating)):
                 return int(Qt.AlignRight | Qt.AlignVCenter)
             return int(Qt.AlignLeft | Qt.AlignVCenter)
         if role == Qt.BackgroundRole:
@@ -145,4 +164,8 @@ class PandasTableModel(QAbstractTableModel):
             ).drop(columns="_k")
             self.endResetModel()
         except Exception:
+            # V26-L3: sort gagal (dtype aneh dsb.) — jangan senyap total,
+            # tinggalkan jejak debug utk logs/waste_anomaly.log.
+            _LOG.debug("sort kolom '%s' gagal — tabel dibiarkan tak tersort",
+                       name, exc_info=True)
             return

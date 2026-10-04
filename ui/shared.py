@@ -10,7 +10,6 @@ DD-M1/DD-L4/DQ-M1/IN-L1 terkunci test).
 """
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 import pandas as pd
@@ -38,11 +37,8 @@ def bundle_res_dir() -> Path:
     return _bundle_dir()
 
 
-APP_VERSION = "2.6.1"
+APP_VERSION = "2.7.0"
 APP_TITLE = "Waste Anomaly Detection"
-
-# Logger UI bersama — exception senyap tercatat ke logs/waste_anomaly.log.
-_LOGGER = logging.getLogger("waste_anomaly.ui")
 
 
 # ============================================================
@@ -53,7 +49,11 @@ def fmt_id(value: float, decimals: int = 0) -> str:
     """Format angka gaya Indonesia: ribuan '.', desimal ','.
 
     Contoh: fmt_id(9333117.5, 1) → '9.333.117,5'; fmt_id(25901) → '25.901'.
+    v2.7.0 (V26-L2): None → '' (dulu teks 'None' bocor ke label KPI/panel
+    saat nilai kosong lolos ke pemanggil langsung; NaN sudah '' sejak lama).
     """
+    if value is None:
+        return ""
     try:
         f = float(value)
     except (TypeError, ValueError):

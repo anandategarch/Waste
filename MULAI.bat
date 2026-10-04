@@ -5,7 +5,7 @@ title Waste Anomaly Detection
 color 0A
 cls
 echo ============================================================
-echo   WASTE ANOMALY DETECTION - v2.6.1
+echo   WASTE ANOMALY DETECTION - v2.7.0
 echo ============================================================
 echo.
 echo  PySide6 anomaly workbench - 8 view:
@@ -30,7 +30,14 @@ cd /d "%~dp0"
 if exist ".venv\Scripts\python.exe" (
     ".venv\Scripts\python.exe" ui_app.py
 ) else (
-    python ui_app.py
+    REM v2.7.0: fallback launcher "py -3" bila "python" tidak ada di PATH
+    REM (konsisten dgn SETUP.bat).
+    where python >nul 2>&1
+    if errorlevel 1 (
+        py -3 ui_app.py
+    ) else (
+        python ui_app.py
+    )
 )
 if errorlevel 1 (
     echo.
