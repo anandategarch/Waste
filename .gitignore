@@ -53,3 +53,6 @@ Thumbs.db
 # Log aplikasi (F11 v2.4.0 — rotating file logs)
 logs/
 *.log.*
+
+# stub libEGL sandbox (workaround lingkungan test, bukan kode aplikasi)
+.egl-stub/

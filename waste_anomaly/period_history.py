@@ -23,6 +23,15 @@ PEMBANDING KUANTITI untuk bulan berjalan:
 - load/save_history_entries(): daftar file diingat antar sesi
   (history_files.json, atomic — pola filters.py).
 
+v2.10.2 — drill-down pop-up + kolom perubahan:
+- compare_level()   : tabel banding per level (resto / item / per JENIS /
+  per hari) — isi pop-up rantai drill "total naik → resto mana → item apa
+  → hari apa" di tab-tab Banding Periode.
+- drill_day_detail(): rincian hari 1-31 item×resto A vs B.
+- change_vs_history() + classify_change(): kolom BULAN LALU / PERUBAHAN % /
+  PERUBAHAN di tabel Anomali — memisahkan lonjakan baru (kandidat salah
+  input) dari waste kronis (stabil tinggi). Threshold TH_CHANGE_*.
+
 Semua fungsi defensif: gagal baca → dict berisi "error" (tidak pernah
 raise), kolom hilang → hasil kosong berformat. Perhitungan vektor
 (load + agregat data asli 54.160 baris ≈ 2-3 dtk di worker thread;
@@ -67,11 +76,50 @@ _MONTH_RE = re.compile(
 AGG_COLS = ["NAMA RESTO", "NAMA BARANG", "TOTAL", "HARI AKTIF"]
 JENIS_TOTALS_COLS = ["JENIS", "TOTAL"]
 
+# v2.10.2 — agregat tambahan utk drill-down & kolom perubahan anomali:
+# agg_jenis : TOTAL per (RESTO × BARANG × JENIS) — drill tab Per Jenis
+#             ("resto mana yang menaikkan JENIS ini").
+# agg_detail: TOTAL per (RESTO × BARANG × JENIS × KETERANGAN) — kunci
+#             pencocokan PERSIS baris tabel Anomali (kolom BULAN LALU /
+#             PERUBAHAN % / PERUBAHAN).
+AGG_JENIS_COLS = ["NAMA RESTO", "NAMA BARANG", "JENIS", "TOTAL"]
+AGG_DETAIL_COLS = ["NAMA RESTO", "NAMA BARANG", "JENIS", "KETERANGAN",
+                    "TOTAL"]
+
 # Kolom bukti hari vs history (tab Hari Mencurigakan).
 HIST_DAY_COLS = ["NILAI BULAN LALU", "RASIO VS BULAN LALU",
                  "TIPIKAL BEBERAPA BULAN"]
 
 DEFAULT_TH_HIST_RATIO = 3.0
+
+# v2.10.2 — kategori "PERUBAHAN" (filter + kolom tabel Anomali).
+# Kuadran analitik (permintaan user: "perubahan tinggi atau rendah"):
+# lonjakan baru (kandidat salah input) vs waste kronis (stabil tinggi).
+CHANGE_CATEGORIES = ["Baru", "Naik Tinggi", "Naik Sedang", "Stabil",
+                      "Turun", "Turun Tinggi"]
+# Kolom hasil change_vs_history (ditambahkan ADDITIF ke salinan df anomali).
+CHANGE_COLS = ["BULAN LALU", "PERUBAHAN %", "PERUBAHAN"]
+
+DEFAULT_TH_CHANGE_HIGH = 50.0    # % — batas "tinggi" (naik/turun)
+DEFAULT_TH_CHANGE_STABLE = 20.0  # % — dalam rentang ini = "Stabil"
+DEFAULT_TH_CHANGE_MIN_ABS = 10.0 # selisih absolut minimum agar bermakna
+                                  # (anti-noise angka kecil: 2 → 6 = +200%
+                                  # tapi tak berarti apa-apa)
+
+
+def _th_change(config: dict | None) -> tuple[float, float, float]:
+    """(high, stable, min_abs) dari config['thresholds'] — toleran rusak."""
+    try:
+        t = dict((config or {}).get("thresholds") or {})
+        high = float(t.get("TH_CHANGE_HIGH", DEFAULT_TH_CHANGE_HIGH))
+        stable = float(t.get("TH_CHANGE_STABLE", DEFAULT_TH_CHANGE_STABLE))
+        mn = float(t.get("TH_CHANGE_MIN_ABS", DEFAULT_TH_CHANGE_MIN_ABS))
+    except (TypeError, ValueError):
+        return (DEFAULT_TH_CHANGE_HIGH, DEFAULT_TH_CHANGE_STABLE,
+                DEFAULT_TH_CHANGE_MIN_ABS)
+    return (high if high > 0 else DEFAULT_TH_CHANGE_HIGH,
+            stable if stable > 0 else DEFAULT_TH_CHANGE_STABLE,
+            mn if mn > 0 else DEFAULT_TH_CHANGE_MIN_ABS)
 
 
 # ============================================================
@@ -172,14 +220,62 @@ def _jenis_totals(kept: pd.DataFrame) -> pd.DataFrame:
         TOTAL=("TOTAL", "sum"))
 
 
+def _base_keys_totals(kept: pd.DataFrame,
+                      keys: list[str]) -> pd.DataFrame:
+    """TOTAL per `keys` + (JENIS[, KETERANGAN]) — vektor, string dinormalkan.
+
+    Dipakai _jenis_item_totals (agg_jenis) & _detail_totals (agg_detail).
+    TOTAL dihitung ULANG dari kolom hari (semantik identik _aggregate)."""
+    cols = list(keys)
+    empty = pd.DataFrame(columns=cols + ["TOTAL"])
+    if kept.empty:
+        return empty
+    day_cols = _day_cols_of(kept)
+    if not day_cols:
+        return empty
+    for c in cols:
+        if c not in kept.columns:
+            return empty
+    num = kept[day_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    tmp = {"TOTAL": num.sum(axis=1).to_numpy()}
+    for c in cols:
+        s = kept[c].astype(str).str.strip()
+        if c == "JENIS":
+            s = s.str.upper()
+        tmp[c] = s
+    return pd.DataFrame(tmp).groupby(cols, as_index=False, dropna=False).agg(
+        TOTAL=("TOTAL", "sum"))
+
+
+def _jenis_item_totals(kept: pd.DataFrame) -> pd.DataFrame:
+    """TOTAL per (RESTO × BARANG × JENIS) — drill tab Per Jenis (v2.10.2)."""
+    return _base_keys_totals(kept, ["NAMA RESTO", "NAMA BARANG", "JENIS"])
+
+
+def _detail_totals(kept: pd.DataFrame) -> pd.DataFrame:
+    """TOTAL per (RESTO × BARANG × JENIS × KETERANGAN) — kunci cocok PERSIS
+    baris tabel Anomali (kolom BULAN LALU / PERUBAHAN %, v2.10.2)."""
+    return _base_keys_totals(
+        kept, ["NAMA RESTO", "NAMA BARANG", "JENIS", "KETERANGAN"])
+
+
 def _month_dict(agg: pd.DataFrame, jenis: pd.DataFrame, label: str,
-                key_akhir: int, rows_kept: int, rows_raw: int = 0) -> dict:
-    """Bentuk standar entri bulan (kontrak konsumen UI/test)."""
+                key_akhir: int, rows_kept: int, rows_raw: int = 0,
+                agg_jenis: pd.DataFrame | None = None,
+                agg_detail: pd.DataFrame | None = None) -> dict:
+    """Bentuk standar entri bulan (kontrak konsumen UI/test).
+
+    v2.10.2: agg_jenis/agg_detail ADDITIF — None → frame kosong berformat
+    (konsumen lama tak terdampak)."""
     return {
         "label": label,
         "key_akhir": int(key_akhir) if key_akhir else 31,
         "agg": agg,
         "jenis_totals": jenis,
+        "agg_jenis": (agg_jenis if agg_jenis is not None
+                      else pd.DataFrame(columns=AGG_JENIS_COLS)),
+        "agg_detail": (agg_detail if agg_detail is not None
+                       else pd.DataFrame(columns=AGG_DETAIL_COLS)),
         "resto_count": int(agg["NAMA RESTO"].nunique()) if not agg.empty else 0,
         "item_count": int(agg["NAMA BARANG"].nunique()) if not agg.empty else 0,
         "rows_kept": int(rows_kept),
@@ -237,7 +333,9 @@ def load_history_file(path: str | os.PathLike,
         kept = _filter_waste(raw)
         agg = _aggregate(kept, ka)
         d = _month_dict(agg, _jenis_totals(kept), base["label"] or p.stem,
-                        ka, len(kept), len(raw))
+                        ka, len(kept), len(raw),
+                        agg_jenis=_jenis_item_totals(kept),
+                        agg_detail=_detail_totals(kept))
         d["path"] = str(path)  # persis input (lihat komentar base di atas)
         d["label_source"] = "auto"
         return d
@@ -264,7 +362,9 @@ def aggregate_current(df: pd.DataFrame | None, key_akhir: int,
     if kept.empty:
         kept = df
     agg = _aggregate(kept, ka)
-    d = _month_dict(agg, _jenis_totals(kept), label, ka, len(kept), len(df))
+    d = _month_dict(agg, _jenis_totals(kept), label, ka, len(kept), len(df),
+                    agg_jenis=_jenis_item_totals(kept),
+                    agg_detail=_detail_totals(kept))
     d["path"] = "(run saat ini)"
     return d
 
@@ -415,6 +515,249 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
 
 
 # ============================================================
+# DRILL-DOWN POP-UP (v2.10.2)
+# ============================================================
+# Rantai drill (permintaan user): "secara total naik → resto mana yang
+# naik → sampai item apa". Semua level = tabel banding bentuk SAMA
+# (Bulan Ini / Pembanding / Selisih / Perubahan %), sumber agregat beda:
+# - level resto : _totals_by(agg, ["NAMA RESTO"]) — sumber 'agg'
+# - level item  : _totals_by(agg, ["NAMA RESTO","NAMA BARANG"]) — 'agg'
+# - level item per JENIS : 'agg_jenis' (RESTO×BARANG×JENIS)
+# - level hari  : kolom hari '1'..'31' baris (RESTO×BARANG) di 'agg'
+# LEVEL_DAY_COLS dipakai tabel hari (drill paling dalam).
+
+DRILL_LEVEL_COLS = ["NAMA RESTO", "Bulan Ini", "Pembanding", "Selisih",
+                    "Perubahan %"]
+DRILL_ITEM_COLS = ["NAMA RESTO", "NAMA BARANG", "Bulan Ini", "Pembanding",
+                   "Selisih", "Perubahan %"]
+DAY_DETAIL_COLS = ["HARI", "Bulan Ini", "Pembanding", "Selisih"]
+
+
+def compare_level(a: dict, b: dict, keys: list[str],
+                  jenis: str | None = None, per_day: bool = False,
+                  top_n: int | None = None) -> pd.DataFrame:
+    """Tabel banding per level — isi pop-up drill-down (v2.10.2).
+
+    a/b = entri bulan (dict _month_dict — bulan berjalan / pembanding /
+    tipikal). keys ⊆ {NAMA RESTO, NAMA BARANG}; jenis None → sumber 'agg'
+    (semua jenis digabung), jenis 'WASTE' → sumber 'agg_jenis' difilter
+    JENIS itu (drill dari tab Per Jenis).
+    per_day=True → nilai dibagi key_akhir bulan masing-masing (menormalkan
+    beda 30/31 hari — dipakai drill metrik 'Waste per Hari').
+    top_n=None → SEMUA baris (drill = jawaban lengkap, bukan top-100).
+    Urutan: |Selisih| menurun (kontributor terbesar dulu).
+    """
+    out_cols = list(keys) + ["Bulan Ini", "Pembanding", "Selisih",
+                             "Perubahan %"]
+    use_jenis = jenis is not None
+    src_key = "agg_jenis" if use_jenis else "agg"
+
+    def _tot(src: dict) -> pd.DataFrame:
+        frame = src.get(src_key) if isinstance(src, dict) else None
+        if frame is None or frame.empty or not all(
+                k in frame.columns for k in keys):
+            return pd.DataFrame(columns=list(keys) + ["TOTAL"])
+        sub = frame[keys + ["TOTAL"]].copy()
+        if use_jenis and "JENIS" in frame.columns:
+            j = frame["JENIS"].astype(str).str.strip().str.upper()
+            sub = sub[j == str(jenis).strip().upper()]
+        if sub.empty:
+            return pd.DataFrame(columns=list(keys) + ["TOTAL"])
+        return sub.groupby(keys, as_index=False, dropna=False).agg(
+            TOTAL=("TOTAL", "sum"))
+
+    ga, gb = _tot(a), _tot(b)
+    if ga.empty and gb.empty:
+        return pd.DataFrame(columns=out_cols)
+    m = ga.merge(gb, on=keys, how="outer")
+    # Outer merge menghasilkan NaN; angka coerced numerik dulu (hindari
+    # FutureWarning fillna object + tahan kolom object dari frame lama).
+    for c in ("TOTAL_x", "TOTAL_y"):
+        m[c] = pd.to_numeric(m[c], errors="coerce").fillna(0.0)
+    m = m.rename(columns={"TOTAL_x": "Bulan Ini", "TOTAL_y": "Pembanding"})
+    if per_day:
+        ka_a = int(a.get("key_akhir") or 31) or 31
+        ka_b = int(b.get("key_akhir") or 31) or 31
+        m["Bulan Ini"] = m["Bulan Ini"] / ka_a
+        m["Pembanding"] = m["Pembanding"] / ka_b
+    m["Selisih"] = m["Bulan Ini"] - m["Pembanding"]
+    m["Perubahan %"] = [_delta_pct(float(c), float(p)) for c, p
+                        in zip(m["Bulan Ini"], m["Pembanding"])]
+    m = m.reindex(m["Selisih"].abs().sort_values(ascending=False).index)
+    if top_n is not None:
+        m = m.head(int(top_n))
+    return m.reset_index(drop=True)[out_cols]
+
+
+def drill_day_detail(a: dict, b: dict, resto: str,
+                     barang: str) -> pd.DataFrame:
+    """Rincian HARI 1..N item×resto: Bulan Ini vs Pembanding (v2.10.2).
+
+    Jawaban "hari apa yang naik" — level drill paling dalam. Item tanpa
+    catatan di salah satu bulan → sisi itu 0 (bukan NaN) supaya Selisih
+    terbaca. Panjang = max(key_akhir A, key_akhir B).
+    """
+    ka = max(int(a.get("key_akhir") or 31) or 31,
+             int(b.get("key_akhir") or 31) or 31)
+    days = list(range(1, ka + 1))
+
+    def _series(src: dict) -> np.ndarray:
+        agg = src.get("agg")
+        if agg is None or agg.empty:
+            return np.zeros(len(days), dtype=float)
+        rk = str(resto).strip()
+        ik = str(barang).strip()
+        sub = agg[(agg["NAMA RESTO"].astype(str).str.strip() == rk)
+                  & (agg["NAMA BARANG"].astype(str).str.strip() == ik)]
+        if sub.empty:
+            return np.zeros(len(days), dtype=float)
+        row = sub.iloc[0]
+        out = np.zeros(len(days), dtype=float)
+        for i, d in enumerate(days):
+            if str(d) in sub.columns:
+                v = pd.to_numeric(row[str(d)], errors="coerce")
+                out[i] = float(v) if pd.notna(v) else 0.0
+        return out
+
+    cur, base = _series(a), _series(b)
+    df = pd.DataFrame({
+        "HARI": days,
+        "Bulan Ini": cur[:len(days)],
+        "Pembanding": base[:len(days)],
+    })
+    df["Selisih"] = df["Bulan Ini"] - df["Pembanding"]
+    return df[DAY_DETAIL_COLS]
+
+
+# ============================================================
+# KOLOM PERUBAHAN utk TABEL ANOMALI (v2.10.2)
+# ============================================================
+
+def classify_change(cur: float, base: float,
+                    config: dict | None = None) -> str:
+    """Kategori perubahan total baris vs bulan lalu (PERUBAHAN).
+
+    Aturan (semua threshold bisa diatur config TH_CHANGE_*):
+    - 'Baru'         : tak ada riwayat (base NaN/≤0) & sekarang ada nilai.
+    - 'Naik Tinggi'  : naik ≥ TH_CHANGE_HIGH % DAN selisih ≥ MIN_ABS
+                       (lonjakan baru — kandidat salah input/kejadian baru).
+    - 'Turun Tinggi' : turun ≤ −HIGH % DAN selisih ≥ MIN_ABS.
+    - 'Stabil'       : |Δ%| ≤ TH_CHANGE_STABLE ATAU selisih < MIN_ABS
+                       (angka kecil = noise; waste kronis turun di sini).
+    - 'Naik Sedang'/'Turun' : di antaranya.
+    NaN/None di kurva → 'Stabil' (netral, tak menuduh).
+    """
+    high, stable, mn = _th_change(config)
+    try:
+        cur = float(cur)
+    except (TypeError, ValueError):
+        return "Stabil"
+    if pd.isna(cur):
+        return "Stabil"
+    if pd.isna(base):
+        return "Baru" if cur > 0 else "Stabil"
+    try:
+        base = float(base)
+    except (TypeError, ValueError):
+        return "Baru" if cur > 0 else "Stabil"
+    if base <= 0:
+        return "Baru" if cur > 0 else "Stabil"
+    delta = cur - base
+    if abs(delta) < mn:
+        return "Stabil"
+    pct = delta / base * 100.0
+    if pct >= high:
+        return "Naik Tinggi"
+    if pct <= -high:
+        return "Turun Tinggi"
+    if pct > stable:
+        return "Naik Sedang"
+    if pct < -stable:
+        return "Turun"
+    return "Stabil"
+
+
+def change_vs_history(df: pd.DataFrame, baseline: dict | None,
+                      config: dict | None = None) -> pd.DataFrame:
+    """Tambah kolom perubahan vs bulan lalu ke SALINAN df anomali (additive).
+
+    Kolom (CHANGE_COLS):
+    - BULAN LALU  : total baris yang PERSIS sama (resto×item×jenis×keterangan)
+                    di bulan pembanding — pencocokan string abaikan
+                    besar/kecil huruf & spasi. NaN = belum ada bulan lalu.
+    - PERUBAHAN % : (TOTAL − BULAN LALU) ÷ BULAN LALU × 100 (skala 0-100,
+                    konvensi _delta_pct — NaN = tanpa riwayat, tampil 'BARU').
+    - PERUBAHAN   : kategori classify_change (filter kuadran tinggi/rendah).
+
+    Kontrak: df input TIDAK dimutasi (state.anomali_df — 'konsumen hanya
+    membaca'); baseline None / kolom wajib absen → kolom NaN penuh
+    (tabel identik tanpa pembanding — pola day_evidence_vs_history).
+    """
+    out = df.copy()
+    n = len(out)
+    out["BULAN LALU"] = np.nan
+    out["PERUBAHAN %"] = np.nan
+    out["PERUBAHAN"] = "Stabil"
+    if n == 0 or baseline is None or "NAMA BARANG" not in out.columns:
+        return out
+    if "TOTAL" not in out.columns:
+        return out
+
+    base_frame = baseline.get("agg_detail")
+    if base_frame is None or base_frame.empty:
+        return out
+
+    # Kunci join: selalu resto+barang; +JENIS & +KETERANGAN bila dua sisi
+    # punya kolomnya (M-output 53 kolom punya keduanya → cocok PERSIS).
+    keys = ["NAMA RESTO", "NAMA BARANG"]
+    if "JENIS" in out.columns and "JENIS" in base_frame.columns:
+        keys.append("JENIS")
+    if "KETERANGAN" in out.columns and "KETERANGAN" in base_frame.columns:
+        keys.append("KETERANGAN")
+    if not all(k in base_frame.columns for k in keys):
+        return out
+
+    def _norm(frame: pd.DataFrame) -> pd.DataFrame:
+        tmp = pd.DataFrame(index=frame.index)
+        for k in keys:
+            s = frame[k].astype(str).str.strip()
+            if k in ("JENIS",):
+                s = s.str.upper()
+            elif k == "KETERANGAN":
+                s = s.str.casefold()
+            tmp[k] = s
+        return tmp
+
+    cand = _norm(out)
+    # Base dibangun dari agg_detail (string sudah dinormalkan _base_keys_totals
+    # utk JENIS; KETERANGAN casefold di sini agar konsisten dua sisi).
+    # Bila kunci lebih KASAR (JENIS/KETERANGAN absen di df anomali), baris
+    # detail dg kunci sama DIGABUNG (sum) — tanpa ini left-merge menduplikasi
+    # baris (3 baris anomali × 2 baris detail = 5 → ValueError panjang).
+    bmap = _norm(base_frame).copy()
+    bmap["__base"] = pd.to_numeric(
+        base_frame["TOTAL"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    bmap = bmap.groupby(keys, as_index=False, dropna=False).agg(
+        __base=("__base", "sum"))
+    m = cand.merge(bmap, on=keys, how="left")
+    base_vals = m["__base"].to_numpy(dtype=float)
+
+    out["BULAN LALU"] = base_vals
+    cur_vals = pd.to_numeric(
+        out["TOTAL"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        pct = np.where(
+            base_vals > 0,
+            (cur_vals - base_vals) / np.where(base_vals > 0, base_vals, 1)
+            * 100.0,
+            np.where(cur_vals > 0, np.nan, 0.0))
+    out["PERUBAHAN %"] = pct
+    out["PERUBAHAN"] = [classify_change(c, b, config)
+                        for c, b in zip(cur_vals, base_vals)]
+    return out
+
+
+# ============================================================
 # TIPIKAL GABUNGAN (median lintas bulan)
 # ============================================================
 
@@ -482,8 +825,30 @@ def typical_months(months: list[dict]) -> dict | None:
     else:
         jenis_typ = pd.DataFrame(columns=JENIS_TOTALS_COLS)
 
+    # v2.10.2 — tipikal agg_jenis & agg_detail (median TOTAL per kunci):
+    # dipakai drill tab Per Jenis + kolom BULAN LALU/PERUBAHAN tabel Anomali
+    # saat combo memilih 'Tipikal'. Bulan tanpa agregat itu (dict lama /
+    # frame kosong) dikecualikan — median bahan yang ada saja.
+    def _typ_by(group_keys: list[str], src: str) -> pd.DataFrame:
+        frames = [m.get(src) for m in ok]
+        frames = [f for f in frames
+                  if f is not None and not f.empty
+                  and all(c in f.columns for c in group_keys + ["TOTAL"])]
+        if not frames:
+            return pd.DataFrame(columns=group_keys + ["TOTAL"])
+        allf = pd.concat(frames, ignore_index=True)
+        return allf.groupby(group_keys, as_index=False, dropna=False).agg(
+            TOTAL=("TOTAL", "median"))
+
+    agg_jenis_typ = _typ_by(["NAMA RESTO", "NAMA BARANG", "JENIS"],
+                            "agg_jenis")
+    agg_detail_typ = _typ_by(
+        ["NAMA RESTO", "NAMA BARANG", "JENIS", "KETERANGAN"],
+        "agg_detail")
+
     labels = [str(m.get("label") or "?") for m in ok]
-    d = _month_dict(wide, jenis_typ, "Tipikal", ka_typ, len(wide), 0)
+    d = _month_dict(wide, jenis_typ, "Tipikal", ka_typ, len(wide), 0,
+                    agg_jenis=agg_jenis_typ, agg_detail=agg_detail_typ)
     d["label_detail"] = "Tipikal — median " + " + ".join(labels)
     d["months_count"] = len(ok)
     d["path"] = "(gabungan " + " + ".join(labels) + ")"

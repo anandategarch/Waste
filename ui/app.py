@@ -92,6 +92,15 @@ _HELP_HTML = """
 otomatis dari nama file; daftar <b>diingat</b> antar sesi; dimuat di latar belakang.
 Banding per bulan atau vs <b>Tipikal</b> (median beberapa bulan): ringkasan,
 cabang/item bergerak, item baru/hilang — semua murni kuantiti.</li>
+<li><b>Tabel & pop-up rincian</b> (v2.10.2) — tombol <b>⤢ Perbesar Tabel</b>
+(ciyutkan daftar file) & <b>⛶ Layar Penuh</b> (tabel tab aktif satu monitor; Esc
+kembali). <b>Klik 2× baris</b> di semua tab banding = pop-up rantai rincian
+<b>Total → resto → item → per hari</b> ("total naik — resto mana — item apa —
+hari berapa").</li>
+<li><b>Kolom perubahan di tab Anomali</b> (v2.10.2) — bila ada pembanding:
+kolom <b>BULAN LALU</b>, <b>PERUBAHAN %</b> (+35,5% / BARU) & kategori
+<b>PERUBAHAN</b> (filter "Perubahan:") — memisahkan <b>lonjakan baru</b>
+(kandidat salah input) dari <b>waste kronis</b> (tinggi tiap bulan).</li>
 </ul>
 <h3>💡 Bingung istilah?</h3>
 <p><b>Hover (arahkan mouse & diamkan)</b> di: judul kolom tabel, label metrik pop-up,

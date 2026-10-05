@@ -1,5 +1,5 @@
 {
-  "version": "2.10.1",
+  "version": "2.10.2",
   "_comment": "Threshold & defaults untuk Waste Anomaly Detection. Ubah nilai di sini, tidak perlu edit kode Python.",
   "thresholds": {
     "TH_SPIKE": 3,
@@ -18,6 +18,9 @@
     "TH_LAST_SHARE": 0.7,
     "TH_HARI_PEER_RATIO": 5.0,
     "TH_HARI_HIST_RATIO": 3.0,
+    "TH_CHANGE_HIGH": 50.0,
+    "TH_CHANGE_STABLE": 20.0,
+    "TH_CHANGE_MIN_ABS": 10.0,
     "STATUS_PRIORITAS": 8,
     "STATUS_POTENSI": 5,
     "STATUS_REVIEW": 3,

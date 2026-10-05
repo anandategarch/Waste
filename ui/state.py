@@ -23,6 +23,7 @@ import pandas as pd
 from PySide6.QtCore import QObject, Signal
 
 from .shared import _apply_filters, _build_search_blob
+from waste_anomaly.period_history import month_sort_key
 
 # Label filter aktif → chip Indonesia (dari shared lama)
 CHIP_LABELS = {
@@ -36,6 +37,7 @@ class AppContext(QObject):
 
     data_ready = Signal()
     history_ready = Signal()
+    baseline_changed = Signal()  # v2.10.2: pilihan pembanding combo berubah
     filters_changed = Signal()
     status = Signal(str, str)
     log_line = Signal(str)
@@ -93,6 +95,17 @@ class AppContext(QObject):
         self.history_months: list[dict] = []
         self.history_typical: dict | None = None
         self.history_version: int = 0
+        # v2.10.2: pilihan pembanding combo 'Banding Periode' (objek bulan /
+        # tipikal) — DIBAGIKAN ke view Anomali supaya kolom BULAN LALU /
+        # PERUBAHAN menghitung vs bulan yang sama dengan tab banding.
+        # None = combo belum dirender → view Anomali pakai aturan default
+        # (banding_baseline_effective).
+        self.banding_baseline: dict | None = None
+        # v2.10.2 (perf): LRU hasil change_vs_history per (df, baseline) —
+        # df objek sama + baseline sama → salinan berkolom sama dipakai
+        # ulang antar-refresh (cache fit DataTable tetap kena, kontrak
+        # 'konsumen hanya membaca' tetap aman: enrich selalu di salinan).
+        self._change_cache: "OrderedDict[tuple, pd.DataFrame]" = OrderedDict()
 
     # ------------------------------------------------------------
     # DATA
@@ -149,6 +162,30 @@ class AppContext(QObject):
         """Bulan pembanding yang berhasil dimuat (tanpa error, agg ada)."""
         return [m for m in self.history_months
                 if m and not m.get("error") and m.get("agg") is not None]
+
+    def set_banding_baseline(self, b: dict | None) -> None:
+        """Simpan pilihan pembanding combo Banding Periode (v2.10.2).
+
+        Emit baseline_changed HANYA bila objek berganti (identitas —
+        _refresh_result memanggil ini tiap render; dict combo stabil
+        sehingga tidak spam signal)."""
+        if b is not self.banding_baseline:
+            self.banding_baseline = b
+            self.baseline_changed.emit()
+
+    def banding_baseline_effective(self) -> dict | None:
+        """Baseline utk kolom perubahan view Anomali (v2.10.2).
+
+        Prioritas: pilihan combo Banding Periode (bila user sudah membuka
+        tab itu) → Tipikal (≥ 2 bulan) → bulan pembanding TERBARU → None."""
+        if self.banding_baseline is not None:
+            return self.banding_baseline
+        months = self.history_months_ok()
+        if not months:
+            return None
+        if self.history_typical is not None:
+            return self.history_typical
+        return max(months, key=lambda m: month_sort_key(m.get("label")))
 
     # ------------------------------------------------------------
     # FILTER

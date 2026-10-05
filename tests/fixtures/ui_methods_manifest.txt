@@ -3,6 +3,7 @@ app.py::_qt_excepthook
 app.py::main
 models.py::PandasTableModel
 models.py::fmt_cell
+models.py::fmt_delta_pct
 models.py::fmt_pct
 models.py::fmt_ratio_x
 shared.py::_apply_filters
@@ -15,6 +16,7 @@ view_anomali.py::AnomaliView
 view_anomali.py::DetailDialog
 view_anomali.py::DetailPanel
 view_hari.py::HariView
+view_periode.py::BandTableDialog
 view_periode.py::PeriodeView
 view_periode.py::fmt_run_label
 view_pipeline.py::PipelineView

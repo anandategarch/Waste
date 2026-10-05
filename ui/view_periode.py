@@ -24,6 +24,7 @@ import pandas as pd
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
@@ -39,8 +40,10 @@ from PySide6.QtWidgets import (
 
 from waste_anomaly.period_history import (
     aggregate_current,
+    compare_level,
     compare_quantity,
     detect_month_label,
+    drill_day_detail,
     load_history_entries,
     month_sort_key,
     save_history_entries,
@@ -77,6 +80,81 @@ _RESULT_KEYS = {
 _TYPICAL_KEY = "__tipikal__"
 
 
+class BandTableDialog(QDialog):
+    """Pop-up tabel banding (v2.10.2) — layar penuh & rantai drill-down.
+
+    Satu kelas untuk dua pemakaian (tabel + judul + rute klik-2× sama):
+    - 'Layar Penuh' : salinan tabel tab aktif, jendela maximized (Esc balik).
+    - Drill-down    : rantai rincian Total → resto → item → hari (klik 2×
+      baris = turun satu level; tabel diganti, breadcrumb di judul jendela).
+    Tabel = DataTable biasa (render ≤ ratusan baris = milidetik — aman
+    anti-lambat); df di-clone-render, tabel asli di view tak tersentuh.
+    """
+
+    def __init__(self, ctx: "AppContext", drill_cb, parent=None) -> None:
+        super().__init__(parent)
+        self._ctx = ctx
+        self._drill_cb = drill_cb  # (level, payload, rec) → dikonsumsi view
+        self._level: str | None = None
+        self._payload: dict = {}
+        self._path: list[str] = []
+        self.setWindowTitle("Banding Periode")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(6)
+        self._lbl_title = WLabel("", self)
+        self._lbl_title.setObjectName("cardTitle")
+        lay.addWidget(self._lbl_title)
+        self._lbl_sub = WLabel("", self)
+        self._lbl_sub.setObjectName("hint")
+        self._lbl_sub.setWordWrap(True)
+        lay.addWidget(self._lbl_sub)
+        self._table = DataTable(self)
+        self._table.double_clicked.connect(self._on_double)
+        lay.addWidget(self._table, 1)
+        btn = QPushButton("Tutup (Esc)", self)
+        btn.clicked.connect(self.close)
+        row = QWidget(self)
+        rl = QHBoxLayout(row)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.addStretch(1)
+        rl.addWidget(btn)
+        lay.addWidget(row)
+
+    # ------------------------------------------------------------
+    def show_table(self, title: str, subtitle: str,
+                   df: pd.DataFrame | None, level: str | None = None,
+                   payload: dict | None = None, root: bool = False,
+                   sort_desc: str | None = None,
+                   maximized: bool = False) -> None:
+        """Tampilkan satu level tabel (root=True = mulai rantai baru)."""
+        self._level = level
+        self._payload = dict(payload or {})
+        if root or not self._path:
+            self._path = []
+        self._path.append(str(title))
+        self._lbl_title.setText(str(title))
+        self._lbl_sub.setText(str(subtitle))
+        with busy_feedback(self._ctx.set_status,
+                           "Menampilkan tabel banding"):
+            self._table.set_dataframe(df, sort_desc=sort_desc)
+        # Breadcrumb jendela (maks 3 segmen + elipsis) — konteks tak hilang.
+        crumbs = " › ".join(self._path[-3:])
+        self.setWindowTitle(f"Banding Periode — {crumbs}")
+        if maximized:
+            self.showMaximized()
+        else:
+            self.resize(1040, 640)
+            self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _on_double(self, rec: pd.Series) -> None:
+        """Klik 2× baris → serahkan ke view (turun level / buka rantai)."""
+        if self._drill_cb is not None and self._level is not None:
+            self._drill_cb(self._level, self._payload, rec)
+
+
 class PeriodeView(QWidget):
     """View 'Banding Periode': bulan berjalan vs daftar bulan pembanding."""
 
@@ -107,8 +185,18 @@ class PeriodeView(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(8)
-        lay.addWidget(self._build_card_files())
+        self._card_files = self._build_card_files()
+        lay.addWidget(self._card_files)
         lay.addWidget(self._build_card_result(), 1)
+
+        # v2.10.2 — pop-up rantai drill-down + jendela layar penuh (satu
+        # instance dipakai ulang; parent=self → tetap di atas jendela utama).
+        self._drill = BandTableDialog(ctx, self._drill_dispatch, self)
+        self._full = BandTableDialog(ctx, self._drill_dispatch, self)
+        # Bulan A/B terakhir yang dirender — bahan semua drill-down.
+        self._a: dict | None = None
+        self._b: dict | None = None
+        self._res: dict | None = None
 
         ctx.data_ready.connect(self._on_data_ready)
         ctx.history_ready.connect(self._on_history_ready)
@@ -226,12 +314,33 @@ class PeriodeView(QWidget):
         self._lbl_compare = WLabel("", ctrl)
         self._lbl_compare.setObjectName("hint")
         ctl.addWidget(self._lbl_compare, 1)
+        # v2.10.2 — dua tingkat melebarkan tabel (permintaan user: tabel
+        # jangan kecil): (1) ciutkan kartu daftar file → tabel pakai seluruh
+        # sisa tinggi; (2) pop-out jendela maximized utk tab aktif (Esc balik).
+        self._btn_expand = QPushButton("⤢ Perbesar Tabel", ctrl)
+        self._btn_expand.setToolTip(
+            "Sembunyikan daftar file pembanding supaya tabel hasil banding "
+            "memakai seluruh tinggi tampilan.\nKlik lagi untuk mengembalikan "
+            "daftar file.")
+        self._btn_expand.clicked.connect(self._on_expand)
+        ctl.addWidget(self._btn_expand)
+        self._btn_full = QPushButton("⛶ Layar Penuh", ctrl)
+        self._btn_full.setToolTip(
+            "Buka tabel tab aktif di jendela LAYAR PENUH (tekan Esc atau "
+            "Tutup untuk kembali).\nDi jendela itu pun klik 2× baris tetap "
+            "membuka pop-up rincian (resto → item → hari).")
+        self._btn_full.clicked.connect(self._on_fullscreen)
+        ctl.addWidget(self._btn_full)
         cl.addWidget(ctrl)
 
         self._tabs = QTabWidget(card)
         self._tables: dict[str, DataTable] = {}
         for key, title in _PAGES:
             table = DataTable()
+            # v2.10.2: klik 2× baris = pop-up rincian (drill-down) —
+            # rantai Total → resto → item → hari (semua tab punya rute).
+            table.double_clicked.connect(
+                lambda rec, k=key: self._on_tab_double(k, rec))
             self._tables[key] = table
             page = QWidget()
             pl = QVBoxLayout(page)
@@ -240,6 +349,11 @@ class PeriodeView(QWidget):
             pl.addWidget(table, 1)
             self._tabs.addTab(page, title)
         cl.addWidget(self._tabs, 1)
+        hint = WLabel(
+            "💡 Klik 2× baris = pop-up rincian (Ringkasan/Cabang → resto → "
+            "item → per hari) · klik header = sort", card)
+        hint.setObjectName("hint")
+        cl.addWidget(hint)
         return card
 
     # ------------------------------------------------------------
@@ -487,6 +601,147 @@ class PeriodeView(QWidget):
         QMessageBox.critical(self, "Banding Periode", err)
 
     # ------------------------------------------------------------
+    # v2.10.2 — MELEBARKAN TABEL & DRILL-DOWN POP-UP
+    # ------------------------------------------------------------
+    def _on_expand(self) -> None:
+        """Ciutkan / kembalikan kartu daftar file (tabel makan tinggi penuh).
+
+        isHidden() (bukan isVisible()) — toggle harus benar walau view
+        induknya sedang tak tampak (di-balik tab lain)."""
+        hidden = self._card_files.isHidden()
+        self._card_files.setVisible(hidden)
+        self._btn_expand.setText(
+            "⤢ Perbesar Tabel" if hidden else "⤡ Tampilkan Daftar File")
+        self._ctx.set_status(
+            "⤡ Daftar file disembunyikan — tabel diperbesar" if not hidden
+            else "⤢ Daftar file ditampilkan kembali", "done")
+
+    def _on_fullscreen(self) -> None:
+        """Pop-out tabel tab AKTIF di jendela maximized (Esc = kembali)."""
+        if self._res is None or self._a is None or self._b is None:
+            self._ctx.set_status(
+                "Belum ada hasil banding utk dibesarkan — jalankan pipeline "
+                "+ muat pembanding dulu", "done")
+            return
+        i = self._tabs.currentIndex()
+        if not (0 <= i < len(_PAGES)):
+            return
+        key, title = _PAGES[i]
+        df = self._res.get(_RESULT_KEYS.get(key, ""))
+        sub = (f"{self._a.get('label')} vs {self._b.get('label')} — "
+               f"jendela penuh; klik 2× baris = rincian; Esc = kembali")
+        self._full.show_table(title, sub, df, level="tab",
+                              payload={"tab_key": key}, root=True,
+                              maximized=True)
+
+    def _on_tab_double(self, key: str, rec: pd.Series) -> None:
+        """Klik 2× baris tabel tab → buka rantai drill yang sesuai."""
+        if self._a is None or self._b is None:
+            return  # tanpa hasil banding tak ada yang bisa dirinci
+        if key == "summary":
+            metrik = str(rec.get("Metrik") or "").strip()
+            if metrik == "Total Waste":
+                self._open_resto(
+                    "🏬 Resto penyumbang Total Waste", per_day=False)
+            elif metrik == "Waste per Hari":
+                self._open_resto(
+                    "🏬 Resto penyumbang Waste per Hari", per_day=True)
+            else:
+                self._ctx.set_status(
+                    f"Metrik '{metrik}' tidak punya rincian per resto "
+                    "(hanya Total Waste & Waste per Hari)", "done")
+        elif key == "per_jenis":
+            jenis = str(rec.get("JENIS") or "").strip()
+            if jenis:
+                self._open_resto(
+                    f"🏬 Resto penyumbang {jenis} (per jenis)", jenis=jenis)
+        elif key == "branch":
+            resto = str(rec.get("NAMA RESTO") or "").strip()
+            if resto:
+                self._open_items(resto, jenis=None, root=True)
+        elif key in ("items", "new_items", "gone_items"):
+            resto = str(rec.get("NAMA RESTO") or "").strip()
+            barang = str(rec.get("NAMA BARANG") or "").strip()
+            if resto and barang:
+                self._open_day(resto, barang, root=True)
+
+    def _drill_dispatch(self, level: str, payload: dict,
+                        rec: pd.Series) -> None:
+        """Rute klik-2× dari dalam pop-up (turun level / buka dari full)."""
+        if self._a is None or self._b is None:
+            return
+        if level == "tab":
+            self._on_tab_double(str(payload.get("tab_key") or ""), rec)
+        elif level == "resto":
+            resto = str(rec.get("NAMA RESTO") or "").strip()
+            if resto:
+                self._open_items(resto, jenis=payload.get("jenis"))
+        elif level == "item":
+            resto = str(rec.get("NAMA RESTO") or "").strip()
+            barang = str(rec.get("NAMA BARANG") or "").strip()
+            if resto and barang:
+                self._open_day(resto, barang)
+        # level "day" = paling dalam — tidak ada rincian lanjutan.
+
+    def _labels_sub(self, extra: str = "") -> str:
+        a = self._a.get("label") if self._a else "A"
+        b = self._b.get("label") if self._b else "B"
+        ka_a = self._a.get("key_akhir") if self._a else "?"
+        ka_b = self._b.get("key_akhir") if self._b else "?"
+        s = f"{a} ({ka_a} hari) vs {b} ({ka_b} hari)"
+        if extra:
+            s += f" • {extra}"
+        return s
+
+    def _open_resto(self, title: str, jenis: str | None = None,
+                    per_day: bool = False) -> None:
+        """Level RESTO: siapa yang menaikkan / menurunkan angka."""
+        with busy_feedback(self._ctx.set_status,
+                           "Menghitung rincian per resto"):
+            df = compare_level(self._a, self._b, ["NAMA RESTO"],
+                               jenis=jenis, per_day=per_day)
+        note = ("nilai dibagi jumlah hari tiap bulan (normalisasi 30/31 hari)"
+                if per_day else "urut berdasarkan selisih terbesar")
+        if jenis:
+            note += f"; hanya JENIS {jenis}"
+        sub = self._labels_sub(
+            f"{note} • klik 2× resto = rincian itemnya")
+        self._drill.show_table(title, sub, df, level="resto",
+                               payload={"jenis": jenis}, root=True)
+
+    def _open_items(self, resto: str, jenis: str | None,
+                    root: bool = False) -> None:
+        """Level ITEM: item apa saja di satu resto (naik/turun terbesar)."""
+        with busy_feedback(self._ctx.set_status,
+                           f"Menghitung rincian item di {resto}"):
+            df = compare_level(self._a, self._b,
+                               ["NAMA RESTO", "NAMA BARANG"], jenis=jenis)
+        if not df.empty:
+            df = df[df["NAMA RESTO"].astype(str).str.strip() == resto]
+        note = f"hanya JENIS {jenis}" if jenis else "semua jenis digabung"
+        sub = self._labels_sub(
+            f"{note} • klik 2× item = rincian per hari")
+        self._drill.show_table(f"📦 Item di {resto}", sub, df, level="item",
+                               payload={"resto": resto, "jenis": jenis},
+                               root=root)
+
+    def _open_day(self, resto: str, barang: str,
+                  root: bool = False) -> None:
+        """Level HARI: tanggal berapa yang naik (jawaban 'hari apa?')."""
+        with busy_feedback(self._ctx.set_status,
+                           "Menghitung rincian per hari"):
+            df = drill_day_detail(self._a, self._b, resto, barang)
+        n = len(df)
+        tot_a = float(df["Bulan Ini"].sum()) if n else 0.0
+        tot_b = float(df["Pembanding"].sum()) if n else 0.0
+        sub = self._labels_sub(
+            f"total {tot_a:,.0f} vs {tot_b:,.0f} • semua jenis digabung "
+            "• baris = tanggal")
+        self._drill.show_table(
+            f"📅 Hari 1–{n} — {barang} @ {resto}", sub, df, level="day",
+            root=root)
+
+    # ------------------------------------------------------------
     # HASIL BANDING
     # ------------------------------------------------------------
     def _agg_a(self) -> dict | None:
@@ -588,6 +843,11 @@ class PeriodeView(QWidget):
         self._has_result = True
         self._result_version = (self._ctx.data_version,
                                 self._ctx.history_version)
+        # v2.10.2: bahan drill-down pop-up — A/B/hasil TERAKHIR dirender.
+        self._a, self._b, self._res = a, b, res
+        # v2.10.2: bagikan pilihan baseline ke view lain (tabel Anomali —
+        # kolom BULAN LALU/PERUBAHAN memakai pembanding yang sama).
+        self._ctx.set_banding_baseline(b)
         for key, df_key in _RESULT_KEYS.items():
             df = res.get(df_key)
             self._tables[key].set_dataframe(
@@ -603,6 +863,8 @@ class PeriodeView(QWidget):
             table.set_dataframe(None)
         self._lbl_compare.setText(msg)
         self._has_result = False
+        # v2.10.2: bahan drill ikut dikosongkan (pop-up tak membuka data basi).
+        self._a, self._b, self._res = None, None, None
 
 
 def fmt_run_label(summary: dict | None, key_akhir: int) -> str:

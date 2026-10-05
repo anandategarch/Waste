@@ -15,6 +15,7 @@ from __future__ import annotations
 import pandas as pd
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QFormLayout,
     QFrame,
@@ -28,7 +29,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .models import COLUMN_TOOLTIPS, PCT_COLS, RATIO_X_COLS, fmt_cell, fmt_pct, fmt_ratio_x
+from .models import (
+    COLUMN_TOOLTIPS,
+    DELTA_PCT_COLS,
+    PCT_COLS,
+    RATIO_X_COLS,
+    fmt_cell,
+    fmt_delta_pct,
+    fmt_pct,
+    fmt_ratio_x,
+)
+from waste_anomaly.period_history import CHANGE_CATEGORIES, change_vs_history
 from .shared import fmt_id
 from .state import AppContext
 from .widgets import (
@@ -44,6 +55,10 @@ from waste_anomaly.signals import SIGNAL_PARTS
 TABLE_COLS = [
     "ANOMALY SCORE", "ANOMALY STATUS", "NAMA RESTO", "NAMA BARANG",
     "JENIS", "KETERANGAN", "TOTAL", "% to BOM",
+    # v2.10.2: muncul hanya bila pembanding bulan lalu tersedia (kolom
+    # ditambahkan ADDITIF oleh change_vs_history — tanpa pembanding tabel
+    # identik v2.10.1, pola view Hari Mencurigakan).
+    "BULAN LALU", "PERUBAHAN %", "PERUBAHAN",
 ]
 
 # 12 sinyal — label ringkas utk chip + fragmen teks ANOMALY REASONS
@@ -111,6 +126,8 @@ DETAIL_COLS = [
     "HARI MAX", "SATUAN", "TOTAL BOM", "% to BOM", "PEER COUNT",
     "PEER MEDIAN TOTAL", "PEER MEDIAN MAX", "TOTAL / PEER MEDIAN",
     "MAX / PEER MEDIAN MAX", "MAX / BOM", "TOTAL / BOM", "MAX SHARE",
+    # v2.10.2: bukti perubahan vs bulan lalu (tampil bila pembanding ada)
+    "BULAN LALU", "PERUBAHAN %", "PERUBAHAN",
     "LAST DAY SHARE", "KATEGORI ANOMALI", "RANGKING WASTE",
 ]
 
@@ -255,6 +272,7 @@ class DetailPanel(Card):
                 # '0,00080' mentah tak terbaca manusia.
                 val = rec.get(col)
                 shown = (fmt_pct(val) if col in PCT_COLS
+                         else fmt_delta_pct(val) if col in DELTA_PCT_COLS
                          else fmt_ratio_x(val) if col in RATIO_X_COLS
                          else fmt_cell(val))
                 val_lbl = WLabel(shown, metrics)
@@ -396,7 +414,7 @@ class AnomaliView(QWidget):
         self._kpi = KpiStrip(self)
         lay.addWidget(self._kpi)
 
-        # Bar kontrol: ambang skor + jumlah anomali
+        # Bar kontrol: ambang skor + jumlah anomali + filter perubahan
         ctrl = QWidget(self)
         cl = QHBoxLayout(ctrl)
         cl.setContentsMargins(8, 0, 8, 0)
@@ -411,6 +429,31 @@ class AnomaliView(QWidget):
             "Skor komposit maksimum = 19 (S1..S12).")
         self._spin_score.valueChanged.connect(self._on_score_changed)
         cl.addWidget(self._spin_score)
+        # v2.10.2 — filter kuadran perubahan vs bulan lalu (permintaan user:
+        # "analisa dengan perubahan yang tinggi atau rendah"). Filter LOKAL
+        # view (bukan state) — kolom PERUBAHAN hanya ada setelah enrich.
+        lbl_chg = WLabel("Perubahan:", ctrl)
+        lbl_chg.setToolTip(
+            "Saring anomali menurut perubahan totalnya vs bulan lalu:\n"
+            "• Naik Tinggi = lonjakan baru (kandidat salah input / "
+            "kejadian baru);\n"
+            "• Stabil = waste kronis (sudah tinggi tiap bulan — masalah "
+            "proses, bukan salah ketik);\n"
+            "• Baru = belum ada riwayat bulan lalu.\n"
+            "Butuh file pembanding di tab 'Banding Periode'.")
+        cl.addWidget(lbl_chg)
+        self._cb_change = QComboBox(ctrl)
+        self._cb_change.addItem("Semua", None)
+        for cat in CHANGE_CATEGORIES:
+            icon = {"Baru": "🆕", "Naik Tinggi": "🔺", "Naik Sedang": "↗",
+                    "Stabil": "➡️", "Turun": "↘", "Turun Tinggi": "🔻"}.get(
+                        cat, "")
+            self._cb_change.addItem(f"{icon} {cat}", cat)
+        self._cb_change.setToolTip(lbl_chg.toolTip())
+        self._cb_change.setEnabled(False)  # aktif begitu pembanding ada
+        self._cb_change.currentIndexChanged.connect(
+            lambda _i: self._on_change_filter())
+        cl.addWidget(self._cb_change)
         self._lbl_count = WLabel("", ctrl)
         self._lbl_count.setObjectName("hint")
         cl.addWidget(self._lbl_count, 1)
@@ -437,7 +480,8 @@ class AnomaliView(QWidget):
         # v2.8.1: hint baru — perilaku pop-up (dulu: 'pilih baris utk
         # detail' ke panel inline, dihapus bersama splitter).
         hint = WLabel(
-            "💡 Klik baris = detail pop-up · klik 2× = fokus cabang+item · klik header = sort",
+            "💡 Klik baris = detail pop-up · klik 2× = fokus cabang+item · klik header = sort · "
+            "kolom BULAN LALU/PERUBAHAN muncul bila ada file pembanding (tab Banding Periode)",
             table_card)
         hint.setObjectName("hint")
         tcl.addWidget(hint)
@@ -453,8 +497,16 @@ class AnomaliView(QWidget):
         # v2.7.0 (V26-L4): guard coalesce — _on_double menerapkan dua filter
         # sekaligus TANPA render perantara (satu render di akhir).
         self._batch_filters = False
+        # v2.10.2: versi cache enrich (df + baseline + data/history) —
+        # kombinasi sama → salinan berkolom sama dipakai ulang.
+        self._change_key: tuple | None = None
+        self._change_df: pd.DataFrame | None = None
         ctx.data_ready.connect(self._on_data_ready)
         ctx.filters_changed.connect(self._on_filters_changed)
+        # v2.10.2: pembanding siap / pilihan combo berganti → kolom
+        # BULAN LALU-PERUBAHAN muncul / dihitung ulang.
+        ctx.history_ready.connect(self._on_history_ready)
+        ctx.baseline_changed.connect(self._on_baseline_changed)
 
     def _on_data_ready(self) -> None:
         if self.isVisible():
@@ -469,6 +521,28 @@ class AnomaliView(QWidget):
             self._refresh_table()
         else:
             self._dirty = True
+
+    def _on_history_ready(self) -> None:
+        """Pembanding selesai dimuat → kolom perubahan bisa dihitung."""
+        if self.isVisible():
+            self._refresh_table()
+        else:
+            self._dirty = True
+
+    def _on_baseline_changed(self) -> None:
+        """Combo 'Banding dengan:' berganti → hitung ulang vs bulan itu."""
+        if self.isVisible():
+            self._refresh_table()
+        else:
+            self._dirty = True
+
+    def _on_change_filter(self) -> None:
+        """Combo kategori perubahan → saring tabel (lokal, tanpa state).
+
+        Tanpa guard isVisible: combo hanya bisa diklik saat view terlihat,
+        dan pemanggilan programatik (test / refresh eksternal) tetap bekerja.
+        (Pola _on_score_changed — aksi kontrol = refresh langsung.)"""
+        self._refresh_table()
 
     def on_shown(self) -> None:
         """Kontrak lazy-render: view dibuka setelah data baru / filter basi."""
@@ -518,6 +592,31 @@ class AnomaliView(QWidget):
             self._table.set_dataframe(None)
             self._lbl_count.setText("Belum ada data — buka tab Pipeline, pilih workbook, jalankan.")
             return
+        # v2.10.2 — kolom perubahan vs bulan lalu (permintaan user: "persen
+        # perubahan ke anomali sebagai analisa perubahan tinggi/rendah").
+        # Enrich di SALINAN (kontrak 'konsumen hanya membaca' — mem-memo per
+        # (df, baseline, versi) supaya refresh dgn state sama mengembalikan
+        # objek sama → cache fit DataTable tetap kena).
+        baseline = self._ctx.banding_baseline_effective()
+        if baseline is not None and not df.empty:
+            key = (id(df), self._ctx.data_version, self._ctx.history_version,
+                   id(baseline))
+            if self._change_key != key:
+                with busy_feedback(
+                        self._ctx.set_status,
+                        "Menghitung perubahan vs bulan lalu"):
+                    df = change_vs_history(df, baseline, self._ctx.config)
+                self._change_key = key
+                self._change_df = df
+            else:
+                df = self._change_df
+        # Filter kategori perubahan (LOKAL view — bukan state): hanya
+        # menyaring tampilan, KPI/label lain tidak terpengaruh.
+        cat = self._cb_change.currentData() if self._cb_change.isEnabled() \
+            else None
+        self._cb_change.setEnabled(baseline is not None)
+        if cat and "PERUBAHAN" in df.columns:
+            df = df[df["PERUBAHAN"] == cat]
         cols = [c for c in TABLE_COLS if c in df.columns]
         # v2.7.0 (V26-C1): model memegang df PENUH (bukan irisan TABLE_COLS
         # lagi) — kolom non-tabel disembunyikan via visible_cols. Record
@@ -528,8 +627,11 @@ class AnomaliView(QWidget):
         # responsif saat sempit, muncul lagi saat melebar; alasan tetap ada
         # di pop-up detail) supaya kolom inti + % to BOM tetap muat TANPA
         # scrollbar horizontal.
+        # v2.10.2: kolom perubahan ikut narrow_hide — 11 kolom di laptop
+        # sempit; kolom PERUBAHAN % tetap prioritas tampak.
         self._table.set_dataframe(df, sort_desc="ANOMALY SCORE",
-                                  narrow_hide=["JENIS", "KETERANGAN"],
+                                  narrow_hide=["JENIS", "KETERANGAN",
+                                               "BULAN LALU", "PERUBAHAN"],
                                   visible_cols=cols)
         full = len(self._ctx.df) if self._ctx.df is not None else 0
         if len(df) == 0:

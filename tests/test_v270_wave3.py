@@ -159,10 +159,10 @@ class TestSaveConfigValidasi:
 
 class TestDefaultConfig:
     def test_thresholds_default_22_key(self):
-        """v2.10.0: 21 → 22 key (+TH_HARI_HIST_RATIO 3× — ambang bukti hari
-        vs bulan lalu; 21 dari v2.9.0 +TH_HARI_PEER_RATIO 5×)."""
+        """v2.10.2: 22 → 25 key (+TH_CHANGE_HIGH/STABLE/MIN_ABS — ambang
+        kategori perubahan tabel Anomali; 22 dari v2.10.0 +TH_HARI_HIST_RATIO)."""
         from waste_anomaly.utils import _DEFAULT_CONFIG
-        assert len(_DEFAULT_CONFIG["thresholds"]) == 22
+        assert len(_DEFAULT_CONFIG["thresholds"]) == 25
 
     def test_default_menutup_semua_key_config_json(self):
         """Setiap key di config.json bawaan wajib punya default (Reset

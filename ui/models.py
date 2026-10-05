@@ -38,7 +38,9 @@ _NUM_COLS = {"ANOMALY SCORE", "TOTAL", "MAX", "AVG", "HARI MAX", "RANK",
              "SHARE HARI TERSANGKA", "Count Hari",
              # v2.10.0: bukti vs bulan lalu + tabel banding periode
              "NILAI BULAN LALU", "TIPIKAL BEBERAPA BULAN", "HARI AKTIF",
-             "Total Waste", "Waste per Hari", "Perubahan %"}
+             "Total Waste", "Waste per Hari", "Perubahan %",
+             # v2.10.2: kolom perubahan tabel Anomali + drill hari
+             "BULAN LALU", "PERUBAHAN %", "HARI", "Selisih"}
 
 # Kolom rasio (nilai 0..1) yang ditampilkan sebagai PERSEN — v2.8.1.
 # '% to BOM' = waste dibanding penjualan kuantiti (BOM = qty terjual);
@@ -56,6 +58,14 @@ PCT_COLS = frozenset({
 # BUKAN persen dan BUKAN angka mentah (0,0008 tidak terbaca manusia).
 # v2.10.0: + RASIO VS BULAN LALU (bukti tanggal-sama bulan sebelumnya).
 RATIO_X_COLS = frozenset({"RASIO VS CABANG LAIN", "RASIO VS BULAN LALU"})
+
+# v2.10.2 — kolom DELTA persen bertanda (skala 0-100, konvensi _delta_pct
+# period_compare): '+35,5%' / '-12,0%' / '0%'; NaN → 'BARU' (tanpa
+# riwayat); None → '' (sengaja kosong, mis. metrik 'Hari Data').
+# Dipakai semua tabel banding ('Perubahan %', 'Delta %') + tabel Anomali
+# ('PERUBAHAN %') — sebelumnya fmt_cell menampilkan '35,5' polos tanpa
+# tanda/persen (permintaan user v2.10.2: persen perubahan jelas terbaca).
+DELTA_PCT_COLS = frozenset({"Perubahan %", "PERUBAHAN %", "Delta %"})
 
 # ============================================================
 # v2.9.0 — KAMUS ISTILAH (tooltip judul kolom, semua tabel & detail)
@@ -134,8 +144,22 @@ COLUMN_TOOLTIPS = {
     "Bulan Ini": "Nilai bulan berjalan (hasil run pipeline saat ini).",
     "Pembanding": "Nilai bulan pembanding yang dipilih (bulan lalu / tipikal).\nKosong = item tidak ada di bulan pembanding.",
     "Selisih": "Bulan ini dikurangi pembanding.\nMinus = turun, plus = naik.",
-    "Perubahan %": "Naik/turun relatif vs pembanding (mis. +28% = 1,28×).\nKosong = pembandingnya 0/tidak ada.",
+    "Perubahan %": "Naik/turun relatif vs pembanding (mis. +28% = 1,28×).\n'BARU' = pembandingnya 0/tidak ada (item baru).",
     "Metrik": "Nama ukuran yang dibandingkan.",
+    # --- v2.10.2: kolom perubahan tabel Anomali + drill-down hari ---
+    "BULAN LALU": ("Total baris yang PERSIS sama (cabang+item+jenis+keterangan) "
+                   "di bulan pembanding — bulan yang dipilih combo tab "
+                   "'Banding Periode'.\nPencocokan nama abaikan besar/kecil "
+                   "huruf & spasi.\nKosong = belum ada di bulan lalu (BARU)."),
+    "PERUBAHAN %": ("(TOTAL − BULAN LALU) ÷ BULAN LALU × 100.\n"
+                    "'BARU' = tidak ada riwayat bulan lalu."),
+    "PERUBAHAN": ("Kategori perubahan vs bulan lalu — memisahkan LONJAKAN BARU "
+                  "(Naik Tinggi: kandidat salah input / kejadian baru) dari "
+                  "WASTE KRONIS (Stabil: sudah tinggi tiap bulan — masalah "
+                  "proses, bukan salah ketik).\nAmbang bisa diatur di "
+                  "config.json (TH_CHANGE_HIGH / STABLE / MIN_ABS)."),
+    "HARI": ("Tanggal 1-31 (pop-up rincian per hari).\n"
+             "Selisih = bulan ini − pembanding tanggal sama."),
 }
 
 
@@ -206,6 +230,32 @@ def fmt_pct(value, ndigits: int = 2) -> str:
     return s.replace(",", "X").replace(".", ",").replace("X", ".") + "%"
 
 
+def fmt_delta_pct(value, ndigits: int = 1) -> str:
+    """Format DELTA persen BERTANDA, skala 0-100 (v2.10.2).
+
+    Konvensi _delta_pct (period_compare): (new−old)÷old×100.
+    Contoh: 35.5 → '+35,5%'; -12.0 → '-12,0%'; 0 → '0%'.
+    NaN → 'BARU' (pembanding 0/tak ada — item baru); None/pd.NA → ''
+    (kosong SENGAJA, mis. kolom Perubahan % metrik 'Hari Data');
+    teks non-numerik diteruskan apa adanya.
+    """
+    if value is None or value is pd.NA or value is pd.NaT:
+        return ""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if f != f:  # NaN = tanpa riwayat pembanding
+        return "BARU"
+    s = f"{abs(f):,.{ndigits}f}".replace(",", "X").replace(".", ",").replace(
+        "X", ".")
+    if f > 0:
+        return "+" + s + "%"
+    if f < 0:
+        return "-" + s + "%"
+    return "0%"
+
+
 class PandasTableModel(QAbstractTableModel):
     """Model tabel generik untuk DataFrame (sort + severity tint + tooltip)."""
 
@@ -272,6 +322,8 @@ class PandasTableModel(QAbstractTableModel):
         if text is None:
             if col_name in PCT_COLS:
                 text = fmt_pct(value)
+            elif col_name in DELTA_PCT_COLS:
+                text = fmt_delta_pct(value)
             elif col_name in RATIO_X_COLS:
                 text = fmt_ratio_x(value)
             else:

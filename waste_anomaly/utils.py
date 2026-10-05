@@ -107,6 +107,12 @@ _DEFAULT_CONFIG = {
         "TH_PEER_WARN": 2, "TH_PEER_HIGH": 3, "TH_LAST_SHARE": 0.70,
         "TH_HARI_PEER_RATIO": 5.0,
         "TH_HARI_HIST_RATIO": 3.0,
+        # v2.10.2 — kategori perubahan tabel Anomali (classify_change):
+        # HIGH = batas "Naik/Turun Tinggi" (%), STABLE = rentang "Stabil" (%),
+        # MIN_ABS = selisih absolut minimum agar bermakna (anti-noise kecil).
+        "TH_CHANGE_HIGH": 50.0,
+        "TH_CHANGE_STABLE": 20.0,
+        "TH_CHANGE_MIN_ABS": 10.0,
         "STATUS_PRIORITAS": 8, "STATUS_POTENSI": 5, "STATUS_REVIEW": 3,
         "S2_SCORE2_MIN": 4, "S10_BOM_MIN": 0.10,
         "QUADRANT_THRESHOLD": 0.50,
