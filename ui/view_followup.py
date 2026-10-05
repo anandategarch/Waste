@@ -158,6 +158,13 @@ class FollowUpView(QWidget):
     # ------------------------------------------------------------
     def refresh(self) -> None:
         self._dirty = False
+        # V26-L12 / v2.10.3 (pola _refresh_table_impl Anomali): daftar
+        # berubah → record terpilih + pop-up detail bisa basi (baris yang
+        # ditampilkan pop-up mungkin sudah keluar dari daftar) — tutup +
+        # kosongkan SEBELUM render ulang.
+        self._table.clearSelection()
+        self._popup.hide()
+        self._popup._panel.clear()
         rows = self._ctx.followup_df()
         if rows is None:
             self._set_empty("Belum ada data — jalankan pipeline dulu "

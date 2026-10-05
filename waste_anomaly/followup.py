@@ -37,6 +37,7 @@ import os
 from pathlib import Path
 from typing import Iterable
 
+import numpy as np
 import pandas as pd
 
 from .frozen import exe_dir, is_frozen
@@ -319,6 +320,12 @@ def export_followup_xlsx(rows: pd.DataFrame, path: str,
                 v = rows[c].iloc[i]
                 if pd.isna(v):
                     v = None
+                elif isinstance(v, (np.integer, np.floating)):
+                    # Bug-hunt 3-a: np.int64 BUKAN subclass int python —
+                    # tanpa ini 16/31 kolom hari di data asli (int64)
+                    # terekspor sebagai TEKS ('0'), SUM/sort Excel rusak
+                    # (jebakan yang sama dgn V26-M1 models.py).
+                    v = v.item()  # int tetap int, float tetap float
                 elif isinstance(v, (int, float)):
                     v = float(v)
                 else:

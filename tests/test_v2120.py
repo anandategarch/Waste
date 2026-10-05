@@ -598,6 +598,31 @@ class TestV2120FollowUpView:
         assert ctx.followup_keys == [str(fps.iloc[3])]
         av.close(); fv.close()
 
+    def test_popup_basi_ditutup_saat_baris_keluar(self):
+        """Bug-hunt 3-a: pop-up detail terbuka → barisnya keluar daftar
+        (lepas centang) → refresh WAJIB menutup pop-up (pola V26-L12 —
+        tanpa ini pop-up menampilkan baris yang sudah tak ada)."""
+        from PySide6.QtCore import QItemSelectionModel
+        ctx, av, fv = self._views()
+        av.show(); av.refresh(); _qapp().processEvents()
+        fps = fingerprint_series(_df_fu())
+        ctx.add_followup_many([fps.iloc[0], fps.iloc[3]])
+        _qapp().processEvents()
+        fv.show(); fv.refresh(); _qapp().processEvents()
+        m = fv._table.model()
+        # pilih baris pertama (kolom TOTAL — bukan ✓) → pop-up terbuka
+        fv._table.selectionModel().setCurrentIndex(
+            m.index(0, 1),
+            QItemSelectionModel.SelectionFlag.SelectCurrent)
+        _qapp().processEvents()
+        assert fv._popup.isVisible()
+        # lepas centang baris yang sedang ditampilkan pop-up → refresh →
+        # pop-up basi harus TERTUTUP
+        m.setData(m.index(0, 0), 0, Qt.ItemDataRole.CheckStateRole)
+        _qapp().processEvents()
+        assert not fv._popup.isVisible()
+        av.close(); fv.close()
+
     def test_kosong_pesan_arahan(self):
         ctx, av, fv = self._views()
         fv.show(); fv.refresh()
@@ -653,6 +678,13 @@ class TestV2120Export:
             # hari kecil (1) tanpa fill
             c1 = ws.cell(row=2, column=header.index("1") + 1)
             assert not (c1.fill.patternType == "solid")
+            # Bug-hunt 3-a: kolom hari int64 (fixture ini) HARUS terekspor
+            # NUMERIK — np.int64 bukan subclass int python; tanpa fix,
+            # 16/31 kolom hari data asli menjadi teks (SUM/sort Excel rusak)
+            for c in ("1", "7", "8"):
+                assert ws.cell(row=2, column=header.index(c) + 1).data_type == "n"
+            assert ws.cell(
+                row=2, column=header.index("TOTAL") + 1).data_type == "n"
             # freeze + autofilter
             assert ws.freeze_panes == "A2"
             assert ws.auto_filter.ref
