@@ -713,4 +713,95 @@ class TestConfigV2102:
 
     def test_versi_naik(self):
         from ui.shared import APP_VERSION
-        assert APP_VERSION == "2.10.2"
+        assert APP_VERSION == "2.10.3"
+
+
+# ============================================================
+# [11] v2.10.3 — REGRESI AUDIT DEEP (regex bulan underscore +
+#      pop-up basi ditutup saat konteks banding berganti)
+# ============================================================
+
+class TestV2103RegexBulan:
+    """FIX 1 (audit v2.10.3): `\\b` menolak nama bulan didahului underscore
+    ("WASTE_SEPTEMBER_2026.xlsx" → None — underscore = word char, tak ada
+    word-boundary). Lookbehind non-huruf menggantikannya."""
+
+    def test_bulan_setelah_underscore_terdeteksi(self):
+        from waste_anomaly.period_history import detect_month_label
+        assert detect_month_label(
+            "WASTE_SEPTEMBER_2026.xlsx") == "September 2026"
+        assert detect_month_label(
+            "01-31_SEPTEMBER_2026.xlsx") == "September 2026"
+        assert detect_month_label("rekap_mentah_mei_2026.xlsx") == "Mei 2026"
+
+    def test_bulan_menempel_huruf_tetap_ditolak(self):
+        from waste_anomaly.period_history import (
+            detect_month_label, month_sort_key)
+        assert detect_month_label("XSEPTEMBER2026.xlsx") is None
+        assert detect_month_label("SEPTEMBERS.xlsx") is None
+        assert month_sort_key("XJULI") == (0, 0)
+
+    def test_bulan_dipisah_digit_kini_diterima(self):
+        # "31SEPTEMBER" — digit langsung sebelum bulan: dulu \b menolak,
+        # kini diterima (lebih toleran; salah positif huruf tetap ditolak).
+        from waste_anomaly.period_history import detect_month_label
+        assert detect_month_label(
+            "REKAP31SEPTEMBER2026.xlsx") == "September 2026"
+
+    def test_pola_lama_tetap_cocok(self):
+        from waste_anomaly.period_history import detect_month_label
+        assert detect_month_label(
+            "REKAP MENTAH_01-31 AGUSTUS 2026_TEGAR.xlsx") == "Agustus 2026"
+        assert detect_month_label("rekap juli 2025.xlsx") == "Juli 2025"
+        assert detect_month_label("DATA.xlsx") is None
+
+
+class TestV2103PopupBasi:
+    """FIX 2 (audit v2.10.3): pop-up drill/layar penuh yang masih terbuka
+    saat hasil banding digambar ulang / dikosongkan = tabel konteks LAMA
+    (angka basi). Kini ditutup otomatis."""
+
+    def _view(self, tmp_path):
+        _qapp()
+        from ui.state import AppContext
+        from ui.view_periode import PeriodeView
+        ctx = AppContext({})
+        view = PeriodeView(ctx)
+        df_a = _df_a()
+        df_a["TOTAL"] = df_a[_DAY_COLS].sum(axis=1)
+        ctx.set_dataset(df_a, {"key_akhir": 31})
+        m = _month_b(tmp_path)
+        p = str(tmp_path / "REKAP MENTAH JULI 2026.xlsx")
+        view._entries = [{"path": p, "label": "Juli 2026"}]
+        view._loaded[p] = m
+        ctx.set_history([m], None)
+        view._refresh_result()
+        return view, ctx
+
+    def test_clear_tables_menutup_pop_up(self, tmp_path):
+        view, _ = self._view(tmp_path)
+        view._on_fullscreen()
+        assert view._full.isVisible()
+        view._clear_tables("tes")
+        assert not view._full.isVisible()
+
+    def test_render_baru_menutup_pop_up_lama(self, tmp_path):
+        view, _ = self._view(tmp_path)
+        view._open_resto("🏬 tes resto")
+        assert view._drill.isVisible()
+        # refresh penuh (mis. combo berganti / data baru) → pop-up lama
+        # menampilkan salinan konteks lama → harus tertutup.
+        view._refresh_result()
+        assert not view._drill.isVisible()
+        # tabel utama tetap dirender normal (pop-up tutup ≠ hasil hilang).
+        assert view._has_result
+        assert not view._tables["summary"]._model.dataframe.empty
+
+    def test_toggle_expand_tak_menutup_pop_up(self, tmp_path):
+        view, _ = self._view(tmp_path)
+        view._open_resto("🏬 tes resto")
+        assert view._drill.isVisible()
+        # ⤢ hanya layout (kartu file) — bukan perubahan konteks data.
+        view._on_expand()
+        assert view._drill.isVisible()
+        assert view._card_files.isHidden()

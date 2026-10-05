@@ -603,6 +603,25 @@ class PeriodeView(QWidget):
     # ------------------------------------------------------------
     # v2.10.2 — MELEBARKAN TABEL & DRILL-DOWN POP-UP
     # ------------------------------------------------------------
+    def _close_popups(self) -> None:
+        """Tutup pop-up drill/layar penuh yang masih terbuka (v2.10.3 audit).
+
+        Dipanggil saat hasil banding digambar ulang atau dikosongkan —
+        tabel di pop-up adalah salinan konteks lama; membiarkannya terbuka
+        hanya menampilkan angka basi (drill lanjutan memang sudah di-guard
+        _a/_b, tapi tampilannya tetap menyesatkan). Best-effort + defensif
+        (dialog tak pernah None di __init__; RuntimeError = widget
+        sudah di-destroy oleh parent)."""
+        for dlg in (getattr(self, "_drill", None),
+                    getattr(self, "_full", None)):
+            if dlg is None:
+                continue
+            try:
+                if dlg.isVisible():
+                    dlg.close()
+            except RuntimeError:
+                pass
+
     def _on_expand(self) -> None:
         """Ciutkan / kembalikan kartu daftar file (tabel makan tinggi penuh).
 
@@ -848,6 +867,10 @@ class PeriodeView(QWidget):
         # v2.10.2: bagikan pilihan baseline ke view lain (tabel Anomali —
         # kolom BULAN LALU/PERUBAHAN memakai pembanding yang sama).
         self._ctx.set_banding_baseline(b)
+        # v2.10.3 (audit): konteks banding berganti (run baru / pembanding /
+        # combo) — pop-up yang masih terbuka menampilkan salinan konteks
+        # LAMA; ditutup supaya tak menyesatkan.
+        self._close_popups()
         for key, df_key in _RESULT_KEYS.items():
             df = res.get(df_key)
             self._tables[key].set_dataframe(
@@ -865,6 +888,10 @@ class PeriodeView(QWidget):
         self._has_result = False
         # v2.10.2: bahan drill ikut dikosongkan (pop-up tak membuka data basi).
         self._a, self._b, self._res = None, None, None
+        # v2.10.3 (audit): pop-up yang masih terbuka menampilkan tabel data
+        # lama — ditutup (drill sudah di-guard _a/_b None, tapi TAMPILAN
+        # tabel lamanya tetap menyesatkan bila dibiarkan).
+        self._close_popups()
 
 
 def fmt_run_label(summary: dict | None, key_akhir: int) -> str:

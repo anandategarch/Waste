@@ -65,8 +65,13 @@ _MONTHS = {
     "JANUARY": 1, "FEBRUARY": 2, "MARCH": 3, "MAY": 5,
     "JUNE": 6, "JULY": 7, "AUGUST": 8, "OCTOBER": 10, "DECEMBER": 12,
 }
+# v2.10.3 (audit): lookbehind `(?<![A-Za-z])` menggantikan `\b` — `\b`
+# menolak nama bulan yang didahului underscore ("WASTE_SEPTEMBER_2026.xlsx"
+# → label hilang diam-diam) karena underscore = word character (tak ada
+# word-boundary). Lookbehind non-huruf menerima `_`/digit/spasi/start,
+# tetap menolak bulan yang menempel HURUF ("XSEPTEMBER"/"SEPTEMBERS").
 _MONTH_RE = re.compile(
-    r"\b(JANUARI|FEBRUARI|MARET|APRIL|MEI|JUNI|JULI|AGUSTUS|SEPTEMBER|"
+    r"(?<![A-Za-z])(JANUARI|FEBRUARI|MARET|APRIL|MEI|JUNI|JULI|AGUSTUS|SEPTEMBER|"
     r"OKTOBER|NOVEMBER|DESEMBER|JANUARY|MARCH|MAY|JUNE|JULY|AUGUST|"
     r"OCTOBER|DECEMBER)(?![A-Za-z])[ \-_]*(\d{4})?",
     re.IGNORECASE,
