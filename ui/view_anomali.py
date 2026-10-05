@@ -40,6 +40,7 @@ from .models import (
     fmt_ratio_x,
 )
 from waste_anomaly.period_history import CHANGE_CATEGORIES, change_vs_history
+from waste_anomaly.followup import CHECK_COL, FP_COL, fingerprint_series
 from .shared import fmt_id
 from .state import AppContext
 from .widgets import (
@@ -458,6 +459,17 @@ class AnomaliView(QWidget):
         self._lbl_count = WLabel("", ctrl)
         self._lbl_count.setObjectName("hint")
         cl.addWidget(self._lbl_count, 1)
+        # v2.12.0 — aksi follow-up massal: centang SEMUA baris yang sedang
+        # tampil (setelah filter/slicer menyempitkan — mis. 43 SUSUT)
+        # sekaligus ke daftar Follow Up.
+        self._btn_fu_all = QPushButton("☑ Centang yang tampil", ctrl)
+        self._btn_fu_all.setToolTip(
+            "Centang SEMUA baris anomali yang sedang tampil (hasil filter/"
+            "slicer saat ini) sekaligus ke daftar Follow Up.\n"
+            "Cocok dipakai setelah slicer menyempitkan daftar: saring → "
+            "centang massal → tinjau di tab Follow Up.")
+        self._btn_fu_all.clicked.connect(self._on_check_all)
+        cl.addWidget(self._btn_fu_all)
         lay.addWidget(ctrl)
 
         # Kartu tabel — memenuhi SELURUH sisa tinggi view (v2.8.1: tanpa
@@ -479,6 +491,12 @@ class AnomaliView(QWidget):
         tcl.addWidget(self._slicer)
         self._table = DataTable(table_card)
         self._table.setMinimumHeight(200)
+        # v2.12.0 — kolom centang follow-up (✓) in-place: klik sel = flip
+        # bool + sinyal check_toggled → state ctx (TANPA render ulang:
+        # dataChanged satu sel, cache fit DataTable tak tersentuh).
+        self._table.model().set_check_column(CHECK_COL)
+        self._table.model().set_row_key_column(FP_COL)
+        self._table.model().check_toggled.connect(self._on_check_toggled)
         self._table.selectionModel().currentRowChanged.connect(
             lambda *_: self._on_selection())
         self._table.double_clicked.connect(self._on_double)
@@ -487,6 +505,7 @@ class AnomaliView(QWidget):
         # detail' ke panel inline, dihapus bersama splitter).
         hint = WLabel(
             "💡 Klik baris = detail pop-up · klik 2× = fokus cabang+item · klik header = sort · "
+            "centang ✓ = kumpulkan baris ke tab Follow Up · "
             "kolom BULAN LALU/PERUBAHAN muncul bila ada file pembanding (tab Banding Periode)",
             table_card)
         hint.setObjectName("hint")
@@ -507,12 +526,22 @@ class AnomaliView(QWidget):
         # kombinasi sama → salinan berkolom sama dipakai ulang.
         self._change_key: tuple | None = None
         self._change_df: pd.DataFrame | None = None
+        # v2.12.0: memo display (df + ✓/__FP) & memo fingerprint — objek
+        # STABIL per objek df supaya cache fit DataTable tetap kena;
+        # nilai ✓ disegarkan tiap pemakaian (state bisa berubah).
+        self._disp_src: pd.DataFrame | None = None
+        self._disp: pd.DataFrame | None = None
+        self._fps_src: pd.DataFrame | None = None
+        self._fps: pd.Series | None = None
         ctx.data_ready.connect(self._on_data_ready)
         ctx.filters_changed.connect(self._on_filters_changed)
         # v2.10.2: pembanding siap / pilihan combo berganti → kolom
         # BULAN LALU-PERUBAHAN muncul / dihitung ulang.
         ctx.history_ready.connect(self._on_history_ready)
         ctx.baseline_changed.connect(self._on_baseline_changed)
+        # v2.12.0: daftar follow-up berubah (toggle di mana pun / bulk /
+        # prune) → segarkan kolom ✓ in-place (bukan render ulang).
+        ctx.followup_changed.connect(self._on_followup_changed)
 
     def _on_data_ready(self) -> None:
         if self.isVisible():
@@ -635,10 +664,14 @@ class AnomaliView(QWidget):
         # scrollbar horizontal.
         # v2.10.2: kolom perubahan ikut narrow_hide — 11 kolom di laptop
         # sempit; kolom PERUBAHAN % tetap prioritas tampak.
-        self._table.set_dataframe(df, sort_desc="ANOMALY SCORE",
+        # v2.12.0: df tampilan = SALINAN + ✓ + __FP (kontrak 'konsumen
+        # hanya membaca' utk objek LRU/enriched tetap utuh; objek display
+        # di-memo per objek df → cache fit DataTable tetap kena).
+        disp = self._display_df(df)
+        self._table.set_dataframe(disp, sort_desc="ANOMALY SCORE",
                                   narrow_hide=["JENIS", "KETERANGAN",
                                                "BULAN LALU", "PERUBAHAN"],
-                                  visible_cols=cols)
+                                  visible_cols=[CHECK_COL] + cols)
         full = len(self._ctx.df) if self._ctx.df is not None else 0
         if len(df) == 0:
             self._lbl_count.setText("0 anomali lolos filter — longgarkan filter atau ambang skor.")
@@ -652,6 +685,79 @@ class AnomaliView(QWidget):
         full = len(self._ctx.df) if self._ctx.df is not None else 0
         if filtered is not None:
             self._kpi.update_from(filtered, full)
+
+    # ------------------------------------------------------------
+    # v2.12.0 — FOLLOW UP: display ✓/__FP + toggle + sinkron in-place
+    # ------------------------------------------------------------
+    def _fps_for(self, df: pd.DataFrame) -> pd.Series:
+        """Sidik jari baris (memo per objek df — nilai tak pernah berubah
+        utk df yang sama; pola memo objek cache fit)."""
+        if self._fps_src is not df or self._fps is None:
+            self._fps = fingerprint_series(df)
+            self._fps_src = df
+        return self._fps
+
+    def _display_df(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Salinan df + kolom ✓ (bool) + __FP — OBJEK STABIL per objek df
+        (memo) supaya cache fit DataTable tetap kena antar-refresh;
+        nilai ✓ SELALU disegarkan dari state saat dipakai.
+
+        Kontrak 'konsumen hanya membaca' utk objek LRU anomali / enriched
+        tetap utuh: mutasi centang hanya menyentuh salinan view ini."""
+        if self._disp_src is not df or self._disp is None:
+            fps = self._fps_for(df)
+            disp = df.copy()
+            disp[FP_COL] = fps
+            disp.insert(0, CHECK_COL, fps.isin(self._ctx.followup_set()))
+            self._disp_src, self._disp = df, disp
+        else:
+            # objek sama dipakai ulang — segarkan nilai centang saja
+            self._disp[CHECK_COL] = self._disp[FP_COL].isin(
+                self._ctx.followup_set())
+        return self._disp
+
+    def _on_check_toggled(self, row: int, checked: bool) -> None:
+        """Klik sel ✓ → state ctx (broadcast → badge tab + tab Follow Up)."""
+        rec = self._table.model().record(row)
+        fp = rec.get(FP_COL) if rec is not None else None
+        if fp is None or str(fp) == "nan":
+            return
+        self._ctx.toggle_followup(str(fp), checked)
+        n = len(self._ctx.followup_keys)
+        self._ctx.set_status(
+            ("✓ Masuk Follow Up" if checked else "✓ Dikeluarkan dari Follow Up")
+            + f" — total {fmt_id(n)} baris", "done")
+
+    def _on_followup_changed(self) -> None:
+        """State follow-up berubah (toggle di mana pun/bulk/prune) —
+        segarkan kolom ✓ model IN-PLACE (dataChanged satu kolom) —
+        BUKAN render ulang (cache fit + ukuran baris tak tersentuh)."""
+        m = self._table.model()
+        mdf = m.dataframe
+        if (mdf is not None and len(mdf) > 0
+                and CHECK_COL in mdf.columns and FP_COL in mdf.columns):
+            mdf[CHECK_COL] = mdf[FP_COL].isin(self._ctx.followup_set())
+            m.notify_column_changed(CHECK_COL)
+
+    def _on_check_all(self) -> None:
+        """Tombol '☑ Centang yang tampil' — semua baris model saat ini
+        (hasil filter/slicer) masuk follow-up, SATU broadcast."""
+        mdf = self._table.model().dataframe
+        if mdf is None or len(mdf) == 0 or FP_COL not in mdf.columns:
+            self._ctx.set_status("Tidak ada baris yang tampil — longgarkan "
+                                 "filter dulu.", "error")
+            return
+        fps = [str(v) for v in mdf[FP_COL].tolist()]
+        added = self._ctx.add_followup_many(fps)
+        total = len(self._ctx.followup_keys)
+        if added:
+            self._ctx.set_status(
+                f"✓ {fmt_id(added)} baris masuk Follow Up — total {fmt_id(total)}",
+                "done")
+        else:
+            self._ctx.set_status(
+                f"Semua baris yang tampil sudah tercentang (total {fmt_id(total)})",
+                "done")
 
     def _on_selection(self) -> None:
         """Klik baris (atau navigasi keyboard) → pop-up detail (v2.8.1)."""

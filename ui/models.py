@@ -14,7 +14,7 @@ import math
 
 import numpy as np
 import pandas as pd
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
 from PySide6.QtGui import QColor, QFont
 
 from .shared import fmt_id
@@ -66,6 +66,19 @@ RATIO_X_COLS = frozenset({"RASIO VS CABANG LAIN", "RASIO VS BULAN LALU"})
 # ('PERUBAHAN %') — sebelumnya fmt_cell menampilkan '35,5' polos tanpa
 # tanda/persen (permintaan user v2.10.2: persen perubahan jelas terbaca).
 DELTA_PCT_COLS = frozenset({"Perubahan %", "PERUBAHAN %", "Delta %"})
+
+# ============================================================
+# v2.12.0 — FOLLOW UP: konstanta bersama model (kolom ✓ + kunci baris)
+# ============================================================
+# Nama kolom TIDAK dipakai model langsung (dipasang via setter supaya
+# tetap generik) — nilai di sini dipakai view Anomali & Follow Up +
+# waste_anomaly.followup (FP_COL/CHECK_COL — sumber tunggal).
+
+# Warna penanda hari mencurigakan di sel tabel (konsisten peta hari
+# pop-up detail: merah #fee2e2/#dc2626; amber = amber-100).
+_HL_RED_BG = QColor("#fee2e2")
+_HL_RED_FG = QColor("#dc2626")
+_HL_AMBER_BG = QColor("#fef3c7")
 
 # ============================================================
 # v2.9.0 — KAMUS ISTILAH (tooltip judul kolom, semua tabel & detail)
@@ -257,7 +270,24 @@ def fmt_delta_pct(value, ndigits: int = 1) -> str:
 
 
 class PandasTableModel(QAbstractTableModel):
-    """Model tabel generik untuk DataFrame (sort + severity tint + tooltip)."""
+    """Model tabel generik untuk DataFrame (sort + severity tint + tooltip).
+
+    v2.12.0 — tiga mekanisme opsional (opt-in, default MATI — perilaku
+    view lain tak berubah):
+    - ``set_check_column(name)``: kolom bool menjadi centang in-place
+      (flags ItemIsUserCheckable + CheckStateRole + setData flip →
+      sinyal ``check_toggled(row, checked)``). Toggle = 1 sel repaint
+      (dataChanged index tunggal) — BUKAN render ulang tabel.
+    - ``set_row_key_column(name)`` + ``set_highlights(red, amber)``:
+      penanda warna sel per (kunci-baris, kolom) — STABIL melewati sort
+      (kunci ikut travel di kolomnya, bukan posisi baris).
+    - ``notify_column_changed(name)``: dataChanged satu kolom penuh —
+      sinkronisasi nilai ✓ in-place pasca perubahan state eksternal
+      (bulk/toggle dari tab lain) TANPA reset model (cache fit DataTable
+      tetap kena).
+    """
+
+    check_toggled = Signal(int, bool)
 
     def __init__(self, df: pd.DataFrame | None = None, parent=None) -> None:
         super().__init__(parent)
@@ -269,6 +299,13 @@ class PandasTableModel(QAbstractTableModel):
         # tabel habis di pemformatan string yang sama berulang-ulang).
         # Di-invalidasi set_dataframe & sort (baris berganti isi).
         self._texts: dict[tuple[int, int], str] = {}
+        # v2.12.0: konfigurasi follow-up (opt-in).
+        self._check_col: str | None = None
+        self._fp_col: str | None = None
+        self._fp_idx: int | None = None
+        self._hl_red: set[tuple[str, str]] = set()
+        self._hl_amber: set[tuple[str, str]] = set()
+        self._hl_cols: set[str] = set()
 
     # ------------------------------------------------------------
     # API
@@ -277,6 +314,7 @@ class PandasTableModel(QAbstractTableModel):
         self.beginResetModel()
         self._df = df if df is not None else pd.DataFrame()
         self._texts = {}
+        self._fp_idx = None  # v2.12.0: posisi kolom kunci bisa bergeser
         self.endResetModel()
 
     @property
@@ -288,6 +326,49 @@ class PandasTableModel(QAbstractTableModel):
         if 0 <= row < len(self._df):
             return self._df.iloc[row]
         return None
+
+    # ------------------------------------------------------------
+    # v2.12.0 — konfigurasi follow-up (opt-in)
+    # ------------------------------------------------------------
+    def set_check_column(self, name: str | None) -> None:
+        """Pasang kolom centang (bool). None = matikan."""
+        self._check_col = name
+
+    def set_row_key_column(self, name: str | None) -> None:
+        """Pasang kolom kunci baris (mis. '__FP') — dasar penanda sel."""
+        self._fp_col = name
+        self._fp_idx = None
+
+    def set_highlights(self, red: set[tuple[str, str]],
+                       amber: set[tuple[str, str]]) -> None:
+        """Penanda warna sel per (kunci-baris, nama-kolom).
+
+        red = (bg merah + font merah tebal); amber = bg amber. Kunci
+        berbasis nilai (bukan posisi) → tetap benar setelah sort."""
+        self._hl_red = set(red or set())
+        self._hl_amber = set(amber or set())
+        self._hl_cols = ({c for _k, c in self._hl_red}
+                         | {c for _k, c in self._hl_amber})
+
+    def notify_column_changed(self, name: str) -> None:
+        """dataChanged SATU kolom penuh (nilai berubah in-place)."""
+        if name in self._df.columns and len(self._df) > 0:
+            col = self._df.columns.get_loc(name)
+            self.dataChanged.emit(self.index(0, col),
+                                  self.index(len(self._df) - 1, col))
+
+    def _row_key(self, row: int) -> str | None:
+        """Nilai kolom kunci baris (posisi dicari malas + diverifikasi)."""
+        if self._fp_col is None or not (0 <= row < len(self._df)):
+            return None
+        if (self._fp_idx is None
+                or self._fp_idx >= len(self._df.columns)
+                or self._df.columns[self._fp_idx] != self._fp_col):
+            try:
+                self._fp_idx = self._df.columns.get_loc(self._fp_col)
+            except KeyError:
+                return None
+        return str(self._df.iat[row, self._fp_idx])
 
     # ------------------------------------------------------------
     # Qt model contract
@@ -338,6 +419,21 @@ class PandasTableModel(QAbstractTableModel):
         col_name = self._df.columns[col]
         value = self._df.iat[row, col]
 
+        # v2.12.0 — kolom centang: CheckState dari nilai bool; teks kosong
+        # (bukan 'True'/'False'); tooltip menjelaskan aksi.
+        if col_name == self._check_col and self._check_col is not None:
+            if role == Qt.CheckStateRole:
+                return (Qt.CheckState.Checked if bool(value)
+                        else Qt.CheckState.Unchecked)
+            if role in (Qt.DisplayRole, Qt.EditRole):
+                return ""
+            if role == Qt.ToolTipRole:
+                return ("Centang = masukkan baris ini ke daftar Follow Up "
+                        "(tab Follow Up). Lepas centang = keluarkan.")
+            if role == Qt.TextAlignmentRole:
+                return int(Qt.AlignCenter)
+            return None
+
         if role in (Qt.DisplayRole, Qt.EditRole):
             return self._cell_text(row, col, col_name, value)
         if role == Qt.ToolTipRole:
@@ -351,12 +447,83 @@ class PandasTableModel(QAbstractTableModel):
                 return int(Qt.AlignRight | Qt.AlignVCenter)
             return int(Qt.AlignLeft | Qt.AlignVCenter)
         if role == Qt.BackgroundRole:
+            # v2.12.0 — penanda hari mencurigakan (kunci-baris, kolom):
+            # merah (tersangka) > amber (lonjakan) > tint baris status.
+            if self._hl_cols and col_name in self._hl_cols:
+                fp = self._row_key(row)
+                if fp is not None:
+                    if (fp, col_name) in self._hl_red:
+                        return _HL_RED_BG
+                    if (fp, col_name) in self._hl_amber:
+                        return _HL_AMBER_BG
             return self._row_tint(row)
-        if role == Qt.FontRole and col_name == "ANOMALY SCORE":
-            f = QFont()
-            f.setBold(True)
-            return f
+        if role == Qt.ForegroundRole and self._hl_cols \
+                and col_name in self._hl_cols:
+            fp = self._row_key(row)
+            if fp is not None and (fp, col_name) in self._hl_red:
+                return _HL_RED_FG
+            return None
+        if role == Qt.FontRole:
+            if col_name == "ANOMALY SCORE":
+                f = QFont()
+                f.setBold(True)
+                return f
+            # v2.12.0 — sel hari tersangka: tebal (konsisten peta hari).
+            if (self._hl_cols and col_name in self._hl_cols
+                    and self._fp_col is not None):
+                fp = self._row_key(row)
+                if fp is not None and (fp, col_name) in self._hl_red:
+                    f = QFont()
+                    f.setBold(True)
+                    return f
+            return None
         return None
+
+    # ------------------------------------------------------------
+    # v2.12.0 — centang in-place (delegate klik → CheckStateRole)
+    # ------------------------------------------------------------
+    def flags(self, index: QModelIndex):
+        base = super().flags(index)
+        if (self._check_col is not None and index.isValid()
+                and 0 <= index.column() < len(self._df.columns)
+                and self._df.columns[index.column()] == self._check_col):
+            return base | Qt.ItemFlag.ItemIsUserCheckable
+        return base
+
+    def setData(self, index: QModelIndex, value, role=Qt.EditRole) -> bool:  # noqa: N802 — Qt API
+        """Toggle centang kolom ✓ (klik mouse — jalur delegate editorEvent,
+        bekerja meski tabel read-only/NoEditTriggers).
+
+        Flip nilai bool → dataChanged SATU sel (bukan reset model →
+        cache fit/ukuran DataTable tak tersentuh) → sinyal
+        check_toggled(row, checked) utk view mengubah state ctx."""
+        if (role != Qt.CheckStateRole or self._check_col is None
+                or not index.isValid()
+                or not (0 <= index.row() < len(self._df))):
+            return False
+        col_name = self._df.columns[index.column()] \
+            if index.column() < len(self._df.columns) else ""
+        if col_name != self._check_col:
+            return False
+        if isinstance(value, bool):
+            checked = value
+        elif isinstance(value, Qt.CheckState):
+            checked = value == Qt.CheckState.Checked
+        else:
+            # int (2 = Qt.Checked dari delegate versi Qt lama / QVariant).
+            # Catatan: int(Qt.CheckState.Checked) TypeError di PySide6 —
+            # enum CheckState tak punya __int__ (beda dari ItemDataRole).
+            try:
+                checked = int(value) == 2
+            except (TypeError, ValueError):
+                return False
+        try:
+            self._df.iat[index.row(), index.column()] = bool(checked)
+        except Exception:  # noqa: BLE001 — df aneh (readonly view dsb.)
+            return False
+        self.dataChanged.emit(index, index)
+        self.check_toggled.emit(index.row(), bool(checked))
+        return True
 
     def _row_tint(self, row: int) -> QColor | None:
         """Tint baris sesuai ANOMALY STATUS (bila kolom ada)."""

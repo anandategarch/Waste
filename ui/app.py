@@ -55,11 +55,13 @@ from .shared import APP_DIR, APP_TITLE, APP_VERSION, bundle_res_dir, fmt_id
 from .state import AppContext
 from .theme import QSS
 from .view_anomali import AnomaliView
+from .view_followup import FollowUpView
 from .view_hari import HariView
 from .view_periode import PeriodeView
 from .view_pipeline import PipelineView
 from .widgets import Card, WLabel
 from .workers import ExportWorker
+from waste_anomaly.followup import followup_path
 
 # v2.11.0: chip slicer bisa memfilter beberapa nilai sekaligus (list) —
 # combo sidebar (single-select) menampilkan placeholder ini alih-alih
@@ -84,6 +86,14 @@ _HELP_HTML = """
 <li>Bukti hari = angka jauh di atas cabang lain di hari sama (mis. 404×), atau ≥ 50% waste sebulan di satu hari, atau pola 10× (salah ketik), atau waste cuma 1 hari.</li>
 <li>Kolom ALASAN HARI merangkum buktinya dalam satu kalimat; klik baris = pop-up dengan peta hari.</li>
 <li><b>Bila ada file bulan lalu</b> (tab Banding Periode): muncul kolom <b>NILAI BULAN LALU</b> — nilai tanggal yang sama bulan sebelumnya + berapa kali lipatnya.</li>
+</ul>
+<h3>Tab Follow Up (v2.12.0)</h3>
+<ul>
+<li><b>Centang baris mencurigakan</b> (kolom ✓ di tab Anomali) → baris terkumpul di tab <b>Follow Up</b> dalam format rekap: TOTAL · AVG · MAX · SOURCE DATA · JENIS · KETERANGAN · NAMA BARANG · NAMA RESTO · SATUAN · hari 1–31.</li>
+<li>Tombol <b>☑ Centang yang tampil</b> (tab Anomali): centang massal hasil filter/slicer saat ini; <b>lepas centang ✓</b> (di kedua tab) = keluarkan baris.</li>
+<li><b>Hari mencurigakan diberi warna</b>: 🔴 merah = hari tersangka (puncak) · 🟠 amber = ≥ 2× rata-rata hari aktif.</li>
+<li>Daftar <b>menetap terhadap filter</b> dan <b>tersimpan otomatis</b> (followup.json) — aman walau aplikasi ditutup; baris yang tak ada lagi di data baru otomatis dipangkas.</li>
+<li><b>💾 Ekspor Excel</b>: format rekap + kolom kosong PIC/KATEGORI/PENYEBAB utk diisi petugas (konvensi REKAP MENTAH) — hari mencurigakan ikut berwarna.</li>
 </ul>
 <h3>Filter (sidebar kiri)</h3>
 <ul>
@@ -127,7 +137,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{APP_TITLE} v{APP_VERSION} — Pencari Anomali Waste")
         self._set_icon()
 
-        self.ctx = AppContext(load_config(), self)
+        self.ctx = AppContext(load_config(), self,
+                              followup_path=followup_path())
         self._export_worker: ExportWorker | None = None
         self._exporting = False
         # v2.8.0: ukuran splitter tersimpan saat sidebar disembunyikan
@@ -209,14 +220,20 @@ class MainWindow(QMainWindow):
         # 5 → 3 view — Jelajah & Waktu dihapus total bersama modul chart/
         # dashboard (keputusan user). Cek data_quality TETAP jalan di
         # pipeline & export; sheet analisa temporal/money/DQ tetap diexport.
+        # v2.12.0: 3 → 5 — tab Follow Up (shortlist centangan ✓, setelah
+        # Anomali — alur buruan → tindak lanjut).
         self._views: list[tuple[str, QWidget]] = [
             ("Anomali", AnomaliView(self.ctx)),
+            ("Follow Up", FollowUpView(self.ctx)),
             ("Hari Mencurigakan", HariView(self.ctx)),
             ("Banding Periode", PeriodeView(self.ctx)),
             ("Pipeline", PipelineView(self.ctx)),
         ]
         for name, view in self._views:
             self._tabs.addTab(view, name)
+        # v2.12.0: ref view Follow Up (badge jumlah baris di judul tab).
+        self._fu_view = self._views[1][1]
+        self._update_followup_badge()
         self._tabs.currentChanged.connect(self._on_tab_changed)
         # Anti-terpotong: bila tab bar sempit, teks di-elide dengan '…'
         # (konvensi jelas) + tombol panah scroll — TIDAK pernah dipotong
@@ -425,6 +442,8 @@ class MainWindow(QMainWindow):
         # (view_pipeline.py: ctx.log_line.connect(self._append_log)).
         self.ctx.data_ready.connect(self._on_data_ready)
         self.ctx.filters_changed.connect(self._sync_filter_widgets)
+        # v2.12.0: daftar follow-up berubah → badge jumlah di judul tab.
+        self.ctx.followup_changed.connect(self._on_followup_changed)
 
     def _on_status(self, text: str, kind: str) -> None:
         color = {"done": "#16a34a", "error": "#dc2626"}.get(kind, "#64748b")
@@ -458,6 +477,30 @@ class MainWindow(QMainWindow):
         self._lbl_perm.setText(
             f"{fmt_id(total)} baris • {fmt_id(n_anom)} anomali • run {tstr}")
         self._act_export.setEnabled(True)
+        # v2.12.0: dataset baru — pangkas centangan follow-up yang
+        # barisnya tak ada lagi (pipeline ulang / file berganti). Stale
+        # key tak berbahaya (mask isin), tapi dibuang supaya badge
+        # jujur + followup.json tak menumpuk sampah.
+        dropped = self.ctx.prune_followup()
+        if dropped:
+            self.ctx.set_status(
+                f"✓ {fmt_id(dropped)} centangan follow-up tidak ada lagi "
+                "di data baru — dihapus dari daftar", "done")
+
+    def _on_followup_changed(self) -> None:
+        """Daftar follow-up berubah (toggle/bulk/prune) → badge tab."""
+        self._update_followup_badge()
+
+    def _update_followup_badge(self) -> None:
+        """Judul tab 'Follow Up (N)' — jumlah baris terkumpul."""
+        if not hasattr(self, "_fu_view") or self._fu_view is None:
+            return
+        idx = self._tabs.indexOf(self._fu_view)
+        if idx < 0:
+            return
+        n = len(self.ctx.followup_keys)
+        self._tabs.setTabText(idx, f"Follow Up ({fmt_id(n)})" if n
+                               else "Follow Up")
 
     def _fill_combo(self, combo: QComboBox, values: list[str]) -> None:
         combo.blockSignals(True)

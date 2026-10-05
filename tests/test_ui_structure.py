@@ -26,7 +26,8 @@ MANIFEST = Path(__file__).resolve().parent / "fixtures" / "ui_methods_manifest.t
 EXPECTED_MODULES = [
     "__init__.py", "shared.py", "theme.py", "state.py", "models.py",
     "workers.py", "widgets.py", "app.py",
-    "view_anomali.py", "view_hari.py", "view_periode.py", "view_pipeline.py",
+    "view_anomali.py", "view_followup.py", "view_hari.py",
+    "view_periode.py", "view_pipeline.py",
 ]
 
 # File mixin Tkinter lama — TIDAK BOLEH kembali (rebuild = penggantian total)
@@ -41,15 +42,18 @@ OLD_MIXIN_FILES = [
 # v2.8.0: view_uang / view_peer / view_kualitas dihapus total (8 → 5 tab)
 # v2.8.1: view_jelajah / view_waktu dihapus total (5 → 3 tab)
 # v2.9.0: view_hari DITAMBAHKAN (tab Hari Mencurigakan — 3 → 4 tab)
+# v2.12.0: view_followup DITAMBAHKAN (tab Follow Up — 4 → 5 tab)
 DATA_VIEWS = {
     "view_anomali.py": "AnomaliView",
+    "view_followup.py": "FollowUpView",
     "view_hari.py": "HariView",
     "view_periode.py": "PeriodeView",
 }
 
-# v2.9.0: 3 → 4 tab (+ Hari Mencurigakan — bukti hari 1-31)
+# v2.9.0: 3 → 4 tab (+ Hari Mencurigakan); v2.12.0: 4 → 5 (+ Follow Up,
+# tepat setelah Anomali — alur buruan → tindak lanjut)
 VIEW_TAB_TITLES = [
-    "Anomali", "Hari Mencurigakan", "Banding Periode", "Pipeline",
+    "Anomali", "Follow Up", "Hari Mencurigakan", "Banding Periode", "Pipeline",
 ]
 
 
@@ -159,19 +163,23 @@ class TestUiStructure:
         src = inspect.getsource(MainWindow._build_body)
         for title in VIEW_TAB_TITLES:
             assert f'("{title}"' in src, f"tab '{title}' tidak dibangun"
-        # 4 judul (v2.9.0), tidak ada duplikat
-        assert len(VIEW_TAB_TITLES) == len(set(VIEW_TAB_TITLES)) == 4
+        # 5 judul (v2.12.0), tidak ada duplikat
+        assert len(VIEW_TAB_TITLES) == len(set(VIEW_TAB_TITLES)) == 5
 
     def test_window_dibangun_offscreen(self):
-        """MainWindow + 4 view ter-instantiate tanpa display (smoke)."""
+        """MainWindow + 5 view ter-instantiate tanpa display (smoke).
+
+        Judul dibandingkan tanpa badge '(N)' — bila followup.json ada
+        isinya (app pernah dijalankan di repo), tab Follow Up tampil
+        'Follow Up (N)' yang tetap sah."""
         import sys
         from PySide6.QtWidgets import QApplication
         app = QApplication.instance() or QApplication(sys.argv)
         from ui.app import MainWindow
         win = MainWindow()
-        assert win._tabs.count() == 4
-        for i in range(4):
-            assert win._tabs.tabText(i) == VIEW_TAB_TITLES[i]
+        assert win._tabs.count() == 5
+        for i in range(5):
+            assert win._tabs.tabText(i).split(" (")[0] == VIEW_TAB_TITLES[i]
         win.close()
 
 

@@ -1,5 +1,5 @@
 {
-  "version": "2.11.0",
+  "version": "2.12.0",
   "_comment": "Threshold & defaults untuk Waste Anomaly Detection. Ubah nilai di sini, tidak perlu edit kode Python.",
   "thresholds": {
     "TH_SPIKE": 3,

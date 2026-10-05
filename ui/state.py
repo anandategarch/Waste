@@ -18,11 +18,18 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 from PySide6.QtCore import QObject, Signal
 
 from .shared import _apply_filters, _build_search_blob
+from waste_anomaly.followup import (
+    fingerprint_series,
+    load_followup_keys,
+    save_followup_keys,
+    select_followup_rows,
+)
 from waste_anomaly.period_history import month_sort_key
 
 # Label filter aktif → chip Indonesia (dari shared lama)
@@ -39,10 +46,15 @@ class AppContext(QObject):
     history_ready = Signal()
     baseline_changed = Signal()  # v2.10.2: pilihan pembanding combo berubah
     filters_changed = Signal()
+    followup_changed = Signal()  # v2.12.0: daftar follow-up baris berubah
     status = Signal(str, str)
     log_line = Signal(str)
 
-    def __init__(self, config: dict, parent: QObject | None = None) -> None:
+    def __init__(self, config: dict, parent: QObject | None = None,
+                 followup_path=None) -> None:
+        """``followup_path`` (v2.12.0): jalur followup.json — None = tanpa
+        persistensi disk (mode test). Dipasang saat konstruksi supaya
+        centangan termuat SEBELUM view dibangun (badge tab akurat)."""
         super().__init__(parent)
         self.config = config
         self.df: pd.DataFrame | None = None
@@ -106,6 +118,17 @@ class AppContext(QObject):
         # ulang antar-refresh (cache fit DataTable tetap kena, kontrak
         # 'konsumen hanya membaca' tetap aman: enrich selalu di salinan).
         self._change_cache: "OrderedDict[tuple, pd.DataFrame]" = OrderedDict()
+        # v2.12.0: daftar follow-up (sidik jari baris, urutan centang).
+        # Persisten bila _followup_path dipasang; memo fingerprint per
+        # data_version (dibangun malas — 25.9k baris ≈ 0,1-0,2 dtk sekali
+        # per dataset, pola _search_blob).
+        self._followup_path = (
+            None if followup_path is None else Path(str(followup_path)))
+        self.followup_keys: list[str] = (
+            load_followup_keys(self._followup_path)
+            if self._followup_path is not None else [])
+        self._fp_series: pd.Series | None = None
+        self._fp_version: int = -1
 
     # ------------------------------------------------------------
     # DATA
@@ -321,6 +344,108 @@ class AppContext(QObject):
         if (self.search or "").strip():
             parts.append(f'{CHIP_LABELS["search"]}: "{self.search.strip()}"')
         return " • ".join(parts)
+
+    # ------------------------------------------------------------
+    # FOLLOW UP (v2.12.0)
+    # ------------------------------------------------------------
+    def followup_set(self) -> set[str]:
+        """Set sidik jari tercentang (lookup O(1))."""
+        return set(self.followup_keys)
+
+    def toggle_followup(self, fp: str, checked: bool) -> bool:
+        """Tambah/hapus SATU baris (centang/lepas) + broadcast + simpan.
+
+        Return True bila state benar-benar berubah (klik ulang nilai
+        sama = no-op tanpa broadcast — anti render sia-sia)."""
+        fset = self.followup_set()
+        if checked == (fp in fset):
+            return False
+        if checked:
+            self.followup_keys.append(fp)
+        else:
+            self.followup_keys = [k for k in self.followup_keys if k != fp]
+        self._persist_followup()
+        self.followup_changed.emit()
+        return True
+
+    def add_followup_many(self, fps) -> int:
+        """Centang BANYAK baris sekaligus — SATU broadcast (pola
+        set_filters_multi: satu render, bukan satu per baris).
+
+        Return jumlah baris BENAR-BENAR baru — duplikat DI DALAM batch
+        maupun yang sudah ada di daftar dihitung 0 (batch 'tombol centang
+        semua' berisi kembar identik — dedup wajib, else key ganda
+        menumpuk di followup.json)."""
+        seen = self.followup_set()
+        added: list[str] = []
+        for fp in fps:
+            s = str(fp)
+            if s and s != "nan" and s not in seen:
+                seen.add(s)
+                added.append(s)
+        if not added:
+            return 0
+        self.followup_keys.extend(added)
+        self._persist_followup()
+        self.followup_changed.emit()
+        return len(added)
+
+    def clear_followup(self) -> int:
+        """Kosongkan seluruh daftar + broadcast. Return jumlah dihapus."""
+        n = len(self.followup_keys)
+        if n == 0:
+            return 0
+        self.followup_keys = []
+        self._persist_followup()
+        self.followup_changed.emit()
+        return n
+
+    def _persist_followup(self) -> None:
+        if self._followup_path is None:
+            return
+        if not save_followup_keys(self.followup_keys, self._followup_path):
+            self.set_status("⚠ Gagal menyimpan daftar follow-up (disk?)",
+                            "error")
+
+    def fingerprints(self) -> pd.Series | None:
+        """Sidik jari per baris dataset PENUH (memo per data_version)."""
+        if self.df is None:
+            return None
+        if self._fp_series is None or self._fp_version != self.data_version:
+            self._fp_series = fingerprint_series(self.df)
+            self._fp_version = self.data_version
+        return self._fp_series
+
+    def followup_df(self) -> pd.DataFrame | None:
+        """Baris follow-up dari dataset PENUH (bukan terfilter — shortlist
+        menetap terhadap filter/slicer) + kolom __FP + dedup kembar.
+
+        None = belum ada dataset; df kosong = tidak ada centangan."""
+        if self.df is None:
+            return None
+        if not self.followup_keys:
+            return self.df.iloc[:0].copy()
+        fps = self.fingerprints()
+        if fps is None:
+            return None
+        return select_followup_rows(self.df, fps, self.followup_keys)
+
+    def prune_followup(self) -> int:
+        """Buang key yang barisnya tak ada lagi di dataset (dipanggil
+        MainWindow pasca data_ready — pipeline baru/file berganti).
+
+        Return jumlah dihapus (0 = semua centangan masih valid)."""
+        if not self.followup_keys or self.df is None:
+            return 0
+        fps = self.fingerprints()
+        valid: set = set(fps) if fps is not None else set()
+        keep = [k for k in self.followup_keys if k in valid]
+        dropped = len(self.followup_keys) - len(keep)
+        if dropped:
+            self.followup_keys = keep
+            self._persist_followup()
+            self.followup_changed.emit()
+        return dropped
 
     # ------------------------------------------------------------
     # LOG / STATUS

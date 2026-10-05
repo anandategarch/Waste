@@ -13,6 +13,7 @@ shared.py::bundle_res_dir
 shared.py::fmt_id
 state.py::AppContext
 view_anomali.py::AnomaliView
+view_followup.py::FollowUpView
 view_anomali.py::DetailDialog
 view_anomali.py::DetailPanel
 view_hari.py::HariView

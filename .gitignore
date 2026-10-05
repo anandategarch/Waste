@@ -29,6 +29,9 @@ output/*.log
 
 # Filter profiles (user-specific, auto-generated)
 filters.json
+followup.json
+followup.json.bad
+followup.json.tmp
 
 # Daftar file pembanding periode (user-specific, auto-generated — v2.10.0)
 history_files.json
