@@ -30,7 +30,18 @@ _NUM_COLS = {"ANOMALY SCORE", "TOTAL", "MAX", "AVG", "HARI MAX", "RANK",
              "TOTAL / BOM", "MAX SHARE", "LAST DAY SHARE", "TopTotal",
              "Total_Waste", "Max_Waste", "Persentase", "Cumulative",
              "Jumlah_Barang", "Total_A", "Total_B", "Delta", "Delta %",
-             "Waste per Hari", "Hari Aktif"}
+             "Waste per Hari", "Hari Aktif",
+             "% to BOM", "Rill % to BOM"}
+
+# Kolom rasio (nilai 0..1) yang ditampilkan sebagai PERSEN — v2.8.1.
+# '% to BOM' = waste dibanding penjualan kuantiti (BOM = qty terjual);
+# nilai non-numerik seperti penanda 'Cek' (tak ada data penjualan)
+# diteruskan apa adanya. MAX / BOM, TOTAL / BOM, MAX SHARE, LAST DAY
+# SHARE ikut format persen supaya konsisten & terbaca (dulu '0,00').
+PCT_COLS = frozenset({
+    "% to BOM", "Rill % to BOM", "MAX / BOM", "TOTAL / BOM",
+    "MAX SHARE", "LAST DAY SHARE",
+})
 
 
 def fmt_cell(value, ndigits: int = 2) -> str:
@@ -56,6 +67,27 @@ def fmt_cell(value, ndigits: int = 2) -> str:
             return fmt_id(f, 0)
         return fmt_id(f, ndigits)
     return str(value)
+
+
+def fmt_pct(value, ndigits: int = 2) -> str:
+    """Format rasio 0..1 sebagai persen gaya Indonesia (v2.8.1).
+
+    Contoh: fmt_pct(0.01335) → '1,34%'; fmt_pct(0.000914) → '0,09%'.
+    Penanda non-numerik ('Cek' = tak ada data penjualan/BOM) diteruskan
+    apa adanya; NaN/None → '' (konvensi sama dengan fmt_cell).
+    """
+    if (value is None or value is pd.NA or value is pd.NaT
+            or (isinstance(value, (float, np.floating))
+                and math.isnan(float(value)))):
+        return ""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if f != f:  # NaN
+        return ""
+    s = f"{f * 100:,.{ndigits}f}"
+    return s.replace(",", "X").replace(".", ",").replace("X", ".") + "%"
 
 
 class PandasTableModel(QAbstractTableModel):
@@ -115,9 +147,12 @@ class PandasTableModel(QAbstractTableModel):
         value = self._df.iat[row, col]
 
         if role in (Qt.DisplayRole, Qt.EditRole):
+            if col_name in PCT_COLS:
+                return fmt_pct(value)
             return fmt_cell(value, self._ndigits)
         if role == Qt.ToolTipRole:
-            text = fmt_cell(value, self._ndigits)
+            text = (fmt_pct(value) if col_name in PCT_COLS
+                    else fmt_cell(value, self._ndigits))
             return text if len(str(text)) > 18 else None
         if role == Qt.TextAlignmentRole:
             # V26-M1: numpy int/float juga rata kanan (np.int64 dulunya

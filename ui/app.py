@@ -6,8 +6,8 @@ Struktur:
 - Sidebar kiri: filter (cari, cabang, status, keterangan, rentang hari,
   chip aktif) + profil filter tersimpan — bisa disembunyikan/dimunculkan
   (v2.8.0: tabel & chart memakai lebar penuh saat sidebar disembunyikan)
-- QTabWidget 5 view (v2.8.0: 8 → 5 — tab Uang, Peer, Kualitas Data
-  dihapus total): Anomali (default) · Jelajah · Waktu · Banding Periode ·
+- QTabWidget 3 view (v2.8.1: 5 → 3 — tab Jelajah & Waktu dihapus total
+  bersama modul chart/dashboard): Anomali (default) · Banding Periode ·
   Pipeline — render lazy per-view (H2)
 - Status bar: pesan status + hitungan baris/anomali permanen
 """
@@ -56,10 +56,8 @@ from .shared import APP_DIR, APP_TITLE, APP_VERSION, bundle_res_dir, fmt_id
 from .state import AppContext
 from .theme import QSS
 from .view_anomali import AnomaliView
-from .view_jelajah import JelajahView
 from .view_periode import PeriodeView
 from .view_pipeline import PipelineView
-from .view_waktu import WaktuView
 from .widgets import Card, WLabel
 from .workers import ExportWorker
 
@@ -70,32 +68,29 @@ _HELP_HTML = """
 <h3>Tab Anomali (pemburu anomali)</h3>
 <ul>
 <li>Tabel anomali ter-ranking (skor tertinggi di atas; klik header kolom untuk sort).</li>
-<li>Pilih baris → panel detail menampilkan 12 sinyal, angka peer, dan konteks lengkap.</li>
-<li>Tombol drill-down: fokus cabang / item / alasan dari baris terpilih.</li>
+<li>Klik baris → <b>pop-up detail</b>: 12 sinyal, angka peer, % to BOM (waste vs penjualan), dan konteks lengkap.</li>
+<li>Tombol drill-down di pop-up: fokus cabang / item / alasan dari baris terpilih; klik 2× baris = fokus cabang+item.</li>
 <li>"Skor ≥" menyembunyikan anomali ber-skor rendah (skor maksimum = 19).</li>
 </ul>
 <h3>Filter (sidebar kiri)</h3>
 <ul>
-<li>Cari, cabang, status, keterangan, rentang hari — berlaku di tab Anomali & chart interaktif Jelajah.</li>
-<li>Chart interaktif di tab Jelajah bisa DIKLIK untuk drill-down; klik ulang untuk melepas.</li>
+<li>Cari, cabang, status, keterangan, rentang hari — berlaku di tab Anomali.</li>
 <li>Profil filter bisa disimpan & dipulihkan.</li>
-<li>Sidebar bisa disembunyikan (☰ Filter / Ctrl+Shift+F) — tabel & chart memakai lebar penuh.</li>
+<li>Sidebar bisa disembunyikan (☰ Filter / Ctrl+Shift+F) — tabel memakai lebar penuh.</li>
 </ul>
 <h3>Tab lain</h3>
 <ul>
-<li><b>Jelajah</b> — tabel data semua sheet + 12 chart statistik.</li>
-<li><b>Waktu</b> — pola waste per hari / kelas hari / alasan×hari.</li>
 <li><b>Banding Periode</b> — run saat ini vs workbook bulan lalu.</li>
 </ul>
-<p><b>Export</b>: tombol <b>💾 Export Excel</b> di toolbar (selalu tersedia).</p>
-<p>Semua teks & chart dirancang anti-terpotong: teks panjang otomatis
-berpindah baris; chart minimal sebesar ukuran desainnya (scroll bila jendela
-kecil); tabel tanpa cap baris.</p>
+<p><b>Export</b>: tombol <b>💾 Export Excel</b> di toolbar (selalu tersedia) —
+laporan lengkap termasuk sheet analisa (Waste per Hari, Money View, Data Quality).</p>
+<p>Semua teks dirancang anti-terpotong: teks panjang otomatis berpindah
+baris; tabel tanpa cap baris.</p>
 """
 
 
 class MainWindow(QMainWindow):
-    """Jendela utama: toolbar + sidebar filter (bisa di-hide) + 5 tab view + status bar."""
+    """Jendela utama: toolbar + sidebar filter (bisa di-hide) + 3 tab view + status bar."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -180,13 +175,12 @@ class MainWindow(QMainWindow):
         self._split = split  # v2.8.0: referensi utk toggle sidebar
         split.addWidget(self._build_sidebar())
         self._tabs = QTabWidget(split)
-        # v2.8.0: 8 → 5 view — tab Uang, Peer, Kualitas Data dihapus total
-        # (keputusan user; analisis banding lintas-peer & tampilan DQ ikut
-        # hilang; cek data_quality TETAP jalan di pipeline & export).
+        # v2.8.0: 8 → 5 view (Uang/Peer/Kualitas Data dihapus); v2.8.1:
+        # 5 → 3 view — Jelajah & Waktu dihapus total bersama modul chart/
+        # dashboard (keputusan user). Cek data_quality TETAP jalan di
+        # pipeline & export; sheet analisa temporal/money/DQ tetap diexport.
         self._views: list[tuple[str, QWidget]] = [
             ("Anomali", AnomaliView(self.ctx)),
-            ("Jelajah", JelajahView(self.ctx)),
-            ("Waktu", WaktuView(self.ctx)),
             ("Banding Periode", PeriodeView(self.ctx)),
             ("Pipeline", PipelineView(self.ctx)),
         ]
@@ -195,8 +189,8 @@ class MainWindow(QMainWindow):
         self._tabs.currentChanged.connect(self._on_tab_changed)
         # Anti-terpotong: bila tab bar sempit, teks di-elide dengan '…'
         # (konvensi jelas) + tombol panah scroll — TIDAK pernah dipotong
-        # mentah mid-character. 5 tab (v2.8.0) muat longgar bahkan di
-        # jendela 1000px.
+        # mentah mid-character. 3 tab (v2.8.1) muat longgar bahkan di
+        # jendela sempit.
         self._tabs.setElideMode(Qt.TextElideMode.ElideRight)
         self._tabs.setUsesScrollButtons(True)
         split.setSizes([300, 1200])

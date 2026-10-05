@@ -121,18 +121,20 @@ class TestV270FullRecord:
         assert "LAST DAY SHARE" in rec.index
 
     def test_panel_detail_menampilkan_sinyal_terpicu(self):
-        """Inti V26-C1: 12 chip sinyal HIDUP (sebelumnya selalu abu-abu)."""
+        """Inti V26-C1: 12 chip sinyal HIDUP (sebelumnya selalu abu-abu).
+        v2.8.1: panel detail kini hidup di dalam pop-up (view._popup)."""
         from PySide6.QtWidgets import QLabel
         view, _ = _make_view()
         view._table.setCurrentIndex(view._table.model().index(0, 0))
         # baris skor tertinggi memicu S1 + S6 → chip '✓' muncul
-        texts = [l.text() for l in view._detail._content.findChildren(QLabel)]
+        panel = view._popup._panel
+        texts = [l.text() for l in panel._content.findChildren(QLabel)]
         assert any("✓" in t for t in texts), texts
         assert any(t.startswith("S1 ") or "S1 ·" in t for t in texts)
         # seksi alasan (butuh kolom ANOMALY REASONS — tidak ada di irisan lama)
         assert any(t == "Alasan terdeteksi" for t in texts)
         # judul panel memuat skor baris terpilih
-        assert "Skor" in view._detail._title.text()
+        assert "Skor" in panel._title.text()
 
     def test_visible_cols_pada_datatable_murni(self):
         _qapp()
@@ -351,10 +353,11 @@ class TestV270DetailClear:
         from ui.view_anomali import DetailPanel
         view, _ = _make_view()
         view._table.setCurrentIndex(view._table.model().index(0, 0))
-        assert "Skor" in view._detail._title.text()
-        view._detail.clear()
-        assert view._detail._title.text() == DetailPanel._PROMPT
-        lay = view._detail._content.layout()
+        panel = view._popup._panel
+        assert "Skor" in panel._title.text()
+        panel.clear()
+        assert panel._title.text() == DetailPanel._PROMPT
+        lay = panel._content.layout()
         assert lay is None or lay.count() == 0
 
     def test_refresh_table_membersihkan_panel_dan_seleksi(self):
@@ -363,10 +366,12 @@ class TestV270DetailClear:
         view, _ = _make_view()
         view._table.setCurrentIndex(view._table.model().index(0, 0))
         assert view._table.selected_record() is not None
-        assert "Skor" in view._detail._title.text()
+        assert "Skor" in view._popup._panel._title.text()
         # filter berubah → render ulang → panel + seleksi tidak basi
+        # (v2.8.1: pop-up juga harus tertutup)
         view._refresh_table()
-        assert view._detail._title.text() == DetailPanel._PROMPT
+        assert view._popup.isHidden(), "pop-up harus tertutup saat refresh"
+        assert view._popup._panel._title.text() == DetailPanel._PROMPT
         assert view._table.selected_record() is None
 
 
@@ -395,8 +400,10 @@ class TestV270DoubleKlikCoalesce:
         assert len(calls) == 1
         assert ctx.active_filters["cabang"] == rec.get("NAMA RESTO")
         assert ctx.active_filters["item"] == rec.get("NAMA BARANG")
-        # tabel ter-render ulang → panel detail tidak basi (V26-L12 ikut)
-        assert view._detail._title.text() == DetailPanel._PROMPT
+        # tabel ter-render ulang → pop-up detail tidak basi (V26-L12 ikut;
+        # v2.8.1: pop-up tertutup + panel kembali ke prompt)
+        assert view._popup.isHidden()
+        assert view._popup._panel._title.text() == DetailPanel._PROMPT
 
 
 class TestChipSinyalDariReasonsRiil:

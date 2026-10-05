@@ -1,22 +1,20 @@
 """view_anomali.py — view utama (default): perburuan anomali (v2.6.0).
 
 Landing pertama aplikasi: tabel anomali TER-RANKING (skor turun) + KPI
-terfilter + panel detail baris terpilih (12 sinyal + peer + drill-down).
-Semua teks word-wrap; tabel tanpa cap baris; kolom auto-width + wrap.
+terfilter. Semua teks word-wrap; tabel tanpa cap baris; kolom auto-width
++ wrap.
 
-v2.8.0: tabel diberi ruang vertikal dominan — header kartu dirampingkan
-(judul satu baris + hint digabung), rasio splitter 3:2 → 5:2, tinggi
-minimum tabel 200px, dan panel detail bisa DIRINGKAN total lewat tombol
-"⌃ Rapikan Detail" (tabel memanjang memenuhi seluruh tinggi view).
-Diagnostik geometri v2.7.0 di laptop 1024×700: tabel hanya 133px
-(±3 baris terlihat) — 144px habis untuk judul wrap + hint terpisah +
-margin, dan detail mengambil 38% ruang walau kosong.
+v2.8.1: panel detail inline DIGANTI pop-up — klik baris tabel membuka
+jendela pop-up non-modal berisi 12 sinyal + peer + uang + tombol
+drill-down. Tabel kini memenuhi SELURUH tinggi view (tanpa splitter).
+Kolom "% to BOM" (waste dibanding penjualan kuantiti) ditambahkan ke
+tabel per-ranking; kolom rasio ditampilkan sebagai persen.
 """
 from __future__ import annotations
 
 import pandas as pd
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QDialog,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -25,27 +23,24 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
-    QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
-from .models import fmt_cell
+from .models import PCT_COLS, fmt_cell, fmt_pct
 from .shared import fmt_id
 from .state import AppContext
 from .widgets import Card, DataTable, KpiStrip, StatusChip, WLabel, status_chip_for
 from waste_anomaly.signals import SIGNAL_PARTS
 
-# Kolom tabel anomali — ramping (detail lengkap ada di panel bawah).
-# v2.6.1: 10 → 7 kolom. MAX / HARI MAX / RANGKING WASTE dihapus dari tabel
-# karena duplikatif: ketiganya tampil lengkap di panel detail (DETAIL_COLS),
-# Jelajah, dan export Excel; RANGKING WASTE mengulang ranking tabel itu
-# sendiri (tabel sudah terurut skor). 7 kolom membuat semua header muat
-# TANPA scrollbar horizontal pada ukuran default (1440×900) maupun laptop
-# umum (1366×768) — mandat zero-terpotong.
+# Kolom tabel anomali — ramping (detail lengkap ada di pop-up detail).
+# v2.6.1: 10 → 7 kolom (MAX / HARI MAX / RANGKING WASTE duplikatif).
+# v2.8.1: 7 → 8 — "% to BOM" (waste vs penjualan kuantiti) ditambahkan
+# setelah TOTAL sesuai permintaan user: rasio per-ranking terlihat langsung
+# di tabel. Nilai 'Cek' = item tanpa data penjualan (tak bisa dihitung).
 TABLE_COLS = [
     "ANOMALY SCORE", "ANOMALY STATUS", "NAMA RESTO", "NAMA BARANG",
-    "JENIS", "KETERANGAN", "TOTAL",
+    "JENIS", "KETERANGAN", "TOTAL", "% to BOM",
 ]
 
 # 12 sinyal — label ringkas utk chip + fragmen teks ANOMALY REASONS
@@ -72,11 +67,11 @@ SIGNALS: list[tuple[str, str, str]] = [
     (col, _CHIP_LABELS[col], frag) for col, frag in SIGNAL_PARTS
 ]
 
-# Metrik konteks yang ditampilkan di panel detail (bila kolomnya ada)
+# Metrik konteks yang ditampilkan di detail pop-up (bila kolomnya ada)
 DETAIL_COLS = [
     "ANOMALY SCORE", "ANOMALY STATUS", "NAMA RESTO", "NAMA BARANG",
     "JENIS", "KETERANGAN", "SOURCE DATA", "TOTAL", "MAX", "AVG",
-    "HARI MAX", "SATUAN", "TOTAL BOM", "PEER COUNT",
+    "HARI MAX", "SATUAN", "TOTAL BOM", "% to BOM", "PEER COUNT",
     "PEER MEDIAN TOTAL", "PEER MEDIAN MAX", "TOTAL / PEER MEDIAN",
     "MAX / PEER MEDIAN MAX", "MAX / BOM", "TOTAL / BOM", "MAX SHARE",
     "LAST DAY SHARE", "KATEGORI ANOMALI", "RANGKING WASTE",
@@ -84,11 +79,15 @@ DETAIL_COLS = [
 
 
 class DetailPanel(Card):
-    """Panel detail satu baris anomali: identitas + sinyal + drill-down."""
+    """Panel detail satu baris anomali: identitas + sinyal + drill-down.
+
+    v2.8.1: panel ini tinggal DI DALAM DetailDialog (pop-up) — bukan lagi
+    bagian splitter di bawah tabel.
+    """
 
     # Prompt default — dipakai __init__ DAN clear() (V26-L12)
-    _PROMPT = ("Pilih baris anomali di tabel atas untuk melihat detail "
-               "lengkapnya (12 sinyal, peer, uang).")
+    _PROMPT = ("Klik baris anomali di tabel untuk menampilkan detailnya "
+               "di sini (12 sinyal, peer, uang).")
 
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -205,7 +204,12 @@ class DetailPanel(Card):
             if col in rec.index:
                 key = QLabel(f"{col}:", metrics)
                 key.setStyleSheet("color:#64748b;")
-                val_lbl = WLabel(fmt_cell(rec.get(col)), metrics)
+                # v2.8.1: kolom rasio (BOM/SHARE) tampil sebagai persen —
+                # '0,00080' mentah tak terbaca manusia.
+                val = rec.get(col)
+                shown = (fmt_pct(val) if col in PCT_COLS
+                         else fmt_cell(val))
+                val_lbl = WLabel(shown, metrics)
                 val_lbl.setStyleSheet("font-weight:600;")
                 fl.addRow(key, val_lbl)
         lay.addWidget(metrics)
@@ -242,8 +246,35 @@ class DetailPanel(Card):
         return lbl
 
 
+class DetailDialog(QDialog):
+    """Pop-up detail baris anomali (v2.8.1) — pengganti panel inline.
+
+    Non-modal: tabel tetap bisa diklik / di-sort / di-scroll saat pop-up
+    terbuka. Satu instance dipakai ulang — setiap klik baris memperbarui
+    isi pop-up yang sama (bukan menumpuk jendela baru). Tutup lewat X
+    kapan saja; klik baris lain membukanya kembali.
+    """
+
+    def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Detail Anomali — 12 Sinyal & Pembanding")
+        self.setModal(False)
+        self.resize(920, 640)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 8, 8, 8)
+        self._panel = DetailPanel(ctx, self)
+        lay.addWidget(self._panel)
+
+    def show_record(self, rec: pd.Series) -> None:
+        """Tampilkan record di panel + munculkan pop-up di depan."""
+        self._panel.show_record(rec)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+
 class AnomaliView(QWidget):
-    """View 'Anomali': KPI + tabel ranking + panel detail + ambang skor."""
+    """View 'Anomali': KPI + tabel ranking (penuh) + pop-up detail."""
 
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -274,26 +305,17 @@ class AnomaliView(QWidget):
         self._lbl_count = WLabel("", ctrl)
         self._lbl_count.setObjectName("hint")
         cl.addWidget(self._lbl_count, 1)
-        # v2.8.0: rikan/munculkan panel detail — saat dirikan, tabel
-        # memanjang memenuhi seluruh tinggi view.
-        self._btn_detail = QPushButton("⌃ Rapikan Detail", ctrl)
-        self._btn_detail.setToolTip(
-            "Sembunyikan panel detail — tabel anomali memanjang penuh ke bawah.")
-        self._btn_detail.clicked.connect(self._toggle_detail)
-        cl.addWidget(self._btn_detail)
         lay.addWidget(ctrl)
 
-        # Splitter: tabel (atas) + detail (bawah)
-        # v2.8.0: rasio 3:2 → 5:2 (tabel dominan; detail punya scroll
-        # internal sendiri) + tinggi minimum tabel 200px & kartu 240px.
-        self._split = QSplitter(Qt.Orientation.Vertical, self)
-        table_card = Card(self._split)
+        # Kartu tabel — memenuhi SELURUH sisa tinggi view (v2.8.1: tanpa
+        # splitter/panel inline; detail hadir sebagai pop-up saat baris
+        # diklik).
+        table_card = Card(self)
         table_card.setMinimumHeight(240)
         tcl = QVBoxLayout(table_card)
         tcl.setContentsMargins(12, 10, 12, 10)
         tcl.setSpacing(6)
-        # v2.8.0: judul satu baris (dulu wrap 2-3 baris — makan ±100px);
-        # petunjuk interaksi digabung ke satu baris hint.
+        # v2.8.0: judul satu baris (dulu wrap 2-3 baris — makan ±100px).
         title = WLabel("Tabel Anomali Ter-ranking", table_card)
         title.setObjectName("cardTitle")
         tcl.addWidget(title)
@@ -303,28 +325,22 @@ class AnomaliView(QWidget):
             lambda *_: self._on_selection())
         self._table.double_clicked.connect(self._on_double)
         tcl.addWidget(self._table, 1)
-        hint = WLabel("💡 Klik header utk sort · klik 2× baris = fokus cabang+item · pilih baris utk detail", table_card)
+        # v2.8.1: hint baru — perilaku pop-up (dulu: 'pilih baris utk
+        # detail' ke panel inline, dihapus bersama splitter).
+        hint = WLabel(
+            "💡 Klik baris = detail pop-up · klik 2× = fokus cabang+item · klik header = sort",
+            table_card)
         hint.setObjectName("hint")
         tcl.addWidget(hint)
+        lay.addWidget(table_card, 1)
 
-        self._detail = DetailPanel(ctx, self._split)
-        self._detail.setMinimumHeight(150)
-        self._split.setStretchFactor(0, 5)
-        self._split.setStretchFactor(1, 2)
-        self._split.setSizes([560, 240])
-        # v2.8.0: tabel tidak boleh runtuh total oleh drag handle —
-        # hanya panel detail yang boleh dirikan (via tombol).
-        self._split.setCollapsible(0, False)
-        self._split.setCollapsible(1, True)
-        lay.addWidget(self._split, 1)
+        # Pop-up detail (v2.8.1) — satu instance dipakai ulang.
+        self._popup = DetailDialog(ctx, self)
 
         # Reaksi state — pola lazy H2: view tak terlihat → tandai dirty,
         # render saat dibuka (on_shown). View default biasanya terlihat saat
         # pipeline selesai → render langsung.
         self._dirty = True
-        # v2.8.0: ukuran splitter saat panel detail dirikan (dipulihkan
-        # saat detail dimunculkan lagi).
-        self._detail_sizes: list[int] = []
         # v2.7.0 (V26-L4): guard coalesce — _on_double menerapkan dua filter
         # sekaligus TANPA render perantara (satu render di akhir).
         self._batch_filters = False
@@ -350,28 +366,6 @@ class AnomaliView(QWidget):
         if self._dirty:
             self.refresh()
 
-    def _toggle_detail(self) -> None:
-        """v2.8.0: rikan/munculkan panel detail.
-
-        Saat dirikan: ukuran splitter disimpan dulu, DetailPanel di-hidden —
-        QSplitter lalu memberi SELURUH tinggi ke kartu tabel (tabel
-        memanjang ke bawah). Saat dimunculkan: ukuran tersimpan dipulihkan.
-        isHidden() (bukan isVisible()) dipakai agar toggle tetap benar saat
-        view sedang tidak aktif (tab lain terbuka).
-        """
-        if not self._detail.isHidden():
-            self._detail_sizes = self._split.sizes()
-            self._detail.setHidden(True)
-            self._btn_detail.setText("⌄ Tampilkan Detail")
-            self._ctx.set_status(
-                "✓ Panel detail dirikan — tabel memanjang penuh", "done")
-        else:
-            self._detail.setHidden(False)
-            if any(self._detail_sizes):
-                self._split.setSizes(self._detail_sizes)
-            self._btn_detail.setText("⌃ Rapikan Detail")
-            self._ctx.set_status("✓ Panel detail dimunculkan", "done")
-
     # ------------------------------------------------------------
     def refresh(self) -> None:
         """Dataset baru: KPI + tabel (filter sudah direset oleh state)."""
@@ -387,12 +381,13 @@ class AnomaliView(QWidget):
         self._ctx.set_score_min(value)
 
     def _refresh_table(self) -> None:
-        # v2.7.0 (V26-L12): dataset/filter berubah → seleksi + panel detail
-        # lama bisa basi (record terpilih mungkin sudah tak lolos filter) —
-        # kosongkan keduanya (model reset mengosongkan seleksi; panel tidak
-        # dibersihkan oleh siapa pun sebelum ini).
+        # v2.7.0 (V26-L12): dataset/filter berubah → seleksi + detail lama
+        # bisa basi (record terpilih mungkin sudah tak lolos filter) —
+        # kosongkan keduanya (model reset mengosongkan seleksi).
+        # v2.8.1: panel detail kini di pop-up → tutup + kosongkan.
         self._table.clearSelection()
-        self._detail.clear()
+        self._popup.hide()
+        self._popup._panel.clear()
         # Sinkron spin ambang skor (reset eksternal, mis. tombol Hapus Filter)
         if self._spin_score.value() != self._ctx.score_min:
             self._spin_score.blockSignals(True)
@@ -407,9 +402,15 @@ class AnomaliView(QWidget):
         # v2.7.0 (V26-C1): model memegang df PENUH (bukan irisan TABLE_COLS
         # lagi) — kolom non-tabel disembunyikan via visible_cols. Record
         # terpilih / double-klik tetap membawa SEMUA kolom (12 sinyal,
-        # ANOMALY REASONS, peer, MAX, ...) ke panel detail + drill-down.
+        # ANOMALY REASONS, peer, MAX, ...) ke pop-up detail + drill-down.
+        # v2.8.1: 8 kolom + sidebar membuat lantai header melebihi viewport
+        # laptop (1024) — JENIS & KETERANGAN masuk narrow_hide (disembunyikan
+        # responsif saat sempit, muncul lagi saat melebar; alasan tetap ada
+        # di pop-up detail) supaya kolom inti + % to BOM tetap muat TANPA
+        # scrollbar horizontal.
         self._table.set_dataframe(df, sort_desc="ANOMALY SCORE",
-                                  narrow_hide=["JENIS"], visible_cols=cols)
+                                  narrow_hide=["JENIS", "KETERANGAN"],
+                                  visible_cols=cols)
         full = len(self._ctx.df) if self._ctx.df is not None else 0
         if len(df) == 0:
             self._lbl_count.setText("0 anomali lolos filter — longgarkan filter atau ambang skor.")
@@ -425,9 +426,10 @@ class AnomaliView(QWidget):
             self._kpi.update_from(filtered, full)
 
     def _on_selection(self) -> None:
+        """Klik baris (atau navigasi keyboard) → pop-up detail (v2.8.1)."""
         rec = self._table.selected_record()
         if rec is not None:
-            self._detail.show_record(rec)
+            self._popup.show_record(rec)
 
     def _on_double(self, rec: pd.Series) -> None:
         """Klik 2×: fokus cabang+item sekaligus (drill-down P8).

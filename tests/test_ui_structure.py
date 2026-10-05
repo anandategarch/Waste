@@ -26,8 +26,7 @@ MANIFEST = Path(__file__).resolve().parent / "fixtures" / "ui_methods_manifest.t
 EXPECTED_MODULES = [
     "__init__.py", "shared.py", "theme.py", "state.py", "models.py",
     "workers.py", "widgets.py", "app.py",
-    "view_anomali.py", "view_jelajah.py", "view_waktu.py",
-    "view_periode.py", "view_pipeline.py",
+    "view_anomali.py", "view_periode.py", "view_pipeline.py",
 ]
 
 # File mixin Tkinter lama — TIDAK BOLEH kembali (rebuild = penggantian total)
@@ -40,16 +39,15 @@ OLD_MIXIN_FILES = [
 
 # View data wajib punya kontrak lazy-render (refresh + on_shown)
 # v2.8.0: view_uang / view_peer / view_kualitas dihapus total (8 → 5 tab)
+# v2.8.1: view_jelajah / view_waktu dihapus total (5 → 3 tab)
 DATA_VIEWS = {
     "view_anomali.py": "AnomaliView",
-    "view_jelajah.py": "JelajahView",
-    "view_waktu.py": "WaktuView",
     "view_periode.py": "PeriodeView",
 }
 
-# v2.8.0: 8 → 5 tab (Uang, Peer, Kualitas Data dihapus total)
+# v2.8.1: 5 → 3 tab (Jelajah & Waktu dihapus total bersama modul chart)
 VIEW_TAB_TITLES = [
-    "Anomali", "Jelajah", "Waktu", "Banding Periode", "Pipeline",
+    "Anomali", "Banding Periode", "Pipeline",
 ]
 
 
@@ -159,18 +157,18 @@ class TestUiStructure:
         src = inspect.getsource(MainWindow._build_body)
         for title in VIEW_TAB_TITLES:
             assert f'("{title}"' in src, f"tab '{title}' tidak dibangun"
-        # 5 judul (v2.8.0), tidak ada duplikat
-        assert len(VIEW_TAB_TITLES) == len(set(VIEW_TAB_TITLES)) == 5
+        # 3 judul (v2.8.1), tidak ada duplikat
+        assert len(VIEW_TAB_TITLES) == len(set(VIEW_TAB_TITLES)) == 3
 
     def test_window_dibangun_offscreen(self):
-        """MainWindow + 5 view ter-instantiate tanpa display (smoke)."""
+        """MainWindow + 3 view ter-instantiate tanpa display (smoke)."""
         import sys
         from PySide6.QtWidgets import QApplication
         app = QApplication.instance() or QApplication(sys.argv)
         from ui.app import MainWindow
         win = MainWindow()
-        assert win._tabs.count() == 5
-        for i in range(5):
+        assert win._tabs.count() == 3
+        for i in range(3):
             assert win._tabs.tabText(i) == VIEW_TAB_TITLES[i]
         win.close()
 
@@ -178,8 +176,20 @@ class TestUiStructure:
 class TestWidgets:
     def test_widget_classes_ada(self):
         from ui.widgets import (  # noqa: F401
-            Card, ChartCard, DataTable, KpiCard, KpiStrip, MplCanvas, WLabel,
+            Card, DataTable, KpiCard, KpiStrip, StatusChip, WLabel,
+            status_chip_for,
         )
 
-    def test_place_charts_responsive_ada(self):
-        from ui.widgets import place_charts_responsive  # noqa: F401
+    def test_infra_chart_dihapus_dari_widgets(self):
+        """v2.8.1: MplCanvas/ChartCard/place_charts_responsive hanya dipakai
+        view Jelajah & Waktu (dihapus total) — widget chart ikut bersih +
+        import matplotlib hilang dari jalur start-up UI."""
+        import ui.widgets as w
+        for name in ("MplCanvas", "ChartCard", "place_charts_responsive"):
+            assert not hasattr(w, name), (
+                f"widgets.{name} masih ada — infrastruktur chart mati")
+        src = (REPO / "ui" / "widgets.py").read_text(encoding="utf-8")
+        assert "from matplotlib" not in src, (
+            "widgets.py masih mengimpor matplotlib (chart infra sudah mati)")
+        assert "import matplotlib" not in src, (
+            "widgets.py masih mengimpor matplotlib (chart infra sudah mati)")

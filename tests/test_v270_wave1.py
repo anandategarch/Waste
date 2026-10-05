@@ -394,40 +394,7 @@ class TestStaleResultMarker:
             win.close()
 
 
-# ============================================================
-# FIX 6 (V26-L11) — _build_derived_sheets defensif
-# ============================================================
-
-class TestDerivedSheets:
-    def test_anomali_prioritas_tanpa_anomaly_score(self):
-        """ANOMALY STATUS ada tapi ANOMALY SCORE absen → tidak raise,
-        sheet 'Anomali Prioritas' kosong (pre-fix: KeyError sort_values)."""
-        from ui.state import _build_derived_sheets
-        df = pd.DataFrame({
-            "NAMA RESTO": ["A", "B"],
-            "NAMA BARANG": ["I1", "I2"],
-            "JENIS": ["WASTE", "SUSUT"],
-            "ANOMALY STATUS": ["Prioritas Tinggi", "Normal"],
-        })
-        sheets = _build_derived_sheets(df)  # tidak boleh raise
-        assert sheets["Anomali Prioritas"].empty
-
-    def test_per_cabang_total_string_dijumlah_numerik(self):
-        """TOTAL/MAX dtype object (string) → dijumlah NUMERIK (pre-fix:
-        'sum' object menggabungkan teks '1020')."""
-        from ui.state import _build_derived_sheets
-        df = pd.DataFrame({
-            "NAMA RESTO": ["A", "A", "B"],
-            "NAMA BARANG": ["I1", "I1", "I2"],
-            "JENIS": ["WASTE", "WASTE", "SUSUT"],
-            "TOTAL": ["10", "20", "5"],
-            "MAX": ["5", "3", "2"],
-            "ANOMALY STATUS": ["Normal", "Normal", "Normal"],
-        })
-        sheets = _build_derived_sheets(df)
-        pc = sheets["Per Cabang"].set_index("Cabang")
-        assert pc.loc["A", "Total_Waste"] == 30.0  # 10+20, bukan "1020"
-        assert pc.loc["A", "Max_Waste_Harian"] == 5.0
-        ti = sheets["Top Items"].set_index("NAMA BARANG")
-        assert ti.loc["I1", "Total_Waste"] == 30.0
-        assert ti.loc["I2", "Total_Waste"] == 5.0
+# FIX 6 (V26-L11) — _build_derived_sheets defensif: DIHAPUS v2.8.1.
+# _build_derived_sheets + ctx.sheets dihapus dari ui/state.py — satu-
+# satunya konsumen adalah view Jelajah (dihapus total); export Excel
+# membangun sheet analisanya sendiri (ui/workers.py::_extra_sheets).

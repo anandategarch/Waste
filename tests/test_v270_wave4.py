@@ -41,8 +41,7 @@ MANIFEST = Path(__file__).resolve().parent / "fixtures" / "ui_methods_manifest.t
 EXPECTED_MODULES = [
     "__init__.py", "shared.py", "theme.py", "state.py", "models.py",
     "workers.py", "widgets.py", "app.py",
-    "view_anomali.py", "view_jelajah.py", "view_waktu.py",
-    "view_periode.py", "view_pipeline.py",
+    "view_anomali.py", "view_periode.py", "view_pipeline.py",
 ]
 
 
@@ -233,48 +232,23 @@ class TestFmtIdNone:
 # ============================================================
 # Pareto Alasan — TOTAL string di-koersi numerik (v2.7.0)
 # ============================================================
-
-class TestParetoStringTotal:
-    def test_pareto_alasan_total_numerik(self):
-        from ui.state import _build_derived_sheets
-        df = pd.DataFrame({
-            "KETERANGAN": ["Alasan A", "Alasan A", "Alasan B"],
-            "NAMA BARANG": ["x", "y", "z"],
-            "TOTAL": ["100", "50", "25"],  # dtype object — dulu 'sum' teks
-        })
-        pa = _build_derived_sheets(df)["Pareto Alasan"]
-        row_a = pa[pa["KETERANGAN"] == "Alasan A"].iloc[0]
-        assert float(row_a["Total_Waste"]) == 150.0  # 100+50, bukan "10050"
-        assert int(row_a["Jumlah_Barang"]) == 2
-        # Persentase dihitung dari grand total numerik (150 dari 175)
-        top = pa.iloc[0]
-        assert top["KETERANGAN"] == "Alasan A"
-        assert abs(float(top["Persentase"]) - 150.0 / 175.0 * 100) < 1e-9
-        assert abs(float(top["Cumulative"]) - float(top["Persentase"])) < 1e-9
-
-    def test_pareto_total_none_jadi_nol_bukan_crash(self):
-        from ui.state import _build_derived_sheets
-        df = pd.DataFrame({
-            "KETERANGAN": ["A", "B"],
-            "NAMA BARANG": ["x", "y"],
-            "TOTAL": [None, 10.0],
-        })
-        pa = _build_derived_sheets(df)["Pareto Alasan"]
-        assert len(pa) == 2
-        assert float(pa["Total_Waste"].sum()) == 10.0
+# DIHAPUS v2.8.1: _build_derived_sheets dihapus dari ui/state.py —
+# satu-satunya konsumen view Jelajah (dihapus total); koersi numerik
+# TOTAL/MAX yang sejenis tetap terkunci di workers._extra_sheets path
+# (tests/test_priority.py / test_data_quality.py / test_temporal.py).
 
 
 # ============================================================
-# V26-M13 — versi 2.7.0 tunggal di 3 situs
+# V26-M13 — versi tunggal di 3 situs
 # ============================================================
 
 class TestVersiSync:
     def test_versi_sama_di_tiga_situs(self):
-        """v2.8.0: versi disinkronkan di ui/shared.py, __init__.py, dan
+        """v2.8.1: versi disinkronkan di ui/shared.py, __init__.py, dan
         config.json (ganti nama kelas dari TestVersi270 — angka versi
         berubah tiap rilis, lock-nya cukup 'ketiga situs SAMA')."""
         from ui.shared import APP_VERSION
         from waste_anomaly import __version__
         cfg = json.loads(
             (REPO / "waste_anomaly" / "config.json").read_text(encoding="utf-8"))
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.8.0"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.8.1"

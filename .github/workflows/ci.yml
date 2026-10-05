@@ -42,10 +42,9 @@ jobs:
           ruff check . --select E9,F63,F7,F82
         continue-on-error: false
 
-      - name: Test suite (445 test — golden regression + unit + analisa v2.5.0 + kontrak chart/filter v2.5.1 + struktur UI PySide6 v2.6.0 + fix audit v2.7.0 + penyederhanaan & tabel memanjang v2.8.0)
+      - name: Test suite (429 test — golden regression + unit + analisa v2.5.0 + semantik filter v2.5.1 + struktur UI PySide6 v2.6.0 + fix audit v2.7.0 + penyederhanaan v2.8.0 + pop-up detail & kolom % to BOM & 3 view v2.8.1)
         run: python -m pytest tests/ -v --tb=short
         env:
-          MPLBACKEND: Agg
           QT_QPA_PLATFORM: offscreen
 
       - name: Smoke — import paket ui + versi

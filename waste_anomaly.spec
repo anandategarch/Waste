@@ -9,8 +9,9 @@
 #   v2.4.1: saat exe pertama kali jalan, config.json otomatis disalin ke
 #   sidecar di samping exe (waste_anomaly/frozen.py) — edit threshold user
 #   + filters.json + data/ + logs/ semuanya bertahan di folder exe.
-# - matplotlib backend QtAgg di-hook otomatis PyInstaller (v2.6.0);
-#   PySide6 terdeteksi otomatis sebagai dependency import.
+# - v2.8.1: matplotlib DIHAPUS dari aplikasi (modul chart dihapus bersama
+#   tab Jelajah & Waktu) — tidak ada hiddenimport matplotlib lagi; exe jadi
+#   jauh lebih kecil. PySide6 terdeteksi otomatis sebagai dependency import.
 
 import sys
 from pathlib import Path
@@ -24,8 +25,8 @@ datas = [
 ]
 
 hiddenimports = [
-    # v2.6.0: UI PySide6 — backend matplotlib Qt (bukan TkAgg lagi).
-    "matplotlib.backends.backend_qtagg",
+    # v2.8.1: tidak ada lagi backend matplotlib (chart dihapus total) —
+    # cukup dependency yang terdeteksi otomatis dari import statis.
 ]
 
 # calamine opsional — jangan gagalkan build kalau tidak ada

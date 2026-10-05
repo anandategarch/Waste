@@ -1,26 +1,24 @@
 """widgets.py — blok bangunan UI anti-terpotong (v2.6.0).
 
-Jaminan struktural "tidak ada teks/grafik terpotong":
+Jaminan struktural "tidak ada teks terpotong":
 - WLabel: word-wrap default — teks selalu pindah baris, bukan terpotong
-- MplCanvas: ukuran minimum = ukuran desain figure; melebar saat window
-  besar; QScrollArea menjamin window kecil → scrollbar, BUKAN chart terpotong
-- ChartCard: kartu chart dengan judul wrap + area scroll
 - DataTable: QTableView virtualized (tanpa cap 500 baris), lebar kolom dari
   sampel isi + wrap teks panjang + tooltip sel
 - KpiCard/KpiStrip: kartu KPI dengan wrap
+
+v2.8.1: MplCanvas / ChartCard / place_charts_responsive DIHAPUS —
+infrastruktur chart hanya dipakai view Jelajah & Waktu (dihapus total).
+Import matplotlib juga hilang dari jalur start-up UI.
 """
 from __future__ import annotations
 
 import pandas as pd
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-from matplotlib.figure import Figure
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
     QHeaderView,
     QLabel,
-    QScrollArea,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -29,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from .models import PandasTableModel
 from .shared import fmt_id
-from .theme import C_TEXT_MUTED, STATUS_COLORS
+from .theme import STATUS_COLORS
 
 
 class Card(QFrame):
@@ -51,126 +49,6 @@ class WLabel(QLabel):
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         if muted:
             self.setObjectName("muted")
-
-
-# ============================================================
-# MATPLOTLIB CANVAS — jantung jaminan chart tidak terpotong
-# ============================================================
-
-class MplCanvas(FigureCanvasQTAgg):
-    """Canvas matplotlib dengan lantai ukuran (70% lebar / 90% tinggi desain).
-
-    - Window lebih besar → figure melebar penuh (mengisi ruang)
-    - Window lebih kecil → figure mengecil GRADATIF sampai lantai; di bawah
-      lantai QScrollArea menampilkan scrollbar — chart TIDAK pernah dipotong
-      atau diperas hingga tak terbaca. (Jaminan v2.6.0)
-    """
-
-    W_FLOOR = 0.85
-    H_FLOOR = 1.0
-
-    def __init__(self, fig: Figure, parent: QWidget | None = None) -> None:
-        super().__init__(fig)
-        dpi = fig.dpi
-        w, h = fig.get_size_inches()
-        self._min_w = max(int(w * dpi * self.W_FLOOR), 300)
-        self._min_h = max(int(h * dpi * self.H_FLOOR), 220)
-        self.setMinimumSize(self._min_w, self._min_h)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-    def _sync_size(self) -> None:
-        """Sesuaikan ukuran figure dengan canvas (batas bawah = lantai)."""
-        dpi = self.figure.dpi
-        w = max(self._min_w, self.width()) / dpi
-        h = max(self._min_h, self.height()) / dpi
-        cur = self.figure.get_size_inches()
-        if abs(cur[0] - w) > 0.05 or abs(cur[1] - h) > 0.05:
-            self.figure.set_size_inches(w, h, forward=False)
-            self.draw_idle()
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._sync_size()
-
-    def _draw_idle(self) -> None:
-        """Guard race teardown: singleShot matplotlib bisa menembak SETELAH
-        canvas di-deleteLater (libshikoken raise RuntimeError) — telan senyap,
-        canvas memang sudah dibongkar."""
-        try:
-            super()._draw_idle()
-        except RuntimeError:
-            pass
-
-
-class ChartCard(Card):
-    """Kartu berisi satu chart: judul wrap + QScrollArea + MplCanvas.
-
-    ``replace_fig(fig)`` melepas figure lama (dispose + disconnect cid —
-    pola H3 anti-leak) lalu menanam figure baru.
-    """
-
-    def __init__(self, title: str = "", parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 10, 12, 10)
-        lay.setSpacing(6)
-        self._title = WLabel(title, self)
-        self._title.setObjectName("cardTitle")
-        lay.addWidget(self._title)
-        self._scroll = QScrollArea(self)
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        lay.addWidget(self._scroll, 1)
-        self._canvas: MplCanvas | None = None
-        self._placeholder: QWidget | None = None
-        self.set_message("")
-
-    def set_message(self, msg: str, error: bool = False) -> None:
-        """Tampilkan pesan (data kosong / error) menggantikan chart."""
-        self._dispose_canvas()
-        lbl = WLabel(msg, self)
-        lbl.setAlignment(Qt.AlignCenter)
-        if error:
-            lbl.setStyleSheet("color:#dc2626;")
-        else:
-            lbl.setStyleSheet(f"color:{C_TEXT_MUTED};")
-        wrap = QWidget()
-        v = QVBoxLayout(wrap)
-        v.setContentsMargins(24, 24, 24, 24)
-        v.addWidget(lbl, 1)
-        self._placeholder = wrap
-        self._scroll.setWidget(wrap)
-
-    def replace_fig(self, fig: Figure) -> None:
-        self._dispose_canvas()
-        if self._placeholder is not None:
-            self._placeholder.deleteLater()
-            self._placeholder = None
-        self._canvas = MplCanvas(fig, self)
-        self._scroll.setWidget(self._canvas)
-
-    def _dispose_canvas(self) -> None:
-        """Lepas + dispose figure lama (disconnect cid → close figure)."""
-        if self._canvas is None:
-            return
-        fig = self._canvas.figure
-        for cid in getattr(fig, "_waste_cids", []):
-            try:
-                fig.canvas.mpl_disconnect(cid)
-            except Exception:
-                pass
-        self._canvas.setParent(None)
-        self._canvas.deleteLater()
-        self._canvas = None
-        try:
-            fig.close()
-        except Exception:
-            pass
-
-    def disconnect_figs(self) -> None:
-        """Dispose tanpa mengganti (dipanggil saat view dibongkar)."""
-        self._dispose_canvas()
 
 
 # ============================================================
@@ -315,16 +193,25 @@ class DataTable(QTableView):
         # tanpa ini kolom memakai lebar window lama: kolom terakhir terpotong
         # di tepi + scrollbar muncul padahal sebenarnya muat. Ambang 24px
         # mencegah loop umpan-balik kemunculan scrollbar (~14px).
+        # v2.8.1: scrollbar vertikal dapat muncul SETELAH fit (layout final)
+        # menyusutkan viewport ~14px < ambang → fit basi → header lebih
+        # panjang dari viewport → sliver scrollbar horizontal. Cek panjang
+        # HEADER (otoritatif, tak bergantung timing scrollbar) → re-fit;
+        # konvergen (Σ ≤ avail → stretch pas → length == viewport → stabil).
         vw = self.viewport().width()
+        dust_overflow = self.horizontalHeader().length() > vw + 2
         if vw > 50 and self.isVisible() and (
-                self._pending_fit or abs(vw - self._last_fit_w) > 24):
+                self._pending_fit or abs(vw - self._last_fit_w) > 24
+                or dust_overflow):
             self._auto_columns()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
         vw = self.viewport().width()
+        dust_overflow = self.horizontalHeader().length() > vw + 2
         if vw > 50 and (
-                self._pending_fit or abs(vw - self._last_fit_w) > 24):
+                self._pending_fit or abs(vw - self._last_fit_w) > 24
+                or dust_overflow):
             self._auto_columns()
 
     def selected_record(self) -> pd.Series | None:
@@ -606,35 +493,3 @@ class StatusChip(QFrame):
 def status_chip_for(status: str, parent=None) -> StatusChip:
     fg, bg = STATUS_COLORS.get(status, ("#334155", "#f1f5f9"))
     return StatusChip(status, fg, bg, parent)
-
-
-def place_charts_responsive(grid, entries, width: int) -> None:
-    """(Re)tempatkan kartu chart secara responsif (aturan v2.6.0).
-
-    - Lebar cukup (≥ 860px) → 2 kolom; lebih sempit → 1 kolom (jendela
-      kecil tidak mempersempit chart hingga terpotong).
-    - Chart dengan desain lebar (≥ 700px) SELALU menempati satu baris
-      penuh — legend/judul di tepi kanan tidak pernah setengah terpotong.
-    - ``entries``: list berurutan (card, fig_atau_None).
-    """
-    from PySide6.QtWidgets import QGridLayout  # noqa: F401 — tipe grid
-    cols = 2 if width >= 860 else 1
-    while grid.count():
-        grid.takeAt(0)
-    # Stretch kolom harus mengikuti jumlah kolom AKTIF — kolom kosong yang
-    # memegang stretch membuat chart hanya mendapat setengah lebar (bug).
-    grid.setColumnStretch(0, 1)
-    grid.setColumnStretch(1, 1 if cols == 2 else 0)
-    row = col = 0
-    for card, fig in entries:
-        wide = (fig is not None
-                and fig.get_size_inches()[0] * fig.dpi >= 700)
-        span = 2 if (wide and cols == 2) else 1
-        if col + span > cols:
-            col = 0
-            row += 1
-        grid.addWidget(card, row, col, 1, span)
-        col += span
-        if col >= cols:
-            col = 0
-            row += 1

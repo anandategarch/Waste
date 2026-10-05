@@ -4,10 +4,14 @@ Pengganti state tersebar di god-object Tkinter lama (active_filters,
 day_min/max, _preview_dfs, last_summary, ...). Views membaca state via
 ctx, bereaksi lewat signal:
 
-- data_ready()      → dataset baru dari pipeline (df + summary + sheet turunan)
+- data_ready()      → dataset baru dari pipeline (df + summary)
 - filters_changed() → filter/drill-down berubah
 - status(text, kind)→ pesan status bar ("running"|"done"|"error")
 - log_line(str)     → satu baris log
+
+v2.8.1: _build_derived_sheets + ctx.sheets DIHAPUS — satu-satunya
+konsumen adalah view Jelajah (dihapus total); export Excel membangun
+sheet analisanya sendiri (ui/workers.py::_extra_sheets).
 """
 from __future__ import annotations
 
@@ -25,110 +29,6 @@ CHIP_LABELS = {
 }
 
 
-def _build_derived_sheets(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    """Sheet turunan in-memory — logika IDENTIK tab_run.py v2.5.1.
-
-    Dipakai view Jelajah (combo sheet) + export Excel (sheet inti).
-    """
-    sheets: dict[str, pd.DataFrame] = {"Detail": df}
-    if "ANOMALY STATUS" in df.columns:
-        # v2.7.0 (V26-L11): sort ANOMALY SCORE dibungkus try — sama seperti
-        # blok lain. STATUS ada tapi SCORE absen → dulu KeyError (tanpa try).
-        try:
-            sheets["Anomali Prioritas"] = df[df["ANOMALY STATUS"].isin(
-                ["Prioritas Tinggi", "Potensi Anomali"]
-            )].sort_values("ANOMALY SCORE", ascending=False)
-        except Exception:  # SCORE hilang / dtype tak bisa di-sort → kosong
-            sheets["Anomali Prioritas"] = df.head(0)
-    else:
-        sheets["Anomali Prioritas"] = df.head(0)
-
-    _pc_cols = ["Cabang", "Jumlah_Barang", "Total_Waste", "Max_Waste_Harian",
-                "Anomali_Prioritas", "Anomali_Potensi", "Anomali_Review"]
-    if "NAMA RESTO" in df.columns:
-        try:
-            # v2.7.0: koersi numerik TOTAL/MAX — dtype object (string "10")
-            # membuat agg 'sum' MENGgabungkan teks senyap (audit Task ID 1).
-            sub = df[[c for c in ("NAMA RESTO", "NAMA BARANG", "TOTAL", "MAX",
-                                   "ANOMALY STATUS") if c in df.columns]].copy()
-            if "TOTAL" in sub.columns:
-                sub["TOTAL"] = pd.to_numeric(sub["TOTAL"], errors="coerce")
-            if "MAX" in sub.columns:
-                sub["MAX"] = pd.to_numeric(sub["MAX"], errors="coerce")
-            sheets["Per Cabang"] = (
-                sub.groupby("NAMA RESTO", dropna=False).agg(
-                    Jumlah_Barang=("NAMA BARANG", "size"),
-                    Total_Waste=("TOTAL", "sum"),
-                    Max_Waste_Harian=("MAX", "max"),
-                    Anomali_Prioritas=("ANOMALY STATUS", lambda x: int((x == "Prioritas Tinggi").sum())),
-                    Anomali_Potensi=("ANOMALY STATUS", lambda x: int((x == "Potensi Anomali").sum())),
-                    Anomali_Review=("ANOMALY STATUS", lambda x: int((x == "Perlu Review").sum())),
-                ).reset_index().rename(columns={"NAMA RESTO": "Cabang"})
-                .sort_values("Anomali_Prioritas", ascending=False)
-            )
-        except Exception:  # kolom pendukung hilang → fallback kosong
-            sheets["Per Cabang"] = pd.DataFrame(columns=_pc_cols)
-    else:
-        sheets["Per Cabang"] = pd.DataFrame(columns=_pc_cols)
-
-    _ti_cols = ["Rank", "NAMA BARANG", "JENIS", "Total_Waste", "Max_Waste",
-                "Cabang_Terpengaruh", "Anomali_Prioritas"]
-    if "NAMA BARANG" in df.columns:
-        try:
-            # v2.7.0: koersi numerik TOTAL/MAX — alasan sama dgn 'Per Cabang'.
-            sub = df[[c for c in ("NAMA BARANG", "JENIS", "TOTAL", "MAX",
-                                   "NAMA RESTO", "ANOMALY STATUS") if c in df.columns]].copy()
-            if "TOTAL" in sub.columns:
-                sub["TOTAL"] = pd.to_numeric(sub["TOTAL"], errors="coerce")
-            if "MAX" in sub.columns:
-                sub["MAX"] = pd.to_numeric(sub["MAX"], errors="coerce")
-            top = (
-                sub.groupby(["NAMA BARANG", "JENIS"], dropna=False).agg(
-                    Total_Waste=("TOTAL", "sum"),
-                    Max_Waste=("MAX", "max"),
-                    Cabang_Terpengaruh=("NAMA RESTO", "nunique"),
-                    Anomali_Prioritas=("ANOMALY STATUS", lambda x: int((x == "Prioritas Tinggi").sum())),
-                ).reset_index().sort_values("Total_Waste", ascending=False).head(20)
-            )
-            top.insert(0, "Rank", range(1, len(top) + 1))
-            sheets["Top Items"] = top
-        except Exception:
-            sheets["Top Items"] = pd.DataFrame(columns=_ti_cols)
-    else:
-        sheets["Top Items"] = pd.DataFrame(columns=_ti_cols)
-
-    _pa_cols = ["KETERANGAN", "Total_Waste", "Jumlah_Barang",
-                "Persentase", "Cumulative"]
-    if "KETERANGAN" in df.columns:
-        try:
-            # v2.7.0: koersi numerik TOTAL — konsisten dgn 'Per Cabang' /
-            # 'Top Items' (string TOTAL membuat agg 'sum' menggabungkan
-            # teks senyap; dulu blok ini hanya ter-degrade via try/except).
-            sub = df[[c for c in ("KETERANGAN", "NAMA BARANG", "TOTAL")
-                      if c in df.columns]].copy()
-            if "TOTAL" in sub.columns:
-                sub["TOTAL"] = pd.to_numeric(sub["TOTAL"], errors="coerce")
-            pareto = (
-                sub.groupby("KETERANGAN", dropna=False).agg(
-                    Total_Waste=("TOTAL", "sum"),
-                    Jumlah_Barang=("NAMA BARANG", "size"),
-                ).reset_index().sort_values("Total_Waste", ascending=False)
-            )
-            grand = pareto["Total_Waste"].sum()
-            if grand and grand > 0:
-                pareto["Persentase"] = (pareto["Total_Waste"] / grand) * 100
-                pareto["Cumulative"] = pareto["Persentase"].cumsum()
-            else:
-                pareto["Persentase"] = 0
-                pareto["Cumulative"] = 0
-            sheets["Pareto Alasan"] = pareto
-        except Exception:
-            sheets["Pareto Alasan"] = pd.DataFrame(columns=_pa_cols)
-    else:
-        sheets["Pareto Alasan"] = pd.DataFrame(columns=_pa_cols)
-    return sheets
-
-
 class AppContext(QObject):
     """State aplikasi tunggal + signal perubahan."""
 
@@ -142,7 +42,6 @@ class AppContext(QObject):
         self.config = config
         self.df: pd.DataFrame | None = None
         self.summary: dict | None = None
-        self.sheets: dict[str, pd.DataFrame] = {}
         self.key_akhir: int = 31
         self.last_run_time: datetime | None = None
         self.log_lines: list[str] = []
@@ -176,7 +75,6 @@ class AppContext(QObject):
         """Dataset baru dari pipeline: simpan + reset filter + broadcast."""
         self.df = df
         self.summary = summary
-        self.sheets = _build_derived_sheets(df)
         try:
             self.key_akhir = int(summary.get("key_akhir", 31))
         except (TypeError, ValueError):
@@ -186,7 +84,7 @@ class AppContext(QObject):
         self.reset_filters()  # juga meng-invalidasi memo filtered_df
         self.data_ready.emit()
         # v2.7.0 (V26-H2): siarkan reset filter SEKALI SETELAH data_ready —
-        # views pendengar filters_changed (Anomali/Jelajah) menandai dirty
+        # views pendengar filters_changed (Anomali/Banding Periode) menandai dirty
         # secara konsisten. Urutan setelah data_ready dipilih karena pada
         # alur tipikal re-run user ada di tab Pipeline (view tidak terlihat
         # → kedua handler hanya menandai dirty, TANPA render ganda); bila

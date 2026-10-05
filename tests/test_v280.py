@@ -1,16 +1,20 @@
-"""Test — v2.8.0: penyederhanaan UI + ruang vertikal tabel.
+"""Test — v2.8.1: pop-up detail + kolom % to BOM + 5 → 3 view.
 
 Lingkup:
-1. 8 → 5 view: file view_uang/view_peer/view_kualitas dihapus total,
-   tab QTabWidget berisi tepat 5 judul yang diharapkan, help HTML tidak
-   lagi menyebut tab yang dihapus.
-2. Tabel Anomali memanjang ke bawah: judul kartu satu baris (teks pendek),
-   tinggi minimum tabel/kartu, rasio splitter tabel:detail = 5:2, dan
-   tombol "Rapikan Detail" menyembunyikan panel detail → kartu tabel
-   memenuhi hampir seluruh tinggi splitter.
-3. Sidebar hide/unhide: tombol ☰ Filter (checkable) menyembunyikan sidebar
-   → QTabWidget melebar; dimunculkan → ukuran splitter tersimpan
-   dipulihkan.
+1. 8 → 5 → 3 view: file view_uang/view_peer/view_kualitas (v2.8.0) dan
+   view_jelajah/view_waktu (v2.8.1) dihapus total; tab QTabWidget berisi
+   tepat 3 judul yang diharapkan; help HTML tidak lagi menyebut tab yang
+   dihapus.
+2. Panel detail inline DIGANTI pop-up: klik baris tabel anomali membuka
+   DetailDialog non-modal (satu instance dipakai ulang); tabel memenuhi
+   seluruh tinggi view (tanpa splitter / tombol Rapikan Detail); hint
+   lama "pilih baris utk detail" dihapus.
+3. Kolom "% to BOM" (waste vs penjualan kuantiti) tampil di tabel
+   anomali ter-ranking — nilai rasio diformat persen ('1,34%'), penanda
+   'Cek' (tak ada data penjualan) diteruskan apa adanya.
+4. Sidebar hide/unhide (v2.8.0, tetap): tombol ☰ Filter (checkable)
+   menyembunyikan sidebar → QTabWidget melebar; dimunculkan → ukuran
+   splitter tersimpan dipulihkan.
 """
 from __future__ import annotations
 
@@ -20,13 +24,17 @@ from pathlib import Path
 # Harus diset sebelum PySide6 di-import (dilakukan lazy di dalam test).
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pandas as pd
+
 REPO = Path(__file__).resolve().parent.parent
 UI = REPO / "ui"
 
-REMOVED_VIEW_FILES = ["view_uang.py", "view_peer.py", "view_kualitas.py"]
-REMOVED_TAB_TITLES = ["Uang", "Peer", "Kualitas Data"]
-EXPECTED_TAB_TITLES = ["Anomali", "Jelajah", "Waktu", "Banding Periode",
-                       "Pipeline"]
+REMOVED_VIEW_FILES = [
+    "view_uang.py", "view_peer.py", "view_kualitas.py",  # v2.8.0
+    "view_jelajah.py", "view_waktu.py",                  # v2.8.1
+]
+REMOVED_TAB_TITLES = ["Uang", "Peer", "Kualitas Data", "Jelajah", "Waktu"]
+EXPECTED_TAB_TITLES = ["Anomali", "Banding Periode", "Pipeline"]
 
 
 def _qapp():
@@ -42,16 +50,51 @@ def _make_window():
     return MainWindow()
 
 
-class TestHapusTigaView:
+def _anomali_df(n: int = 4) -> pd.DataFrame:
+    """df tiruan bergaya output pipeline — termasuk kolom % to BOM."""
+    data = {
+        "ANOMALY SCORE": [19 - i for i in range(n)],
+        "ANOMALY STATUS": ["Prioritas Tinggi"] * n,
+        "NAMA RESTO": [f"RESTO {i}" for i in range(n)],
+        "NAMA BARANG": [f"BARANG {i}" for i in range(n)],
+        "JENIS": ["BAHAN"] * n,
+        "KETERANGAN": ["alasan A"] * n,
+        "TOTAL": [float(1000 * (i + 1)) for i in range(n)],
+        "% to BOM": [0.013358778625954198, "Cek", 0.0009149130832570906, 0.0][:n],
+        "ANOMALY REASONS": ["S1 spike; S6 max/BOM"] * n,
+    }
+    return pd.DataFrame(data)
+
+
+def _make_view():
+    """AnomaliView + AppContext dengan dataset anomali terisi."""
+    _qapp()
+    from ui.state import AppContext
+    from ui.view_anomali import AnomaliView
+    ctx = AppContext({})
+    view = AnomaliView(ctx)
+    ctx.set_dataset(_anomali_df(), {"key_akhir": 31})
+    view._refresh_table()
+    return view, ctx
+
+
+class TestHapusLimaView:
     def test_file_view_dihapus_dari_repo(self):
         for fname in REMOVED_VIEW_FILES:
             assert not (UI / fname).exists(), (
-                f"ui/{fname} masih ada — harusnya dihapus total (v2.8.0)")
+                f"ui/{fname} masih ada — harusnya dihapus total")
 
-    def test_tab_tepat_lima_dengan_judul_benar(self):
+    def test_file_modul_chart_dihapus(self):
+        """v2.8.1: charts/dashboard/chart_helpers hanya hidup di Jelajah &
+        Waktu — ikut dihapus total dari paket waste_anomaly."""
+        for fname in ("charts.py", "dashboard.py", "chart_helpers.py"):
+            assert not (REPO / "waste_anomaly" / fname).exists(), (
+                f"waste_anomaly/{fname} masih ada — dead code pasca-hapus view")
+
+    def test_tab_tepat_tiga_dengan_judul_benar(self):
         win = _make_window()
         try:
-            assert win._tabs.count() == 5
+            assert win._tabs.count() == 3
             for i in range(win._tabs.count()):
                 assert win._tabs.tabText(i) == EXPECTED_TAB_TITLES[i]
         finally:
@@ -66,7 +109,7 @@ class TestHapusTigaView:
             win.close()
 
 
-class TestTabelAnomaliMemanjang:
+class TestTabelAnomaliPenuhDanPopup:
     def _view(self):
         win = _make_window()
         # Anomali = tab 0 (default) — view sudah ter-instantiate
@@ -86,78 +129,232 @@ class TestTabelAnomaliMemanjang:
         finally:
             win.close()
 
+    def test_tanpa_splitter_tombol_rapikan_dan_hint_lama(self):
+        """v2.8.1: splitter tabel:detail, tombol 'Rapikan Detail', dan hint
+        'pilih baris utk detail' dihapus — detail kini pop-up."""
+        import inspect
+        from ui.view_anomali import AnomaliView
+        win, anom = self._view()
+        try:
+            assert not hasattr(anom, "_split"), "splitter masih ada"
+            assert not hasattr(anom, "_btn_detail"), "tombol Rapikan masih ada"
+            assert not hasattr(anom, "_detail"), "panel detail inline masih ada"
+            src = inspect.getsource(AnomaliView) + inspect.getsource(
+                AnomaliView.__init__)
+            assert "pilih baris utk detail" not in src.lower(), (
+                "hint lama 'pilih baris utk detail' masih ada di view")
+        finally:
+            win.close()
+
     def test_tinggi_minimum_tabel_dan_kartu(self):
         win, anom = self._view()
         try:
             assert anom._table.minimumHeight() >= 200, (
                 "tabel boleh diperas di bawah 200px — baris terlihat "
                 "tinggal sedikit (keluhan v2.8.0)")
-            assert anom._split.widget(0).minimumHeight() >= 240
-            assert anom._detail.minimumHeight() >= 150
+            card = anom._table.parentWidget()
+            assert card.minimumHeight() >= 240
         finally:
             win.close()
 
-    def test_rasio_splitter_tabel_dominan(self):
-        """Stretch tabel:detail = 5:2 (dulu 3:2 — detail mencuri 38% ruang
-        walau kosong). Diverifikasi via source (setStretchFactor di __init__)."""
-        import inspect
-        from ui.view_anomali import AnomaliView
-        src = inspect.getsource(AnomaliView.__init__)
-        assert "setStretchFactor(0, 5)" in src, (
-            "stretch tabel harus 5 (tabel dominan, v2.8.0)")
-        assert "setStretchFactor(1, 2)" in src
-
-    def test_kartu_tabel_tidak_bisa_collapsible(self):
-        """Drag handle tidak boleh meruntuhkan tabel ke 0 — hanya detail
-        yang boleh dirikan."""
-        win, anom = self._view()
-        try:
-            assert anom._split.isCollapsible(0) is False
-            assert anom._split.isCollapsible(1) is True
-        finally:
-            win.close()
-
-    def test_tombol_rapikan_detail_ada(self):
-        win, anom = self._view()
-        try:
-            assert anom._btn_detail.text().startswith("⌃ Rapikan Detail")
-        finally:
-            win.close()
-
-    def test_rapikan_detail_tabel_memenuhi_splitter(self):
-        """Toggle rikan → DetailPanel hidden → kartu tabel menyerap hampir
-        seluruh tinggi splitter (minus handle 4px). Toggle kembali →
-        panel muncul lagi + ukuran tersimpan dipulihkan."""
+    def test_tabel_memenuhi_tinggi_view(self):
+        """Tanpa panel inline, kartu tabel menyerap sisa tinggi view
+        (≥ 60% tinggi view pada 1024×700)."""
         from PySide6.QtWidgets import QApplication, QWidget
         win, anom = self._view()
         try:
             win.resize(1024, 700)
             win.show()
             QApplication.processEvents()
-            QWidget.grab(anom)  # paksa layout offscreen
+            QWidget.grab(anom)
             QApplication.processEvents()
-            sizes_before = anom._split.sizes()
-
-            anom._toggle_detail()
-            QApplication.processEvents()
-            assert anom._detail.isHidden(), "panel detail harus hidden"
-            assert anom._btn_detail.text().startswith("⌄ Tampilkan Detail")
-            QApplication.processEvents()
-            card_h = anom._split.widget(0).height()
-            split_h = anom._split.height()
-            # kartu tabel memenuhi splitter (toleransi handle)
-            assert card_h >= split_h - 12, (
-                f"kartu tabel {card_h}px belum memenuhi splitter {split_h}px")
-
-            anom._toggle_detail()
-            QApplication.processEvents()
-            assert not anom._detail.isHidden(), "panel detail harus muncul"
-            assert anom._btn_detail.text().startswith("⌃ Rapikan Detail")
-            sizes_after = anom._split.sizes()
-            assert sizes_after == sizes_before, (
-                f"ukuran splitter tidak dipulihkan: {sizes_after} ≠ {sizes_before}")
+            card = anom._table.parentWidget()
+            assert card.height() >= anom.height() * 0.60, (
+                f"kartu tabel {card.height()}px < 60% tinggi view "
+                f"{anom.height()}px — tabel tidak memanjang penuh")
         finally:
             win.close()
+
+    def test_klik_baris_membuka_popup_detail(self):
+        """Klik (pilih) baris → DetailDialog muncul + judul berisi skor."""
+        from PySide6.QtWidgets import QApplication
+        view, _ = _make_view()
+        QApplication.processEvents()
+        view._table.setCurrentIndex(view._table.model().index(0, 0))
+        popup = view._popup
+        assert popup.isVisible(), "pop-up detail harus terlihat saat baris diklik"
+        assert not popup.isModal(), "pop-up harus non-modal (tabel tetap hidup)"
+        assert "Skor" in popup._panel._title.text()
+        # isi panel: chip sinyal ter-render
+        from PySide6.QtWidgets import QLabel
+        texts = [l.text() for l in popup._panel._content.findChildren(QLabel)]
+        assert any("S1" in t for t in texts), "chip 12 sinyal tidak ter-render"
+
+    def test_popup_satu_instance_dipakai_ulang(self):
+        """Klik baris lain → pop-up yang SAMA diperbarui (tidak menumpuk)."""
+        from PySide6.QtWidgets import QApplication
+        view, _ = _make_view()
+        QApplication.processEvents()
+        view._table.setCurrentIndex(view._table.model().index(0, 0))
+        first = view._popup
+        title1 = first._panel._title.text()
+        view._table.setCurrentIndex(view._table.model().index(1, 0))
+        assert view._popup is first, "instance pop-up harus dipakai ulang"
+        assert view._popup._panel._title.text() != title1, (
+            "isi pop-up tidak diperbarui saat baris lain diklik")
+
+    def test_popup_ditutup_saat_data_berubah(self):
+        """Dataset/filter berubah → pop-up ditutup + dikosongkan (V26-L12:
+        record yang ditampilkan bisa jadi tak lolos filter lagi)."""
+        from PySide6.QtWidgets import QApplication
+        from ui.view_anomali import DetailPanel
+        view, _ = _make_view()
+        QApplication.processEvents()
+        view._table.setCurrentIndex(view._table.model().index(0, 0))
+        assert view._popup.isVisible()
+        view._refresh_table()
+        assert view._popup.isHidden(), "pop-up harus tertutup saat refresh"
+        assert view._popup._panel._title.text() == DetailPanel._PROMPT
+
+    def test_double_klik_tetap_drill_down(self):
+        """Klik 2× = fokus cabang+item (perilaku v2.7.0 dipertahankan)."""
+        view, ctx = _make_view()
+        rec = view._table._model.record(0)
+        view._on_double(rec)
+        assert ctx.active_filters["cabang"] == rec.get("NAMA RESTO")
+        assert ctx.active_filters["item"] == rec.get("NAMA BARANG")
+
+    def test_hint_baru_menyebut_pop_up(self):
+        """Hint menggambarkan perilaku baru: klik baris = pop-up detail."""
+        import inspect
+        from ui.view_anomali import AnomaliView
+        src = inspect.getsource(AnomaliView.__init__)
+        assert "pop-up" in src.lower(), (
+            "hint harus menyebut 'pop-up' (perilaku detail v2.8.1)")
+
+
+class TestKolomPctToBom:
+    """v2.8.1: '% to BOM' = waste dibanding penjualan kuantiti — tampil
+    di tabel anomali per-ranking; rasio sebagai persen; 'Cek' apa adanya."""
+
+    def test_table_cols_memuat_pct_to_bom(self):
+        from ui.view_anomali import TABLE_COLS
+        assert "% to BOM" in TABLE_COLS
+        # posisinya berdampingan dengan TOTAL (konteks pembacaan)
+        assert TABLE_COLS.index("% to BOM") == TABLE_COLS.index("TOTAL") + 1
+
+    def test_kolom_tampak_di_tabel(self):
+        view, _ = _make_view()
+        dfm = view._table._model.dataframe
+        assert "% to BOM" in dfm.columns
+        idx = list(dfm.columns).index("% to BOM")
+        assert not view._table.isColumnHidden(idx), (
+            "kolom % to BOM harus tampak di tabel anomali")
+
+    def test_sel_ratio_tampil_sebagai_persen(self):
+        """0.01335... → '1,34%' (bukan '0,00' mentah yang tak terbaca)."""
+        from PySide6.QtCore import Qt
+        view, _ = _make_view()
+        dfm = view._table._model.dataframe
+        row = 0  # nilai 0.013358778625954198 (fixture _anomali_df)
+        col = list(dfm.columns).index("% to BOM")
+        shown = view._table._model.data(
+            view._table._model.index(row, col), Qt.DisplayRole)
+        assert shown == "1,34%", f"tampilan {shown!r} harus '1,34%'"
+
+    def test_sel_penanda_cek_diteruskan(self):
+        """'Cek' = item tanpa data penjualan — ditampilkan apa adanya."""
+        from PySide6.QtCore import Qt
+        view, _ = _make_view()
+        dfm = view._table._model.dataframe
+        col = list(dfm.columns).index("% to BOM")
+        shown = view._table._model.data(
+            view._table._model.index(1, col), Qt.DisplayRole)
+        assert shown == "Cek"
+
+    def test_kolom_pct_fit_tanpa_scrollbar_di_viewport_sempit(self):
+        """v2.8.1: 8 kolom — di viewport laptop (±740px) JENIS & KETERANGAN
+        disembunyikan responsif (narrow_hide) supaya kolom inti + % to BOM
+        muat TANPA scrollbar horizontal (scroll ≠ terpotong, tapi kolom
+        inti wajib tampak)."""
+        from PySide6.QtWidgets import QApplication, QWidget
+        view, _ = _make_view()
+        view.resize(740, 500)
+        view.show()
+        QApplication.processEvents()
+        QWidget.grab(view)  # paksa layout offscreen
+        QApplication.processEvents()
+        view._table._auto_columns()
+        QApplication.processEvents()
+        dfm = view._table._model.dataframe
+        pct = list(dfm.columns).index("% to BOM")
+        assert not view._table.isColumnHidden(pct), (
+            "% to BOM harus tetap tampak di viewport sempit")
+        t = view._table
+        vis = [c for c in range(dfm.shape[1]) if not t.isColumnHidden(c)]
+        total = t.horizontalHeader().length()
+        avail = t.viewport().width()
+        assert total <= avail + 2, (
+            f"panjang header {total}px > viewport {avail}px — scrollbar "
+            "horizontal muncul padahal narrow_hide harus menyelesaikannya")
+        j = list(dfm.columns).index("JENIS")
+        assert t.isColumnHidden(j), "JENIS harus narrow-hidden"
+
+    def test_fmt_pct_unit(self):
+        from ui.models import fmt_pct
+        assert fmt_pct(0.013358778625954198) == "1,34%"
+        assert fmt_pct(0.0009149130832570906) == "0,09%"
+        assert fmt_pct(0.8530465949820788) == "85,30%"
+        assert fmt_pct(0.0) == "0,00%"
+        assert fmt_pct("Cek") == "Cek"
+        assert fmt_pct(None) == ""
+        assert fmt_pct(float("nan")) == ""
+
+    def test_pct_rata_kanan(self):
+        from PySide6.QtCore import Qt
+        from ui.models import PandasTableModel
+        m = PandasTableModel(pd.DataFrame({"% to BOM": [0.5, "Cek"]}))
+        align = m.data(m.index(0, 0), Qt.TextAlignmentRole)
+        assert align == int(Qt.AlignRight | Qt.AlignVCenter)
+
+    def test_sort_pct_numeric_cek_di_akhir(self):
+        """Sort header % to BOM: numerik descending; 'Cek' (NaN) di akhir."""
+        from PySide6.QtCore import Qt
+        view, _ = _make_view()
+        dfm = view._table._model.dataframe
+        col = list(dfm.columns).index("% to BOM")
+        view._table._model.sort(col, Qt.DescendingOrder)
+        dfm = view._table._model.dataframe
+        vals = list(dfm["% to BOM"])
+        assert vals[0] == 0.013358778625954198, "ratio terbesar harus di atas"
+        assert vals[-1] == "Cek", "'Cek' (non-numerik) harus sort paling akhir"
+
+    def test_popup_metric_pct_juga_persen(self):
+        """Panel detail pop-up: TOTAL / BOM & MAX SHARE tampil sebagai
+        persen (dulu '0,30' mentah tak terbaca)."""
+        from PySide6.QtWidgets import QApplication, QLabel
+        from ui.view_anomali import DetailPanel
+        _qapp()
+        ctx_dummy = None
+        from ui.state import AppContext
+        ctx = AppContext({})
+        panel = DetailPanel(ctx)
+        panel.show()
+        rec = pd.Series({
+            "ANOMALY SCORE": 19, "ANOMALY STATUS": "Prioritas Tinggi",
+            "NAMA RESTO": "R1", "NAMA BARANG": "B1",
+            "TOTAL": 100.0, "MAX": 50.0, "AVG": 3.3, "HARI MAX": 12,
+            "SATUAN": "GR", "TOTAL BOM": 7470.0, "% to BOM": 0.0134,
+            "MAX / BOM": 0.0067, "TOTAL / BOM": 0.0134,
+            "MAX SHARE": 0.4, "LAST DAY SHARE": 0.3,
+            "ANOMALY REASONS": "S1 spike",
+        })
+        panel.show_record(rec)
+        QApplication.processEvents()
+        texts = [l.text() for l in panel._content.findChildren(QLabel)]
+        assert "1,34%" in texts, f"% to BOM harus '1,34%' di pop-up: {texts[:12]}"
+        assert "40,00%" in texts, "MAX SHARE harus tampil '40,00%'"
+        assert "0,67%" in texts, "MAX / BOM harus tampil '0,67%'"
 
 
 class TestSidebarHideUnhide:
@@ -223,7 +420,9 @@ class TestDokumentasiJujur:
             assert f"<b>{title}</b>" not in _HELP_HTML, (
                 f"Bantuan masih menyebut tab '{title}' yang sudah dihapus")
 
-    def test_bantuan_menyebut_toggle_baru(self):
+    def test_bantuan_menyebut_fitur_baru(self):
         from ui.app import _HELP_HTML
         assert "Ctrl+Shift+F" in _HELP_HTML, (
             "Bantuan harus menyebut shortcut sidebar hide/unhide")
+        assert "pop-up" in _HELP_HTML.lower(), (
+            "Bantuan harus menyebut detail pop-up (perilaku v2.8.1)")
