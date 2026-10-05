@@ -210,8 +210,14 @@ def load_history_file(path: str | os.PathLike,
     tetap bisa diproses pemanggil.
     """
     p = Path(path)
-    base = {"path": str(p), "label": detect_month_label(p), "error": None,
-            "label_source": "auto"}
+    # "path" hasil HARUS string input PEMANGGIL persis (bukan str(Path)):
+    # str(Path(x)) menormalisasi pemisah/segmen — di Windows dialog Qt
+    # memberi 'C:/a/b.xlsx' tapi pathlib membalikkan 'C:\\a\\b.xlsx';
+    # PeriodeView mengunci status/cache/combo dgn string dari dialog →
+    # normalisasi bikin baris tetap 'belum dimuat' padahal muat sukses
+    # (bug v2.10.0 dilaporkan user; fix v2.10.1).
+    base = {"path": str(path), "label": detect_month_label(p),
+            "error": None, "label_source": "auto"}
     try:
         if not p.exists():
             base["error"] = f"File tidak ditemukan: {p.name}"
@@ -232,7 +238,7 @@ def load_history_file(path: str | os.PathLike,
         agg = _aggregate(kept, ka)
         d = _month_dict(agg, _jenis_totals(kept), base["label"] or p.stem,
                         ka, len(kept), len(raw))
-        d["path"] = str(p)
+        d["path"] = str(path)  # persis input (lihat komentar base di atas)
         d["label_source"] = "auto"
         return d
     except Exception as e:  # noqa: BLE001 — defensif: jangan gagalkan file lain

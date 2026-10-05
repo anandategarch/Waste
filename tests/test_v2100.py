@@ -181,6 +181,21 @@ class TestLoadHistoryFile:
         res = load_history_file(str(wb), {})
         assert res["error"]
 
+    def test_path_hasil_persis_string_input(self, tmp_path):
+        """v2.10.1 regresi (bug dilaporkan user di Windows): 'path' hasil
+        HARUS persis string input pemanggil. str(Path(...)) menormalisasi
+        pemisah (Windows: dialog Qt 'C:/a/b.xlsx' → 'C:\\a\\b.xlsx';
+        Linux: 'x/./y' → 'x/y') — view mengunci _last_results/_loaded/
+        entri dgn string DARI DIALOG, normalisasi bikin kolom Status
+        tetap 'belum dimuat' padahal notif memuat sukses."""
+        from waste_anomaly.period_history import load_history_file
+        wb = _wb_bulan(tmp_path)
+        weird = str(wb.parent) + "/./" + wb.name  # pathlib meringkus '/./'
+        assert str(Path(weird)) != weird  # prekondisi: kelas mismatch nyata
+        res = load_history_file(weird, {})
+        assert res["error"] is None, res["error"]
+        assert res["path"] == weird
+
 
 # ============================================================
 # [3] AGREGAT BULAN BERJALAN (A)
@@ -576,6 +591,27 @@ class TestHistoryWorker:
         assert issubclass(HistoryWorker, QThread)
         assert hasattr(HistoryWorker, "cancel")
 
+    def test_path_hasil_tepat_spt_entri_nonkanonik(self, tmp_path):
+        """v2.10.1 regresi (laporan user Windows): 'path' entri hasil
+        HARUS string path entri input PERSIS — view mengunci status
+        file, cache mtime, dan combo dgn kunci string itu. str(Path(x))
+        menormalisasi pemisah ('C:/a' → 'C:\\a' di Windows; '/./' di
+        Linux) → semua lookup meleset → status 'belum dimuat' padahal
+        notif sukses."""
+        _qapp()
+        from ui.workers import HistoryWorker
+        wb = _wb_bulan(tmp_path)
+        weird = str(wb.parent) + "/./" + wb.name
+        results: list = []
+        failures: list[tuple] = []
+        worker = HistoryWorker([{"path": weird, "label": None}], {})
+        worker.done.connect(results.append)
+        worker.failed.connect(lambda e, t: failures.append((e, t)))
+        worker.run()
+        assert not failures, failures
+        assert results and results[0][0]["error"] is None
+        assert results[0][0]["path"] == weird
+
 
 # ============================================================
 # [9] STATE HISTORY (AppContext)
@@ -764,6 +800,42 @@ class TestPeriodeViewMultiFile:
         view._on_reload()
         _wait_worker(view, app)
         assert len(ctx.history_months) == 1
+
+    def test_status_file_bukan_belum_dimuat_path_nonkanonik(
+            self, tmp_path, monkeypatch):
+        """v2.10.1 regresi (persis laporan user): pilih file pembanding
+        → muat → notif '✓ berhasil' TAPI kolom Status masih
+        '⏳ belum dimuat'. Sebab: hasil worker dikunci path ternormalisasi
+        str(Path(...)) sementara daftar file mengunci string path dialog
+        (Windows: '/' ≠ '\\'). Reproduksi Linux: path dgn '/./' —
+        kelas mismatch identik. Fix: loader mempertahankan string input."""
+        wb = _wb_bulan(tmp_path)
+        weird = str(wb.parent) + "/./" + wb.name
+        view, ctx, _ = _make_periode_view(
+            monkeypatch, tmp_path, [{"path": weird, "label": None}])
+        app = _qapp()
+        _wait_worker(view, app)
+        # gejala user: baris tetap 'belum dimuat' padahal muat sukses
+        assert view._tbl_files.item(0, 2).text().startswith("✓"), \
+            view._tbl_files.item(0, 2).text()
+        assert "aktif" in view._lbl_status.text()  # notif = jujur sekarang
+        # konsekuensi tersembunyi bug: combo & banding ikut kosong →
+        # pastikan bulan masuk combo (fitur banding benar-benar jalan)
+        assert len(ctx.history_months_ok()) == 1
+        view._refresh_result()
+        assert view._cb_b.count() == 1
+        assert view._cb_b.currentText() == "Juli 2026"
+
+    def test_notif_gagal_bila_tak_ada_bulan_aktif(self, tmp_path, monkeypatch):
+        """v2.10.1: semua file gagal → status bar '⚠' (bukan '✓ siap')
+        supaya notif tidak menyesatkan."""
+        view, ctx, _ = _make_periode_view(
+            monkeypatch, tmp_path,
+            [{"path": str(tmp_path / "hilang.xlsx"), "label": None}])
+        app = _qapp()
+        _wait_worker(view, app)
+        assert view._lbl_status.text().startswith("⚠")
+        assert len(ctx.history_months_ok()) == 0
 
     def test_kontrak_lazy_render_dan_busy(self):
         src = (UI / "view_periode.py").read_text(encoding="utf-8")

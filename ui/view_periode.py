@@ -458,11 +458,19 @@ class PeriodeView(QWidget):
         ok = [m for m in self._last_results.values()
               if not m.get("error")]
         err = [m for m in self._last_results.values() if m.get("error")]
-        parts = [f"✓ {len(ok)} bulan pembanding aktif"]
+        # v2.10.1: notif jujur — '✓ aktif' hanya bila ada bulan aktif;
+        # semua gagal → '⚠' (dulu '✓ 0 bulan aktif' menyesatkan).
+        parts = [f"✓ {len(ok)} bulan pembanding aktif"] if ok else []
         if err:
             parts.append(f"⚠ {len(err)} file gagal (lihat kolom Status)")
+        if not parts:
+            parts = ["Belum ada file pembanding."]
         self._lbl_status.setText(" — ".join(parts) + ".")
-        self._ctx.set_status("✓ Pembanding periode siap", "done")
+        if ok:
+            self._ctx.set_status("✓ Pembanding periode siap", "done")
+        else:
+            self._ctx.set_status(
+                "⚠ Semua file pembanding gagal dimuat", "error")
         self._finalize()
 
     def _on_failed(self, err: str, tb: str) -> None:
