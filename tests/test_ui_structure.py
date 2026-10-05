@@ -123,8 +123,8 @@ class TestUiStructure:
 
     def test_worker_adalah_qthread(self):
         from PySide6.QtCore import QThread
-        from ui.workers import ExportWorker, PeriodWorker, PipelineWorker
-        for cls in (PipelineWorker, ExportWorker, PeriodWorker):
+        from ui.workers import ExportWorker, HistoryWorker, PipelineWorker
+        for cls in (PipelineWorker, ExportWorker, HistoryWorker):
             assert issubclass(cls, QThread), f"{cls.__name__} bukan QThread"
 
     def test_model_tabel_memenuhi_kontrak_qt(self):

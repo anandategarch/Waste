@@ -77,6 +77,7 @@ _HELP_HTML = """
 <li>Jawaban untuk: "potensi salah angka terjadi di <b>tanggal berapa</b> (1–31)?"</li>
 <li>Bukti hari = angka jauh di atas cabang lain di hari sama (mis. 404×), atau ≥ 50% waste sebulan di satu hari, atau pola 10× (salah ketik), atau waste cuma 1 hari.</li>
 <li>Kolom ALASAN HARI merangkum buktinya dalam satu kalimat; klik baris = pop-up dengan peta hari.</li>
+<li><b>Bila ada file bulan lalu</b> (tab Banding Periode): muncul kolom <b>NILAI BULAN LALU</b> — nilai tanggal yang sama bulan sebelumnya + berapa kali lipatnya.</li>
 </ul>
 <h3>Filter (sidebar kiri)</h3>
 <ul>
@@ -86,7 +87,11 @@ _HELP_HTML = """
 </ul>
 <h3>Tab lain</h3>
 <ul>
-<li><b>Banding Periode</b> — run saat ini vs workbook bulan lalu.</li>
+<li><b>Banding Periode</b> (v2.10.0) — bulan berjalan vs <b>daftar file bulan lalu</b>
+(1 file = 1 bulan, format REKAP MENTAH — kuantiti tanpa BOM). Nama bulan dibaca
+otomatis dari nama file; daftar <b>diingat</b> antar sesi; dimuat di latar belakang.
+Banding per bulan atau vs <b>Tipikal</b> (median beberapa bulan): ringkasan,
+cabang/item bergerak, item baru/hilang — semua murni kuantiti.</li>
 </ul>
 <h3>💡 Bingung istilah?</h3>
 <p><b>Hover (arahkan mouse & diamkan)</b> di: judul kolom tabel, label metrik pop-up,
@@ -673,9 +678,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802 — Qt API
         # V26-H1: kumpulkan SEMUA worker yang masih hidup — dulu hanya
-        # pipeline view + export yang dicek; PeriodWorker (banding periode)
-        # luput → QThread di-destroy saat masih berjalan = UB Qt + file
-        # export bisa parsial. iterasi _views (bukan indeks) = tahan urutan.
+        # pipeline view + export yang dicek; worker banding periode
+        # (kini HistoryWorker, v2.10.0) tercakup lewat atribut kontrak
+        # _running/_worker milik view — iterasi _views = tahan urutan.
         busy: list[tuple[str, object]] = []
         for name, view in self._views:
             if getattr(view, "_running", False):

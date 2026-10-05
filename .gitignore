@@ -30,6 +30,9 @@ output/*.log
 # Filter profiles (user-specific, auto-generated)
 filters.json
 
+# Daftar file pembanding periode (user-specific, auto-generated — v2.10.0)
+history_files.json
+
 # Sample data (jangan commit data asli — DATA_WASTE.xlsx user-specific)
 data/*.xlsx
 data/*.xlsm

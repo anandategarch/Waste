@@ -35,7 +35,10 @@ _NUM_COLS = {"ANOMALY SCORE", "TOTAL", "MAX", "AVG", "HARI MAX", "RANK",
              # v2.9.0: kolom bukti hari (tab Hari Mencurigakan)
              "HARI TERSANGKA", "NILAI HARI TERSANGKA", "TIPIKAL CABANG LAIN",
              "N CABANG PEMBANDING", "RASIO VS CABANG LAIN",
-             "SHARE HARI TERSANGKA", "Count Hari"}
+             "SHARE HARI TERSANGKA", "Count Hari",
+             # v2.10.0: bukti vs bulan lalu + tabel banding periode
+             "NILAI BULAN LALU", "TIPIKAL BEBERAPA BULAN", "HARI AKTIF",
+             "Total Waste", "Waste per Hari", "Perubahan %"}
 
 # Kolom rasio (nilai 0..1) yang ditampilkan sebagai PERSEN — v2.8.1.
 # '% to BOM' = waste dibanding penjualan kuantiti (BOM = qty terjual);
@@ -51,7 +54,8 @@ PCT_COLS = frozenset({
 
 # Kolom rasio "berapa kali lipat" (v2.9.0) — ditampilkan '404×' / '8,5×',
 # BUKAN persen dan BUKAN angka mentah (0,0008 tidak terbaca manusia).
-RATIO_X_COLS = frozenset({"RASIO VS CABANG LAIN"})
+# v2.10.0: + RASIO VS BULAN LALU (bukti tanggal-sama bulan sebelumnya).
+RATIO_X_COLS = frozenset({"RASIO VS CABANG LAIN", "RASIO VS BULAN LALU"})
 
 # ============================================================
 # v2.9.0 — KAMUS ISTILAH (tooltip judul kolom, semua tabel & detail)
@@ -115,6 +119,10 @@ COLUMN_TOOLTIPS = {
     "SHARE HARI TERSANGKA": "Porsi hari tersangka dari total bulanan (≥ 50% = terpusat).",
     "BUKTI HARI": "YES = ada ≥ 1 bukti kuat hari itu mencurigakan.\nLihat ALASAN HARI untuk rinciannya.",
     "ALASAN HARI": "Ringkasan bukti hari tersangka dalam satu kalimat.",
+    # --- bukti vs bulan lalu (v2.10.0) ---
+    "NILAI BULAN LALU": "Nilai item yang sama di cabang yang sama pada\nTANGGAL yang sama, bulan pembanding sebelumnya\n(jumlah semua alasan) — kebiasaan bulan lalu.",
+    "RASIO VS BULAN LALU": "Berapa kali lipat nilai hari tersangka vs\ntanggal yang sama bulan lalu. ≥ 3× = jauh di atas\nkebiasaan bulan sebelumnya.",
+    "TIPIKAL BEBERAPA BULAN": "Nilai tengah tanggal yang sama dari ≥ 2\nbulan pembanding (butuh beberapa file bulan lalu).",
     # --- banding periode ---
     "Hari Data": "Banyak hari berdata pada periode itu.",
     "Hari Aktif": "Banyak hari dengan waste > 0.",
@@ -122,6 +130,12 @@ COLUMN_TOOLTIPS = {
     "Total_B": "Total periode B (pembanding).",
     "Delta": "Selisih (B − A).",
     "Delta %": "Perubahan relatif vs A.",
+    # --- banding periode v2.10.0 (kuantiti multi-file) ---
+    "Bulan Ini": "Nilai bulan berjalan (hasil run pipeline saat ini).",
+    "Pembanding": "Nilai bulan pembanding yang dipilih (bulan lalu / tipikal).\nKosong = item tidak ada di bulan pembanding.",
+    "Selisih": "Bulan ini dikurangi pembanding.\nMinus = turun, plus = naik.",
+    "Perubahan %": "Naik/turun relatif vs pembanding (mis. +28% = 1,28×).\nKosong = pembandingnya 0/tidak ada.",
+    "Metrik": "Nama ukuran yang dibandingkan.",
 }
 
 

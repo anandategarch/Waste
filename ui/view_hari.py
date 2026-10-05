@@ -25,7 +25,6 @@ import pandas as pd
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
-    QLabel,
     QVBoxLayout,
     QWidget,
 )
@@ -34,13 +33,26 @@ from .shared import fmt_id
 from .state import AppContext
 from .view_anomali import DetailDialog
 from .widgets import Card, DataTable, KpiCard, WLabel, busy_feedback
+from waste_anomaly.period_history import day_evidence_vs_history
 
 # Kolom tabel hari-mencurigakan (ramping — detail lengkap di pop-up).
+# v2.10.0: 3 kolom bukti vs bulan lalu HANYA muncul bila data pembanding
+# dimuat (filter `c in df.columns` di bawah) — tanpa pembanding, tabel
+# tampil persis seperti v2.9.0.
 TABLE_COLS = [
     "ANOMALY SCORE", "NAMA RESTO", "NAMA BARANG", "JENIS", "KETERANGAN",
     "HARI TERSANGKA", "NILAI HARI TERSANGKA", "TIPIKAL CABANG LAIN",
-    "RASIO VS CABANG LAIN", "SHARE HARI TERSANGKA", "ALASAN HARI",
+    "RASIO VS CABANG LAIN", "SHARE HARI TERSANGKA",
+    "NILAI BULAN LALU", "RASIO VS BULAN LALU", "TIPIKAL BEBERAPA BULAN",
+    "ALASAN HARI",
 ]
+
+_HINT_BASE = (
+    "💡 Bukti hari = angka besar menumpuk di tanggal tertentu: jauh di atas "
+    "cabang lain di hari yang sama, atau ≥ 50% waste sebulan jatuh di satu "
+    "hari, atau pola 10× (salah ketik), atau waste cuma 1 hari. Kolom "
+    "ALASAN HARI merangkum buktinya — hover judul kolom untuk arti tiap istilah."
+)
 
 
 class HariView(QWidget):
@@ -85,14 +97,12 @@ class HariView(QWidget):
         title = WLabel("📅 Hari Mencurigakan — potensi salah angka per tanggal (1–31)", card)
         title.setObjectName("cardTitle")
         cl.addWidget(title)
-        hint = WLabel(
-            "💡 Bukti hari = angka besar menumpuk di tanggal tertentu: jauh di atas "
-            "cabang lain di hari yang sama, atau ≥ 50% waste sebulan jatuh di satu "
-            "hari, atau pola 10× (salah ketik), atau waste cuma 1 hari. Kolom "
-            "ALASAN HARI merangkum buktinya — hover judul kolom untuk arti tiap istilah.",
-            card)
+        hint = WLabel(_HINT_BASE, card)
         hint.setObjectName("hint")
+        hint.setWordWrap(True)
         cl.addWidget(hint)
+        # v2.10.0: diperbarui dinamis saat pembanding bulan lalu tersedia.
+        self._hint = hint
 
         # Bar kontrol: combo tampilkan
         ctrl = QWidget(card)
@@ -137,12 +147,19 @@ class HariView(QWidget):
         # (hit) + memo teks model tetap hidup. Strong ref ke df dasar = id
         # tak bisa dipakai ulang selama cache hidup (kunci id() aman).
         self._bukti_cache: tuple[int, int, pd.DataFrame] | None = None
+        # v2.10.0: memo df + bukti bulan-lalu — kunci (id df, len, versi
+        # history); objek SAMA dipakai ulang antar-refresh → cache fit
+        # DataTable tetap kena (pola _bukti_cache).
+        self._hist_cache: tuple[int, int, int, pd.DataFrame] | None = None
 
         # Reaksi state — pola lazy H2 (sama dengan AnomaliView).
         self._dirty = True
         self._batch_filters = False
         ctx.data_ready.connect(self._on_data_ready)
         ctx.filters_changed.connect(self._on_filters_changed)
+        # v2.10.0: pembanding bulan lalu selesai dimuat → render ulang
+        # (kolom bukti bulan lalu muncul) bila terlihat, else tandai dirty.
+        ctx.history_ready.connect(self._on_history_ready)
 
     # ------------------------------------------------------------
     # STATE
@@ -164,6 +181,14 @@ class HariView(QWidget):
     def _on_mode_changed(self) -> None:
         if self.isVisible():
             self._refresh_table()
+
+    def _on_history_ready(self) -> None:
+        """v2.10.0: data pembanding (bulan lalu) siap → tampilkan bukti
+        tanggal-sama bulan lalu (kolom NILAI/RASIO/TIPIKAL BULAN LALU)."""
+        if self.isVisible():
+            self._refresh_table()
+        else:
+            self._dirty = True
 
     def on_shown(self) -> None:
         """Kontrak lazy-render: view dibuka setelah data baru / filter basi."""
@@ -215,10 +240,24 @@ class HariView(QWidget):
         else:
             df_show = df
         n_bukti_all = int(bukti.sum())
+        # v2.10.0: bukti tambahan vs bulan lalu (tanggal sama) — hanya bila
+        # pembanding dimuat; memo objek per (id, len, versi history).
+        months = self._ctx.history_months_ok()
+        if months:
+            df_show = self._with_history(df_show)
+            labels = ", ".join(str(m.get("label")) for m in months[:3]) \
+                + (f" +{len(months) - 3} lainnya" if len(months) > 3 else "")
+            self._hint.setText(
+                _HINT_BASE + f" 📅 Pembanding aktif: {labels} — kolom NILAI "
+                "BULAN LALU = tanggal yang sama bulan sebelumnya (tambahkan "
+                "file bulan lalu di tab Banding Periode).")
+        else:
+            self._hint.setText(_HINT_BASE)
         cols = [c for c in TABLE_COLS if c in df_show.columns]
         self._table.set_dataframe(
             df_show, sort_desc="RASIO VS CABANG LAIN",
-            narrow_hide=["JENIS", "KETERANGAN", "ALASAN HARI"],
+            narrow_hide=["JENIS", "KETERANGAN", "NILAI BULAN LALU",
+                         "TIPIKAL BEBERAPA BULAN", "ALASAN HARI"],
             visible_cols=cols)
         n_tampil = len(df_show)
         if n_tampil == 0:
@@ -237,6 +276,23 @@ class HariView(QWidget):
             if r == r:
                 rasio = float(r)
         self._update_kpi(n_tampil, n_bukti_all, rasio)
+
+    def _with_history(self, df_show: pd.DataFrame) -> pd.DataFrame:
+        """Tambah kolom bukti bulan-lalu (memo — pola _bukti_cache).
+
+        day_evidence_vs_history vektor (merge) ~ms-level untuk ribuan
+        baris; hasilnya di-memo supaya objek df SAMA dipakai ulang
+        antar-refresh → cache fit DataTable tidak invalidasi ulang."""
+        ver = self._ctx.history_version
+        cached = self._hist_cache
+        if (cached is not None and cached[0] == id(df_show)
+                and cached[1] == len(df_show) and cached[2] == ver):
+            return cached[3]
+        out = day_evidence_vs_history(
+            df_show, months=self._ctx.history_months_ok(),
+            typical=self._ctx.history_typical, config=self._ctx.config)
+        self._hist_cache = (id(df_show), len(df_show), ver, out)
+        return out
 
     def _update_kpi(self, n_tampil: int, n_bukti: int, rasio) -> None:
         self._kpi_tampil.set_value(fmt_id(n_tampil or 0))

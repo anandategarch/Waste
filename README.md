@@ -1,6 +1,8 @@
 # Waste Anomaly Detection
 
-Python + PySide6 (Qt) **anomaly workbench** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif**, **filter profile persistence**, **benchmark peer aktif (pop-up detail + sinyal S8/S9)**, **kolom % to BOM (waste vs penjualan kuantiti)**, **data quality otomatis (pipeline & export)**, dan **compare periode bulan-ke-bulan** (v2.8.1: 5 → 3 view — tab Jelajah & Waktu + seluruh modul chart dihapus; v2.8.0: 8 → 5 view — tab Uang/Peer/Kualitas Data dihapus).
+Python + PySide6 (Qt) **anomaly workbench** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif**, **filter profile persistence**, **benchmark peer aktif (pop-up detail + sinyal S8/S9)**, **kolom % to BOM (waste vs penjualan kuantiti)**, **data quality otomatis (pipeline & export)**, **compare periode bulan-ke-bulan**, dan **banding vs beberapa bulan lalu (multi-file, kuantiti tanpa BOM, v2.10.0)** (v2.8.1: 5 → 3 view — tab Jelajah & Waktu + seluruh modul chart dihapus; v2.8.0: 8 → 5 view — tab Uang/Peer/Kualitas Data dihapus).
+
+> **v2.10.0** — **Banding Periode multi-file (history bulan-bulan lalu)**: pembanding kini **DAFTAR workbook** (1 file = 1 bulan, template "REKAP MENTAH" — kolom NAMA BARANG/NAMA RESTO/SATUAN/hari 1–31, **tanpa angka BOM**; file yang Anda upload terverifikasi kompatibel). **Nama bulan dibaca otomatis dari nama file** ("…AGUSTUS 2026…" → "Agustus 2026"; klik 2× baris untuk koreksi manual) dan **daftar file diingat antar sesi** (`history_files.json`, atomic). Dimuat berurutan **di background** (`HistoryWorker` QThread: progress per-file + tombol ⏹ Batal + cache mtime — file tak berubah tidak dibaca ulang; file gagal ditandai merah tanpa menghentikan file lain; ±2–3 dtk/file, UI tetap responsif). Banding **dua-duanya**: (a) **satu bulan pilihan** — ringkasan (Total Waste, **Waste per Hari** menormalkan beda panjang bulan 30/31 hari, cabang/item aktif), per-JENIS, cabang & item mover terbesar, item baru/hilang; (b) **📊 Tipikal** — **median gabungan ≥ 2 bulan** sebagai baseline deteksi perubahan. **Tab Hari Mencurigakan** kini menambah kolom **NILAI BULAN LALU** (nilai item+cabang sama di **tanggal yang sama** bulan sebelumnya), **RASIO VS BULAN LALU** (mis. **4,2×**; golden data asli: MIE 24-Sept 808 vs 194 Agustus), dan **TIPIKAL BEBERAPA BULAN** — plus kalimat bukti tambahan di ALASAN HARI bila ≥ 3× (threshold `TH_HARI_HIST_RATIO`). Saringan **JENIS ∈ {WASTE, TRIAL, SUSUT}** wajib diterapkan saat agregat (bukti data asli: tanpa saringan MIE hari-24 = 43.115 tercampur baris BOM/SO vs **194** yang benar). 476+58 = **534 test**.
 
 > **v2.9.0** — **Tab baru "Hari Mencurigakan"** (jawaban: "potensi salah angka terjadi di **tanggal berapa** 1–31?"): Stage 15 pipeline menghitung bukti per-hari — **HARI TERSANGKA** (tanggal nilai terbesar), **TIPIKAL CABANG LAIN** (median item sama di hari sama di outlet lain), **RASIO VS CABANG LAIN** (mis. **404×**), **SHARE HARI TERSANGKA**, dan **ALASAN HARI** satu kalimat siap baca; BUKTI HARI = YES bila rasio ≥ 5× ATAU share ≥ 50% ATAU pola 10× ATAU waste cuma 1 hari (golden data asli: 484/797 baris non-Normal = 60,7%). **Istilah dimudahkan + tooltip di SEMUA tempat** (permintaan: "bukan hanya S-1"): 12 fragmen sinyal jadi Bahasa awam ("Spike vs AVG" → "Lonjakan vs rata-rata"), kamus `COLUMN_TOOLTIPS` di judul kolom semua tabel, label metrik pop-up, chip S1–S12, KPI, dan kontrol filter — hover = penjelasan sehari-hari; pop-up detail kini punya **peta nilai per hari 1–31** dengan hari tersangka disorot merah. **Perf anti-lambat** (diukur data asli, sandbox): **Hapus Filter 461 → 87–95 ms (≈5×)**, **pencarian 1.456 → ~95 ms (≈15×)** — memo `anomali_df` LRU per tanda tangan filter + cache teks sel model + cache fit lebar/tinggi tabel LRU + blob pencarian (dibangun di worker thread; jebol NUL-separator numpy ditemukan & dihindari). 436+40 = 476 test.
 
@@ -82,12 +84,23 @@ Jalankan `MULAI.bat`. UI terbuka dengan **4 view** (v2.9.0 — rebuild PySide6; 
 |------|--------|
 | 🎯 Anomali (**default**) | Tabel anomali ter-ranking (skor ↓, tanpa cap baris, pewarnaan severity, kolom TOTAL + % to BOM) + detail **pop-up** saat baris diklik (12 sinyal S1–S12, peer, uang, **peta nilai per hari 1–31**) + drill-down 1-klik (cabang/item/alasan) + ambang "Skor ≥" + KPI mengikuti filter |
 | 📅 **Hari Mencurigakan** (v2.9.0) | "Potensi salah angka terjadi di **tanggal berapa** (1–31)?" — tabel anomali + bukti hari: HARI TERSANGKA · NILAI HARI · TIPIKAL CABANG LAIN · RASIO (×) · SHARE · ALASAN HARI; combo hanya-ada-bukti / semua; KPI rasio terbesar; pop-up detail + peta hari; hover judul kolom = arti istilah |
-| 🔀 Banding Periode | Run saat ini vs workbook lain (normalisasi waste/hari, item baru/hilang) |
+| 🔀 Banding Periode (v2.10.0) | **Bulan berjalan vs daftar file bulan lalu** (1 file = 1 bulan, format REKAP MENTAH — kuantiti tanpa BOM): nama bulan otomatis dari nama file (bisa dikoreksi), daftar **diingat antar sesi**, dimuat di background (+progress+cancel); banding per bulan atau vs **Tipikal** (median beberapa bulan): ringkasan (Total Waste, **Waste per Hari** — menormalkan beda 30/31 hari), per-JENIS, cabang/item bergerak terbesar, item baru/hilang |
 | ▶ Pipeline | Workbook + key akhir + Run/⏹Batal + progress + log + ringkasan + editor threshold |
 
 Sidebar kiri (bisa disembunyikan — ☰ Filter / Ctrl+Shift+F, v2.8.0): pencarian (debounce 300 ms), cabang, status, keterangan, rentang hari, profil filter tersimpan. Saat disembunyikan, tabel memakai lebar penuh jendela. Toolbar atas: **☰ Filter** + **💾 Export Excel** (global — tidak duplikat per tab) + **❓ Bantuan**.
 
 > **Catatan deviasi (v2.7.0):** nama tab di-elide `…` bila jendela sangat sempit — konvensi disengaja (elide kanan + tombol panah scroll tab, bukan terpotong mentah mid-kata); jaminan anti-terpotong tetap berlaku untuk semua konten view.
+
+### 4. Banding vs bulan-bulan lalu (opsional — v2.10.0)
+
+Simpan workbook rekap bulan lalu sesuai kebiasaan Anda (template **REKAP MENTAH**: kolom SOURCE DATA / JENIS / KETERANGAN / NAMA BARANG / NAMA RESTO / SATUAN / hari 1–31 — **tanpa angka BOM**; nama file sebaiknya memuat nama bulan, mis. `REKAP MENTAH_01-31 AGUSTUS 2026_TEGAR.xlsx`). Lalu di tab **🔀 Banding Periode**:
+
+1. Klik **＋ Tambah File…** — bisa pilih beberapa file sekaligus (1 file = 1 bulan; 2–3 bulan ideal).
+2. Nama bulan muncul otomatis dari nama file; **klik 2× baris** bila mau mengoreksi. Daftar **diingat antar sesi** — aplikasi dibuka lagi = bulan lalu termuat otomatis di background.
+3. Jalankan pipeline bulan berjalan seperti biasa → hasil banding muncul: **Ringkasan** (Total Waste, **Waste per Hari** — adil untuk beda panjang bulan), **Per Jenis**, **Cabang/Item Mover** (naik-turun terbesar), **Item Baru/Hilang**.
+4. Combo **"Banding dengan"**: pilih satu bulan tertentu, atau **📊 Tipikal** (median gabungan ≥ 2 bulan) untuk deteksi perubahan.
+
+Tab **📅 Hari Mencurigakan** otomatis menambah kolom **NILAI BULAN LALU** / **RASIO VS BULAN LALU** (tanggal yang sama bulan sebelumnya) saat pembanding tersedia. Tombol **🔄 Muat Ulang** membaca ulang file yang berubah (cache mtime — file sama tidak dibaca ulang).
 
 ## Output Excel (10 Sheet) — via tombol "💾 Export Excel" di toolbar
 
@@ -215,7 +228,7 @@ berubah. Hover chip di pop-up detail / judul kolom tabel = penjelasan lengkap.
 
 ## Testing
 
-**476 test** — golden regression end-to-end (fixture `DATA_WASTE.xlsx` 25.901 baris), unit test 12 sinyal S1–S12, join BOM & normalisasi kunci, presisi float, kontrak summary dict, validasi skema, cancel hook antar-stage, exporter dual-mode, logging framework, path frozen-mode, semantik filter (v2.5.1), 14 test struktural paket ui/ v2.6.0 (modul ada, mixin lama tak kembali, kontrak shared, kontrak view refresh/on_shown, worker QThread, manifest metode, MainWindow offscreen, infra chart dihapus), **49 test regresi fix audit v2.7.0** (gelombang 1–4: kontrak banding periode + closeEvent worker + memo filter; record penuh panel detail + 12 chip sinyal + fmt numpy + tabel besar; validasi threshold + default 20/20 key; manifest dua-arah + lantai header tabel + `fmt_id(None)` + versi), **dan 27 test regresi v2.8.0+v2.8.1** (3 view + file view/modul chart dihapus + tabel memanjang penuh + pop-up detail + kolom % to BOM + sidebar hide/unhide + help jujur; test view/chart lama dihapus jujur bersama subjeknya: −13 kontrak chart, −12 gelombang-3 view, −2 derived-sheets, −2 Pareto), **plus 2 test kontrak v2.8.2** (baris verifikasi SETUP.bat wajib sinkron dengan requirements.txt — anti bug "import matplotlib" basi), **dan 5 test v2.8.3** (busy feedback: cursor sibuk aktif selama render & dipulihkan; jalur sinyal filter terbungkus; pesan status ⏳/✓ terkirim; helper aman bersarang; kontrak sumber titik-tunggal), **plus 40 test v2.9.0** (Stage 15 day_focus unit + golden hari tersangka data asli + tab Hari Mencurigakan offscreen + istilah awam & tooltip kontrak + cache perf). Jalankan setiap kali mengubah kode — angka golden berubah tanpa alasan = regresi.
+**534 test** — golden regression end-to-end (fixture `DATA_WASTE.xlsx` 25.901 baris), unit test 12 sinyal S1–S12, join BOM & normalisasi kunci, presisi float, kontrak summary dict, validasi skema, cancel hook antar-stage, exporter dual-mode, logging framework, path frozen-mode, semantik filter (v2.5.1), 14 test struktural paket ui/ v2.6.0 (modul ada, mixin lama tak kembali, kontrak shared, kontrak view refresh/on_shown, worker QThread, manifest metode, MainWindow offscreen, infra chart dihapus), **49 test regresi fix audit v2.7.0** (gelombang 1–4: kontrak banding periode + closeEvent worker + memo filter; record penuh panel detail + 12 chip sinyal + fmt numpy + tabel besar; validasi threshold + default 20/20 key; manifest dua-arah + lantai header tabel + `fmt_id(None)` + versi), **dan 27 test regresi v2.8.0+v2.8.1** (3 view + file view/modul chart dihapus + tabel memanjang penuh + pop-up detail + kolom % to BOM + sidebar hide/unhide + help jujur; test view/chart lama dihapus jujur bersama subjeknya: −13 kontrak chart, −12 gelombang-3 view, −2 derived-sheets, −2 Pareto), **plus 2 test kontrak v2.8.2** (baris verifikasi SETUP.bat wajib sinkron dengan requirements.txt — anti bug "import matplotlib" basi), **dan 5 test v2.8.3** (busy feedback: cursor sibuk aktif selama render & dipulihkan; jalur sinyal filter terbungkus; pesan status ⏳/✓ terkirim; helper aman bersarang; kontrak sumber titik-tunggal), **plus 40 test v2.9.0** (Stage 15 day_focus unit + golden hari tersangka data asli + tab Hari Mencurigakan offscreen + istilah awam & tooltip kontrak + cache perf), **plus 60 test v2.10.0** (label bulan dari nama file; saringan JENIS + golden MIE 194 vs 43.115; agregat & banding kuantiti — arah %, mover, baru/hilang; Tipikal median; bukti hari vs bulan lalu + threshold config; persistensi daftar file atomic + backup korup + frozen-path; HistoryWorker cancel + file-gagal-tidak-menggagalkan; PeriodeView offscreen multi-file + combo + edit label + hapus + cache mtime; HariView kolom bulan-lalu + memo objek; istilah & format kolom baru; golden data asli 2 workbook). Jalankan setiap kali mengubah kode — angka golden berubah tanpa alasan = regresi.
 
 ## Packaging — EXE Standalone
 
@@ -242,19 +255,22 @@ Waste/
 │   ├── state.py                   ← AppContext: state tunggal + signal Qt
 │   ├── models.py                  ← PandasTableModel (tabel virtualized, sort, severity,
 │   │                                 fmt_cell + fmt_pct utk kolom rasio % — v2.8.1)
-│   ├── workers.py                 ← PipelineWorker / ExportWorker / PeriodWorker (QThread)
+│   ├── workers.py                 ← PipelineWorker / ExportWorker / HistoryWorker (QThread,
+│   │                                 v2.10.0: muat file pembanding di background)
 │   ├── widgets.py                 ← Blok anti-terpotong: WLabel, DataTable
 │   │                                 (auto-fit + wrap), KpiStrip, StatusChip
 │   ├── app.py                     ← MainWindow (toolbar + sidebar + 3 view) + main()
 │   ├── view_anomali.py            ← View 1 Anomali (default): ranking + % to BOM + pop-up detail + peta hari
 │   │                                 + DetailDialog pop-up + drill (v2.8.1)
 │   ├── view_hari.py               ← View 2 Hari Mencurigakan (v2.9.0): bukti hari 1-31
-│   ├── view_periode.py            ← View 3 Banding Periode
+│   │                                 + bukti tanggal-sama bulan lalu (v2.10.0)
+│   ├── view_periode.py            ← View 3 Banding Periode: multi-file bulan lalu +
+│   │                                 Tipikal median (v2.10.0)
 │   └── view_pipeline.py           ← View 3 Pipeline (+ ringkasan + threshold editor)
 ├── assets/                         ← Ikon aplikasi (ico + png)
 ├── make_sample.py                  ← Generate sample workbook untuk testing
 ├── sample_workbook.xlsx            ← Fixture test in-repo (v2.7.0 — hasil make_sample.py)
-├── tests/                          ← Test suite pytest (476 test)
+├── tests/                          ← Test suite pytest (534 test)
 │   ├── conftest.py
 │   ├── fixtures/ui_methods_manifest.txt  ← Manifest def top-level ui/ (kunci struktural DUA-ARAH, v2.7.0)
 │   ├── test_pipeline_regression.py ← Golden regression 25.901 baris (14 test)
@@ -272,17 +288,22 @@ Waste/
 │   ├── test_period_compare.py      ← Compare periode bulan-ke-bulan (23)
 │   ├── test_filter_semantics.py    ← Semantik filter + fmt_id (26)
 │   ├── test_ui_structure.py        ← Struktur paket ui/ (manifest + offscreen) (14)
-│   ├── test_v270_wave1.py          ← Regresi fix audit v2.7.0 gel. 1 (10)
+│   ├── test_v270_wave1.py          ← Regresi fix audit v2.7.0 gel. 1 (8; v2.10.0:
+│   │                                 kontrak PeriodWorker pindah ke test_v2100.py)
 │   ├── test_v270_wave2.py          ← Regresi fix audit v2.7.0 gel. 2 (23)
 │   ├── test_v270_wave3.py          ← Regresi fix audit v2.7.0 gel. 3 (6)
 │   ├── test_v270_wave4.py          ← Regresi fix audit v2.7.0 gel. 4 (10)
-│   └── test_v280.py                ← Regresi v2.8.0–v2.8.3: 3 view + pop-up detail
-│                                     + kolom % to BOM + sidebar + busy feedback (32)
-├── .github/workflows/ci.yml        ← CI: matrix Python × OS, lint + 476 test
+│   ├── test_v280.py                ← Regresi v2.8.0–v2.8.3: 3 view + pop-up detail
+│   │                                 + kolom % to BOM + sidebar + busy feedback (32)
+│   ├── test_v290.py                ← Regresi v2.9.0: Stage 15 hari tersangka + tab
+│   │                                 Hari Mencurigakan + istilah awam + cache perf (37)
+│   └── test_v2100.py               ← Regresi v2.10.0: pembanding multi-file +
+│                                     tipikal + bukti bulan-lalu (60)
+├── .github/workflows/ci.yml        ← CI: matrix Python × OS, lint + 534 test
 ├── waste_anomaly/
-│   ├── __init__.py                 ← __version__ single-source (2.9.0)
+│   ├── __init__.py                 ← __version__ single-source (2.10.0)
 │   ├── frozen.py                   ← Resolusi path PyInstaller exe vs dev (v2.4.1)
-│   ├── config.json                 ← Thresholds + sheet name candidates (version 2.9.0)
+│   ├── config.json                 ← Thresholds + sheet name candidates (version 2.10.0)
 │   ├── pipeline.py                 ← Orchestrator 14 stage + cancel_check (in-memory)
 │   ├── schema.py                   ← Validasi skema input (anti degradasi senyap)
 │   ├── logging_setup.py            ← Rotating file log + hook exception
@@ -295,6 +316,9 @@ Waste/
 │   ├── priority.py                 ← Money view + benchmark peer — dipakai export
 │   ├── data_quality.py             ← 7 pemeriksaan kualitas data — pipeline + export
 │   ├── period_compare.py           ← Banding 2 periode + auto key_akhir
+│   ├── period_history.py           ← Pembanding multi-file: label bulan dari nama
+│   │                                 file + agregat kuantiti + Tipikal median +
+│   │                                 bukti hari vs bulan lalu + persist (v2.10.0)
 │   ├── filters.py                  ← Filter profile persistence
 │   ├── exporter.py                 ← Multi-sheet xlsx writer + mode streaming
 │   └── utils.py                    ← Helper (load_config, norm_text, dll)

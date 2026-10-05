@@ -4,9 +4,9 @@ Mengunci perbaikan audit v2.6.x (FIX wave 1):
 - V26-H3: ui.view_periode._RESULT_KEYS cocok dengan kunci asli hasil
   compare_periods ('branch'/'items') — dulu 'branch_summary'/'item_summary'
   → tab Cabang Mover & Item Mover Banding Periode selalu kosong.
-- Regresi key_akhir PeriodWorker (vs v2.5.1): pipeline periode B harus
-  menerima hari aktif terbesar workbook B (deteksi sheet mentah), bukan
-  default 31 → sinyal S11 (LAST DAY SHARE) hidup untuk periode B.
+- Regresi key_akhir pembanding (vs v2.5.1): hari aktif terbesar workbook
+  pembanding dideteksi dari sheet mentah, bukan default 31 (v2.10.0:
+  PeriodWorker → HistoryWorker; kontrak penerus di test_v2100.py).
 - V26-H1: closeEvent meng-guard SEMUA worker (pipeline/export/banding
   periode) — jawab 'tidak' → close di-ignore; jawab 'ya' → cancel+wait.
 - V26-H2: sidebar sinkron kembali setelah re-run (combo/search/chip
@@ -24,13 +24,11 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
 # Harus diset sebelum PySide6 di-import (dilakukan lazy di dalam test).
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from waste_anomaly.period_compare import compare_periods
-from waste_anomaly.pipeline import run_pipeline
 
 REPO = Path(__file__).resolve().parent.parent
 SAMPLE_WB = REPO / "sample_workbook.xlsx"
@@ -89,102 +87,13 @@ class TestResultKeys:
 
 
 # ============================================================
-# FIX 2 — PeriodWorker: pipeline B dengan key_akhir terdeteksi
+# FIX 2 — PeriodWorker: pipeline B key_akhir terdeteksi (v2.7.0)
+# ------------------------------------------------------------
+# v2.10.0: PeriodWorker DIGANTI HistoryWorker (banding kini
+# multi-file, jalur ringan kuantiti tanpa BOM — kontrak penerus
+# deteksi key_akhir + cancel ada di test_v2100.py). Kelas & helper
+# lama dihapus jujur bersama subjeknya (pola v2.8.1).
 # ============================================================
-
-def _build_workbook_hari20(tmp_path: Path) -> Path:
-    """Workbook periode B dari sample_workbook.xlsx, hari 21..31 dikosongkan
-    (data berhenti di hari 20) + satu baris di-spike di hari 20 (S11)."""
-    rekap = pd.read_excel(SAMPLE_WB, sheet_name="DATA_WASTE")
-    day_cols = [c for c in rekap.columns
-                if str(c).strip().isdigit() and 21 <= int(str(c)) <= 31]
-    for c in day_cols:
-        rekap[c] = 0.0
-    # Spike hari ke-20 (hari aktif TERAKHIR) — S11 LAST DAY SHARE harus
-    # punya nilai > 0 untuk baris ini saat pipeline B jalan dengan ka=20.
-    rekap.loc[0, "20"] = 60.0
-    all_days = [c for c in rekap.columns if str(c).strip().isdigit()]
-    rekap["TOTAL"] = rekap[all_days].sum(axis=1)
-    out = tmp_path / "wb_periode_b_hari20.xlsx"
-    with pd.ExcelWriter(out, engine="openpyxl") as writer:
-        rekap.to_excel(writer, sheet_name="DATA_WASTE", index=False)
-        pd.read_excel(SAMPLE_WB, sheet_name="BOM").to_excel(
-            writer, sheet_name="BOM", index=False)
-        pd.read_excel(SAMPLE_WB, sheet_name="DATABASE_SATUAN").to_excel(
-            writer, sheet_name="DATABASE_SATUAN", index=False)
-    return out
-
-
-class TestPeriodWorkerKeyAkhir:
-    @pytest.fixture()
-    def df_a(self) -> pd.DataFrame:
-        """Periode A: pipeline sample penuh (31 hari)."""
-        summary = run_pipeline(str(SAMPLE_WB), key_akhir=31)
-        assert summary.get("success"), summary.get("error")
-        return summary["df"]
-
-    def test_pipeline_b_menerima_key_akhir_terdeteksi_bukan_31(
-            self, df_a, tmp_path, monkeypatch):
-        """Bukti regresi: pre-fix run_pipeline dipanggil key_akhir=None →
-        di-resolve 31 → S11 periode B mati. Fix → deteksi mentah = 20."""
-        _ensure_app()
-        from ui import workers as ui_workers
-        from ui.workers import PeriodWorker
-
-        wb_b = _build_workbook_hari20(tmp_path)
-        captured: dict = {}
-        orig = ui_workers.run_pipeline
-
-        def spy(*args, **kwargs):
-            captured["key_akhir"] = kwargs.get("key_akhir")
-            summary = orig(*args, **kwargs)
-            captured["summary"] = summary
-            return summary
-
-        monkeypatch.setattr(ui_workers, "run_pipeline", spy)
-
-        results: list[dict] = []
-        failures: list[tuple[str, str]] = []
-        worker = PeriodWorker(df_a, str(wb_b), 31)
-        worker.done.connect(results.append)
-        worker.failed.connect(lambda err, tb: failures.append((err, tb)))
-        worker.run()  # sinkron — QThread.run() boleh dipanggil langsung
-
-        assert not failures, f"worker gagal: {failures[0]}"
-        assert results, "signal done tidak terpicu"
-        # run_pipeline periode B menerima hari terdeteksi (20), bukan None/31
-        assert captured["key_akhir"] == 20
-        # summary pipeline B memakai ka yang sama (S11 vs hari 20, bukan 31)
-        assert captured["summary"].get("key_akhir") == 20
-        # hasil banding memakai ka_b konsisten
-        assert results[0]["key_akhir_b"] == 20
-        # S11 hidup: kolom LAST DAY SHARE ada & spike hari 20 terhitung
-        df_b = captured["summary"].get("df")
-        assert "LAST DAY SHARE" in df_b.columns
-        assert float(df_b["LAST DAY SHARE"].max()) > 0
-
-    def test_cancel_worker_banding(self, df_a, tmp_path, monkeypatch):
-        """V26-L5: cancel() sebelum pipeline → failed 'dibatalkan pengguna',
-        pipeline B TIDAK dijalankan."""
-        _ensure_app()
-        from ui import workers as ui_workers
-        from ui.workers import PeriodWorker
-
-        wb_b = _build_workbook_hari20(tmp_path)
-        called: list[bool] = []
-        monkeypatch.setattr(ui_workers, "run_pipeline",
-                            lambda *a, **k: called.append(True) or {})
-
-        failures: list[tuple[str, str]] = []
-        results: list[dict] = []
-        worker = PeriodWorker(df_a, str(wb_b), 31)
-        worker.done.connect(results.append)
-        worker.failed.connect(lambda err, tb: failures.append((err, tb)))
-        worker.cancel()
-        worker.run()
-        assert not called, "pipeline B tidak boleh dijalankan setelah cancel"
-        assert results == []
-        assert failures and failures[0][0] == "Perbandingan dibatalkan pengguna"
 
 
 # ============================================================
@@ -360,13 +269,16 @@ class TestFilteredDfCache:
 
 
 # ============================================================
-# FIX 7 (V26-L6) — penanda hasil banding basi
+# FIX 7 (V26-L6) — hasil banding basi → v2.10.0: selalu segar otomatis
 # ============================================================
 
 class TestStaleResultMarker:
-    def test_data_baru_menandai_basi_dan_ganti_tab_tidak(self):
-        """Re-run periode A setelah banding → status 'tidak lagi berlaku';
-        sekadar ganti tab (on_shown, data sama) TIDAK boleh warning palsu."""
+    def test_data_baru_hasil_banding_auto_segar(self):
+        """v2.10.0 mengganti penanda 'hasil basi' (V26-L6): tabel banding
+        kini SELALU dihitung ulang dari dataset terkini saat view dibuka /
+        data_ready (render ~100 ms — tak ada lagi hasil lama yang menetap).
+        Kontrak penerus: dataset baru → _dirty; on_shown → render ulang;
+        TIDAK ada pesan basi (karena tidak mungkin basi)."""
         _ensure_app()
         from ui.app import MainWindow
 
@@ -376,25 +288,20 @@ class TestStaleResultMarker:
         })
         win = MainWindow()
         try:
-            # v2.8.0: lookup berdasar NAMA — urutan view berubah (8 → 5 tab)
             pv = next(v for _n, v in win._views if _n == "Banding Periode")
             summary = {"key_akhir": 31, "total_rows": 1}
             win.ctx.set_dataset(df, summary)
-            # simulasi hasil banding selesai (state seperti _on_done)
             pv._has_result = True
             pv._result_version = win.ctx.data_version
-            pv._lbl_status.setText("✓ Selesai — periode B: X (key_akhir 31).")
-            # ganti tab → on_shown → data TIDAK berubah → tanpa warning palsu
+            pv._lbl_status.setText("✓ 2 bulan pembanding aktif.")
+            # ganti tab → data sama → tanpa warning palsu
             pv.on_shown()
             assert "tidak lagi berlaku" not in pv._lbl_status.text()
-            # re-run pipeline → dataset baru → hasil di atas basi
+            # re-run pipeline → dataset baru → ditandai dirty (bukan basi)
             win.ctx.set_dataset(df.copy(), summary)
-            assert "tidak lagi berlaku" in pv._lbl_status.text()
+            assert pv._dirty
+            pv._refresh_result()
+            # hasil banding otomatis mengikuti dataset baru — kontrak baru:
+            assert "tidak lagi berlaku" not in pv._lbl_status.text()
         finally:
             win.close()
-
-
-# FIX 6 (V26-L11) — _build_derived_sheets defensif: DIHAPUS v2.8.1.
-# _build_derived_sheets + ctx.sheets dihapus dari ui/state.py — satu-
-# satunya konsumen adalah view Jelajah (dihapus total); export Excel
-# membangun sheet analisanya sendiri (ui/workers.py::_extra_sheets).

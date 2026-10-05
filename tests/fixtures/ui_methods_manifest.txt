@@ -27,6 +27,6 @@ widgets.py::WLabel
 widgets.py::busy_feedback
 widgets.py::status_chip_for
 workers.py::ExportWorker
-workers.py::PeriodWorker
+workers.py::HistoryWorker
 workers.py::PipelineWorker
 workers.py::_extra_sheets

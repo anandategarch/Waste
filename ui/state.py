@@ -5,6 +5,7 @@ day_min/max, _preview_dfs, last_summary, ...). Views membaca state via
 ctx, bereaksi lewat signal:
 
 - data_ready()      → dataset baru dari pipeline (df + summary)
+- history_ready()   → data pembanding bulan-bulan lalu selesai dimuat (v2.10.0)
 - filters_changed() → filter/drill-down berubah
 - status(text, kind)→ pesan status bar ("running"|"done"|"error")
 - log_line(str)     → satu baris log
@@ -34,6 +35,7 @@ class AppContext(QObject):
     """State aplikasi tunggal + signal perubahan."""
 
     data_ready = Signal()
+    history_ready = Signal()
     filters_changed = Signal()
     status = Signal(str, str)
     log_line = Signal(str)
@@ -83,6 +85,14 @@ class AppContext(QObject):
         # → ~0,1 dtk; lihat shared._build_search_blob).
         self._search_blob: pd.Series | None = None
         self._search_blob_version: int = -1
+        # v2.10.0: data pembanding periode (multi-file bulan lalu, kuantiti
+        # tanpa BOM) — diisi view Banding Periode via HistoryWorker (thread
+        # background). history_version naik tiap set_history → view Hari
+        # Mencurigakan mem-memo bukti "bulan lalu" per versi (cache fit
+        # DataTable tetap kena antar-refresh dengan state sama).
+        self.history_months: list[dict] = []
+        self.history_typical: dict | None = None
+        self.history_version: int = 0
 
     # ------------------------------------------------------------
     # DATA
@@ -121,6 +131,24 @@ class AppContext(QObject):
         # kebetulan terlihat, handler filters_changed hanya partial refresh
         # (bukan refresh penuh ganda).
         self.filters_changed.emit()
+
+    # ------------------------------------------------------------
+    # HISTORY PEMBANDING (v2.10.0)
+    # ------------------------------------------------------------
+    def set_history(self, months: list[dict],
+                    typical: dict | None = None) -> None:
+        """Simpan hasil HistoryWorker (daftar bulan + tipikal gabungan)
+        lalu broadcast history_ready. Entri ber-"error" tetap disimpan
+        (view menandainya merah) tapi dikecualikan dari history_months_ok."""
+        self.history_months = list(months or [])
+        self.history_typical = typical
+        self.history_version += 1
+        self.history_ready.emit()
+
+    def history_months_ok(self) -> list[dict]:
+        """Bulan pembanding yang berhasil dimuat (tanpa error, agg ada)."""
+        return [m for m in self.history_months
+                if m and not m.get("error") and m.get("agg") is not None]
 
     # ------------------------------------------------------------
     # FILTER
