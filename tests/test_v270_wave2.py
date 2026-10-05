@@ -330,6 +330,10 @@ class TestV270SectionResizedRefit:
         t.resize(900, 400)
         app.processEvents()
         t._auto_columns()
+        # v2.9.0: jendela tenang 300ms pasca-fit menelan resize deferred Qt
+        # internal — tirukan drag user SETELAH jendela itu lewat.
+        import time as _time
+        t._fit_ts = _time.monotonic() - 1.0
         # sempitkan kolom manual (di luar _in_fit) → refit terjadwal
         t.horizontalHeader().resizeSection(0, 60)
         assert t._refit_timer.isActive()

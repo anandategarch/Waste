@@ -30,6 +30,7 @@ Run:  python -m pytest tests/test_pipeline_regression.py -v
 
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from waste_anomaly.pipeline import run_pipeline
@@ -120,6 +121,47 @@ class TestPipelineContract:
         valid = {"Prioritas Tinggi", "Potensi Anomali", "Perlu Review", "Normal"}
         statuses = set(summary["df"]["ANOMALY STATUS"].dropna().unique())
         assert statuses <= valid, f"Status tak dikenal: {statuses - valid}"
+
+
+class TestGoldenHariTersangka:
+    """v2.9.0 — Stage 15 (day_focus): bukti hari tersangka pada data asli.
+
+    GOLDEN (v2.9.0): 484 dari 797 baris non-Normal punya BUKTI HARI = YES
+    (60,7%). Contoh dramatis terkunci: MIE (V.20) 1042.KWGGAL hari-24
+    nilai 808 vs tipikal cabang lain 2,0 → rasio 404× (dari pembuktian
+    read-only v2.8.3, /home/z/analisa-tmp/bukti_hari.py).
+    """
+
+    def test_day_evidence_count_golden(self, summary):
+        assert summary.get("day_evidence_count") == 484
+
+    def test_bukti_hari_domain_dan_konsistensi(self, summary):
+        df = summary["df"]
+        assert set(df["BUKTI HARI"].astype(str)) <= {"YES", "NO"}
+        yes = df[df["BUKTI HARI"].astype(str) == "YES"]
+        no = df[df["BUKTI HARI"].astype(str) == "NO"]
+        # YES ⇒ hari tersangka pasti ada & alasan terisi
+        assert yes["HARI TERSANGKA"].notna().all()
+        assert (yes["ALASAN HARI"].astype(str) != "").all()
+        # baris Normal ⇒ tidak ada klaim bukti
+        normal = df[df["ANOMALY STATUS"] == "Normal"]
+        assert (normal["BUKTI HARI"].astype(str) == "NO").all()
+
+    def test_contoh_dramatis_mie_kwggal_404x(self, summary):
+        df = summary["df"]
+        # satu outlet bisa punya >1 baris item yang sama (KETERANGAN beda)
+        # — pilih baris yang hari tersangkanya 24 (nilai 808).
+        row = df[(df["NAMA RESTO"] == "1042.KWGGAL")
+                 & (df["NAMA BARANG"] == "MIE (V.20)")
+                 & (pd.to_numeric(df["HARI TERSANGKA"], errors="coerce") == 24)]
+        assert len(row) == 1
+        r = row.iloc[0]
+        assert int(r["HARI TERSANGKA"]) == 24
+        assert r["NILAI HARI TERSANGKA"] == 808.0
+        assert r["TIPIKAL CABANG LAIN"] == 2.0
+        assert r["RASIO VS CABANG LAIN"] == 404.0
+        assert r["BUKTI HARI"] == "YES"
+        assert "Hari 24" in str(r["ALASAN HARI"])
 
 
 class TestIdempotency:

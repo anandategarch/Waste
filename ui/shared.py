@@ -37,7 +37,7 @@ def bundle_res_dir() -> Path:
     return _bundle_dir()
 
 
-APP_VERSION = "2.8.3"
+APP_VERSION = "2.9.0"
 APP_TITLE = "Waste Anomaly Detection"
 
 
@@ -68,9 +68,44 @@ def fmt_id(value: float, decimals: int = 0) -> str:
 # PURE FILTER HELPER (M23 → v2.5.1 semantics, VERBATIM dari ui lama)
 # ============================================================
 
+def _build_search_blob(df: pd.DataFrame) -> pd.Series:
+    """Kolom bantu pencarian: semua sel satu baris digabung jadi SATU string
+    kecil (v2.9.0, perf).
+
+    Masalah: pencarian 'semua kolom' menjalankan astype(str).str.lower()
+    .str.contains() di 53 kolom × 25.901 baris = 1,5 dtk BEKU tiap kata
+    yang diketik. Solusi: gabungkan sel per baris sekali (dipisah '\x01'),
+    lower, NaN → '' (setara gerbang DD-L4 'sel NaN dikecualikan') → tiap
+    pencarian tinggal SATU contains() atas 25.901 string pendek (~0,1 dtk).
+    Dibangun sekali per dataset di AppContext (cache data_version).
+
+    NOTE pemisah: '\x01' (SOH), BUKAN '\x00' — NUL adalah terminator
+    string C: numpy/pandas string-op memotongnya senyap ('a'+'\x00'+'b'
+    → 'ab', terbukti eksperimen) → pencarian bisa cocok LINTAS sel yang
+    salah (mis. '70' cocok di sambungan '7|0'). '\x01' utuh sampai ke
+    contains() dan mustahil diketik user.
+    """
+    sep = "\x01"
+    parts: list[pd.Series] = []
+    for col in df.columns:
+        s = df[col]
+        txt = s.astype(str).str.lower()
+        # NaN/None jangan jadi 'nan' yang bisa cocok dicari — kembalikan ''
+        # (semantik sama dgn gerbang notna() jalur per-kolom).
+        txt = txt.where(s.notna(), "")
+        parts.append(txt)
+    if not parts:
+        return pd.Series([""] * len(df), index=df.index)
+    blob = parts[0]
+    for p in parts[1:]:
+        blob = blob + sep + p
+    return blob
+
+
 def _apply_filters(df: pd.DataFrame, filters: dict | None,
                    day_min: int | None = None, day_max: int | None = None,
-                   search: str = "") -> pd.DataFrame:
+                   search: str = "",
+                   search_blob: pd.Series | None = None) -> pd.DataFrame:
     """Filter df murni (tanpa side-effect, tanpa render).
 
     filters: dict key → nilai; None / list kosong di-skip.
@@ -81,12 +116,33 @@ def _apply_filters(df: pd.DataFrame, filters: dict | None,
     search: substring case-insensitive di kolom (mask OR, vectorized);
       v2.5.1 (DD-L4): sel NaN dikecualikan.
     v2.5.1 (DQ-M1): keterangan dibandingkan dengan normalisasi whitespace.
+    search_blob (v2.9.0): hasil _build_search_blob(df) — semua filter
+      baris-local (mask per baris) sehingga urutan search vs dropdown
+      bebas; hasil identik dgn jalur per-kolom, hanya 10× lebih cepat.
     """
     filtered = df.copy()
     col_map = {
         "cabang": "NAMA RESTO", "item": "NAMA BARANG", "jenis": "JENIS",
         "keterangan": "KETERANGAN", "status": "ANOMALY STATUS",
     }
+
+    # Search dulu (baris-local — urutan bebas; blob = jalur cepat).
+    search = (search or "").strip().lower()
+    if search:
+        if search_blob is not None and search_blob.index.equals(df.index):
+            mask = search_blob.str.contains(search, regex=False, na=False)
+            filtered = filtered[mask]
+        else:
+            mask = pd.Series(False, index=filtered.index)
+            for col in filtered.columns:
+                sub = filtered[col]
+                if not sub.notna().any():
+                    continue
+                mask |= sub.notna() & sub.astype(str).str.lower().str.contains(
+                    search, regex=False, na=False
+                )
+            filtered = filtered[mask]
+
     for key, val in (filters or {}).items():
         if val is None or (isinstance(val, list) and not val):
             continue
@@ -117,17 +173,4 @@ def _apply_filters(df: pd.DataFrame, filters: dict | None,
             hari_max.between(day_min, day_max, inclusive="both")
             & hari_max.notna()
         ]
-
-    # Search — vectorized per-column OR mask; notna() gate (DD-L4).
-    search = (search or "").strip().lower()
-    if search:
-        mask = pd.Series(False, index=filtered.index)
-        for col in filtered.columns:
-            sub = filtered[col]
-            if not sub.notna().any():
-                continue
-            mask |= sub.notna() & sub.astype(str).str.lower().str.contains(
-                search, regex=False, na=False
-            )
-        filtered = filtered[mask]
     return filtered

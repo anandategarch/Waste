@@ -6,9 +6,8 @@ Struktur:
 - Sidebar kiri: filter (cari, cabang, status, keterangan, rentang hari,
   chip aktif) + profil filter tersimpan — bisa disembunyikan/dimunculkan
   (v2.8.0: tabel & chart memakai lebar penuh saat sidebar disembunyikan)
-- QTabWidget 3 view (v2.8.1: 5 → 3 — tab Jelajah & Waktu dihapus total
-  bersama modul chart/dashboard): Anomali (default) · Banding Periode ·
-  Pipeline — render lazy per-view (H2)
+- QTabWidget 4 view (v2.9.0: + Hari Mencurigakan): Anomali (default) ·
+  Hari Mencurigakan · Banding Periode · Pipeline — render lazy per-view (H2)
 - Status bar: pesan status + hitungan baris/anomali permanen
 """
 from __future__ import annotations
@@ -56,6 +55,7 @@ from .shared import APP_DIR, APP_TITLE, APP_VERSION, bundle_res_dir, fmt_id
 from .state import AppContext
 from .theme import QSS
 from .view_anomali import AnomaliView
+from .view_hari import HariView
 from .view_periode import PeriodeView
 from .view_pipeline import PipelineView
 from .widgets import Card, WLabel
@@ -68,13 +68,19 @@ _HELP_HTML = """
 <h3>Tab Anomali (pemburu anomali)</h3>
 <ul>
 <li>Tabel anomali ter-ranking (skor tertinggi di atas; klik header kolom untuk sort).</li>
-<li>Klik baris → <b>pop-up detail</b>: 12 sinyal, angka peer, % to BOM (waste vs penjualan), dan konteks lengkap.</li>
+<li>Klik baris → <b>pop-up detail</b>: 12 sinyal, angka pembanding, % to BOM (waste vs penjualan), peta nilai per hari 1–31, dan konteks lengkap.</li>
 <li>Tombol drill-down di pop-up: fokus cabang / item / alasan dari baris terpilih; klik 2× baris = fokus cabang+item.</li>
 <li>"Skor ≥" menyembunyikan anomali ber-skor rendah (skor maksimum = 19).</li>
 </ul>
+<h3>Tab Hari Mencurigakan (v2.9.0)</h3>
+<ul>
+<li>Jawaban untuk: "potensi salah angka terjadi di <b>tanggal berapa</b> (1–31)?"</li>
+<li>Bukti hari = angka jauh di atas cabang lain di hari sama (mis. 404×), atau ≥ 50% waste sebulan di satu hari, atau pola 10× (salah ketik), atau waste cuma 1 hari.</li>
+<li>Kolom ALASAN HARI merangkum buktinya dalam satu kalimat; klik baris = pop-up dengan peta hari.</li>
+</ul>
 <h3>Filter (sidebar kiri)</h3>
 <ul>
-<li>Cari, cabang, status, keterangan, rentang hari — berlaku di tab Anomali.</li>
+<li>Cari, cabang, status, keterangan, rentang hari — berlaku di tab Anomali & Hari Mencurigakan.</li>
 <li>Profil filter bisa disimpan & dipulihkan.</li>
 <li>Sidebar bisa disembunyikan (☰ Filter / Ctrl+Shift+F) — tabel memakai lebar penuh.</li>
 </ul>
@@ -82,6 +88,10 @@ _HELP_HTML = """
 <ul>
 <li><b>Banding Periode</b> — run saat ini vs workbook bulan lalu.</li>
 </ul>
+<h3>💡 Bingung istilah?</h3>
+<p><b>Hover (arahkan mouse & diamkan)</b> di: judul kolom tabel, label metrik pop-up,
+chip sinyal S1–S12, kartu KPI, dan kontrol filter — muncul penjelasan singkat
+bahasa sehari-hari (mis. "% to BOM = waste dibanding penjualan").</p>
 <p><b>Export</b>: tombol <b>💾 Export Excel</b> di toolbar (selalu tersedia) —
 laporan lengkap termasuk sheet analisa (Waste per Hari, Money View, Data Quality).</p>
 <p>Semua teks dirancang anti-terpotong: teks panjang otomatis berpindah
@@ -90,7 +100,7 @@ baris; tabel tanpa cap baris.</p>
 
 
 class MainWindow(QMainWindow):
-    """Jendela utama: toolbar + sidebar filter (bisa di-hide) + 3 tab view + status bar."""
+    """Jendela utama: toolbar + sidebar filter (bisa di-hide) + 4 tab view + status bar."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -181,6 +191,7 @@ class MainWindow(QMainWindow):
         # pipeline & export; sheet analisa temporal/money/DQ tetap diexport.
         self._views: list[tuple[str, QWidget]] = [
             ("Anomali", AnomaliView(self.ctx)),
+            ("Hari Mencurigakan", HariView(self.ctx)),
             ("Banding Periode", PeriodeView(self.ctx)),
             ("Pipeline", PipelineView(self.ctx)),
         ]
@@ -189,8 +200,8 @@ class MainWindow(QMainWindow):
         self._tabs.currentChanged.connect(self._on_tab_changed)
         # Anti-terpotong: bila tab bar sempit, teks di-elide dengan '…'
         # (konvensi jelas) + tombol panah scroll — TIDAK pernah dipotong
-        # mentah mid-character. 3 tab (v2.8.1) muat longgar bahkan di
-        # jendela sempit.
+        # mentah mid-character. 4 tab (v2.9.0) masih muat di jendela
+        # normal; jendela sempit memakai tombol scroll.
         self._tabs.setElideMode(Qt.TextElideMode.ElideRight)
         self._tabs.setUsesScrollButtons(True)
         split.setSizes([300, 1200])
@@ -224,6 +235,12 @@ class MainWindow(QMainWindow):
         self._ent_search = QLineEdit(filt)
         self._ent_search.setPlaceholderText("ketik lalu tunggu 0,3 detik…")
         self._ent_search.setClearButtonEnabled(True)
+        # v2.9.0: tooltip kontrol filter (permintaan user — semua istilah
+        # mudah dicerna).
+        self._ent_search.setToolTip(
+            "Cari bebas di SEMUA kolom: nama cabang, nama item, alasan…\n"
+            "Berlaku otomatis setelah Anda berhenti mengetik 0,3 detik.\n"
+            "Kosongkan (tombol ✕) untuk menghapus pencarian.")
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(300)
@@ -236,12 +253,19 @@ class MainWindow(QMainWindow):
         fl.addWidget(WLabel("Cabang:", filt))
         self._cb_cabang = QComboBox(filt)
         self._cb_cabang.setMaximumWidth(260)
+        self._cb_cabang.setToolTip(
+            "Pilih satu cabang (drill-down) — '(Semua)' = tanpa filter cabang.\n"
+            "Pilihan selalu dari data PENUH, tidak menyusut saat ada filter lain.")
         self._cb_cabang.currentIndexChanged.connect(
             lambda _i: self._on_combo("cabang", self._cb_cabang))
         fl.addWidget(self._cb_cabang)
 
         fl.addWidget(WLabel("Status anomali:", filt))
         self._cb_status = QComboBox(filt)
+        self._cb_status.setToolTip(
+            "Prioritas Tinggi = skor ≥ 8 (paling layak diperiksa) ·\n"
+            "Potensi Anomali = skor 5–7 · Perlu Review = skor 3–4 ·\n"
+            "Normal = skor < 3 (kebanyakan baris).")
         for s in ("(Semua)", "Prioritas Tinggi", "Potensi Anomali",
                   "Perlu Review", "Normal"):
             self._cb_status.addItem(s)
@@ -252,6 +276,9 @@ class MainWindow(QMainWindow):
         fl.addWidget(WLabel("Keterangan (alasan):", filt))
         self._cb_ket = QComboBox(filt)
         self._cb_ket.setMaximumWidth(260)
+        self._cb_ket.setToolTip(
+            "Alasan pencatatan waste (kolom KETERANGAN):\n"
+            "mis. Alat/Mesin, Cancel Nota, Over Stock, Eksternal…")
         self._cb_ket.currentIndexChanged.connect(
             lambda _i: self._on_combo("keterangan", self._cb_ket))
         fl.addWidget(self._cb_ket)
@@ -261,6 +288,10 @@ class MainWindow(QMainWindow):
         rl.setContentsMargins(0, 0, 0, 0)
         rl.setSpacing(4)
         self._chk_hari = QCheckBox("Rentang hari kejadian (HARI MAX)", rng)
+        self._chk_hari.setToolTip(
+            "Batasi anomali yang NILAI TERBESARNYA jatuh di rentang tanggal ini.\n"
+            "Contoh: 13–15 = hanya anomali yang puncaknya di tanggal 13, 14, atau 15.\n"
+            "Gunakan bersama tab Hari Mencurigakan untuk mengisolasi tanggal.")
         self._chk_hari.toggled.connect(self._on_hari_toggled)
         rl.addWidget(self._chk_hari)
         spins = QWidget(rng)
@@ -271,6 +302,7 @@ class MainWindow(QMainWindow):
         self._spin_dmax = QSpinBox(spins)
         for s in (self._spin_dmin, self._spin_dmax):
             s.setRange(1, 31)
+            s.setToolTip("Tanggal awal/akhir (1–31) rentang hari kejadian.")
             s.valueChanged.connect(self._on_hari_changed)
         sl.addWidget(self._spin_dmin)
         sl.addWidget(WLabel("–", spins))
@@ -280,11 +312,17 @@ class MainWindow(QMainWindow):
         fl.addWidget(rng)
 
         self._btn_clear = QPushButton("✕ Hapus Semua Filter", filt)
+        self._btn_clear.setToolTip(
+            "Hapus semua filter, pencarian, dan rentang hari —\n"
+            "kembali ke tampilan anomali penuh.\n"
+            "(Saat proses, muncul indikator ⏳ + cursor sibuk — bukan hang.)")
         self._btn_clear.clicked.connect(self._clear_filters)
         fl.addWidget(self._btn_clear)
 
         self._lbl_chips = WLabel("Tidak ada filter aktif.", filt)
         self._lbl_chips.setObjectName("hint")
+        self._lbl_chips.setToolTip(
+            "Daftar filter yang sedang aktif (chip ringkas).")
         fl.addWidget(self._lbl_chips)
         lay.addWidget(filt)
 
@@ -295,9 +333,14 @@ class MainWindow(QMainWindow):
         pl2.setSpacing(8)
         t2 = WLabel("Profil Filter Tersimpan", prof)
         t2.setObjectName("cardTitle")
+        t2.setToolTip(
+            "Profil = foto (snapshot) SEMUA filter yang sedang aktif —\n"
+            "disimpan ke file, bisa dipulihkan kapan saja.\n"
+            "Cocok utk kombinasi filter yang sering dipakai.")
         pl2.addWidget(t2)
         self._cb_profile = QComboBox(prof)
         self._cb_profile.setMaximumWidth(260)
+        self._cb_profile.setToolTip("Pilih profil → filter dipulihkan seketika.")
         self._cb_profile.currentIndexChanged.connect(self._on_profile_picked)
         pl2.addWidget(self._cb_profile)
         prow = QWidget(prof)
@@ -305,9 +348,11 @@ class MainWindow(QMainWindow):
         prl.setContentsMargins(0, 0, 0, 0)
         prl.setSpacing(8)
         b_save = QPushButton("Simpan", prow)
+        b_save.setToolTip("Simpan kombinasi filter aktif sebagai profil (beri nama).")
         b_save.clicked.connect(self._save_profile)
         prl.addWidget(b_save)
         b_del = QPushButton("Hapus", prow)
+        b_del.setToolTip("Hapus profil terpilih dari daftar.")
         b_del.clicked.connect(self._delete_profile)
         prl.addWidget(b_del)
         pl2.addWidget(prow)

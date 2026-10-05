@@ -158,9 +158,11 @@ class TestSaveConfigValidasi:
 # ============================================================
 
 class TestDefaultConfig:
-    def test_thresholds_default_20_key(self):
+    def test_thresholds_default_21_key(self):
+        """v2.9.0: 20 → 21 key (+TH_HARI_PEER_RATIO — ambang bukti hari
+        tersangka; nilai 5×)."""
         from waste_anomaly.utils import _DEFAULT_CONFIG
-        assert len(_DEFAULT_CONFIG["thresholds"]) == 20
+        assert len(_DEFAULT_CONFIG["thresholds"]) == 21
 
     def test_default_menutup_semua_key_config_json(self):
         """Setiap key di config.json bawaan wajib punya default (Reset

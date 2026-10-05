@@ -26,7 +26,7 @@ MANIFEST = Path(__file__).resolve().parent / "fixtures" / "ui_methods_manifest.t
 EXPECTED_MODULES = [
     "__init__.py", "shared.py", "theme.py", "state.py", "models.py",
     "workers.py", "widgets.py", "app.py",
-    "view_anomali.py", "view_periode.py", "view_pipeline.py",
+    "view_anomali.py", "view_hari.py", "view_periode.py", "view_pipeline.py",
 ]
 
 # File mixin Tkinter lama — TIDAK BOLEH kembali (rebuild = penggantian total)
@@ -40,14 +40,16 @@ OLD_MIXIN_FILES = [
 # View data wajib punya kontrak lazy-render (refresh + on_shown)
 # v2.8.0: view_uang / view_peer / view_kualitas dihapus total (8 → 5 tab)
 # v2.8.1: view_jelajah / view_waktu dihapus total (5 → 3 tab)
+# v2.9.0: view_hari DITAMBAHKAN (tab Hari Mencurigakan — 3 → 4 tab)
 DATA_VIEWS = {
     "view_anomali.py": "AnomaliView",
+    "view_hari.py": "HariView",
     "view_periode.py": "PeriodeView",
 }
 
-# v2.8.1: 5 → 3 tab (Jelajah & Waktu dihapus total bersama modul chart)
+# v2.9.0: 3 → 4 tab (+ Hari Mencurigakan — bukti hari 1-31)
 VIEW_TAB_TITLES = [
-    "Anomali", "Banding Periode", "Pipeline",
+    "Anomali", "Hari Mencurigakan", "Banding Periode", "Pipeline",
 ]
 
 
@@ -157,18 +159,18 @@ class TestUiStructure:
         src = inspect.getsource(MainWindow._build_body)
         for title in VIEW_TAB_TITLES:
             assert f'("{title}"' in src, f"tab '{title}' tidak dibangun"
-        # 3 judul (v2.8.1), tidak ada duplikat
-        assert len(VIEW_TAB_TITLES) == len(set(VIEW_TAB_TITLES)) == 3
+        # 4 judul (v2.9.0), tidak ada duplikat
+        assert len(VIEW_TAB_TITLES) == len(set(VIEW_TAB_TITLES)) == 4
 
     def test_window_dibangun_offscreen(self):
-        """MainWindow + 3 view ter-instantiate tanpa display (smoke)."""
+        """MainWindow + 4 view ter-instantiate tanpa display (smoke)."""
         import sys
         from PySide6.QtWidgets import QApplication
         app = QApplication.instance() or QApplication(sys.argv)
         from ui.app import MainWindow
         win = MainWindow()
-        assert win._tabs.count() == 3
-        for i in range(3):
+        assert win._tabs.count() == 4
+        for i in range(4):
             assert win._tabs.tabText(i) == VIEW_TAB_TITLES[i]
         win.close()
 

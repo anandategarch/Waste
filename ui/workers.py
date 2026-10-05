@@ -20,6 +20,8 @@ from waste_anomaly.period_compare import auto_key_akhir, compare_periods
 from waste_anomaly.pipeline import run_pipeline
 from waste_anomaly.utils import load_config
 
+from .shared import _build_search_blob
+
 
 def _extra_sheets(df: pd.DataFrame, key_akhir: int, log) -> dict:
     """Sheet analisa tambahan untuk laporan Excel (logika v2.5.0 port).
@@ -90,6 +92,12 @@ class PipelineWorker(QThread):
                 progress_callback=lambda msg, pct: self.progress.emit(str(msg), float(pct)),
                 cancel_check=lambda: self._cancel,
             )
+            # v2.9.0 (perf): bangun blob pencarian DI THREAD WORKER —
+            # 1,2 dtk dikenakan di background, bukan UI thread (tanpa ini,
+            # pencarian pertama membeku 1,5 dtk di thread UI).
+            if summary.get("success") and summary.get("df") is not None:
+                self.progress.emit("Menyiapkan pencarian cepat ...", 99)
+                summary["search_blob"] = _build_search_blob(summary["df"])
         except Exception as e:  # noqa: BLE001 — semua error ke UI, bukan crash thread
             self.failed.emit(str(e), traceback.format_exc())
             return

@@ -59,7 +59,7 @@ class TestS1SpikeVsAvg:
         assert score == 0
 
     def test_reason_teks(self):
-        assert "Spike vs AVG" in reason_of(make_df(**{"Count Hari": 2, "MAX / AVG": 3.0}))
+        assert "Lonjakan vs rata-rata harian" in reason_of(make_df(**{"Count Hari": 2, "MAX / AVG": 3.0}))
 
 
 # ============================================================

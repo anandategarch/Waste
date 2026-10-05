@@ -13,6 +13,7 @@ tabel per-ranking; kolom rasio ditampilkan sebagai persen.
 from __future__ import annotations
 
 import pandas as pd
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
@@ -27,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .models import PCT_COLS, fmt_cell, fmt_pct
+from .models import COLUMN_TOOLTIPS, PCT_COLS, RATIO_X_COLS, fmt_cell, fmt_pct, fmt_ratio_x
 from .shared import fmt_id
 from .state import AppContext
 from .widgets import (
@@ -51,19 +52,53 @@ TABLE_COLS = [
 # sampai UI, jadi status terpicu chip dibaca dari fragmen di teks
 # ANOMALY REASONS; nilai _s* hanya fallback bila kolom ada (fixture
 # test sintetis) — sebelum fix ini 12 chip SELALU abu-abu di data riil.
+# v2.9.0 (permintaan user "permudah istilah"): label tanpa jargon;
+# penjelasan lengkap tiap sinyal ada di _CHIP_TIPS (tooltip chip).
 _CHIP_LABELS = {
-    "_s1": "S1 · Spike vs AVG",
-    "_s2": "S2 · MAX ≫ AVG aktif",
-    "_s3": "S3 · MAX ≫ MEDIAN aktif",
-    "_s4": "S4 · Konsentrasi MAX",
-    "_s5": "S5 · Gap MAX vs SECOND",
-    "_s6": "S6 · MAX/BOM tinggi",
-    "_s7": "S7 · TOTAL/BOM tinggi",
-    "_s8": "S8 · MAX outlier peer",
-    "_s9": "S9 · TOTAL outlier peer",
-    "_s10": "S10 · Single-day event",
-    "_s11": "S11 · Dominasi hari akhir",
-    "_s12": "S12 · Potensi salah skala",
+    "_s1": "S1 · Lonjakan vs rata-rata",
+    "_s2": "S2 · Lonjakan vs hari aktif",
+    "_s3": "S3 · Lonjakan vs nilai tengah",
+    "_s4": "S4 · Terpusat di satu hari",
+    "_s5": "S5 · Jauh di atas hari kedua",
+    "_s6": "S6 · Puncak vs BOM",
+    "_s7": "S7 · Total vs BOM",
+    "_s8": "S8 · Puncak vs cabang lain",
+    "_s9": "S9 · Total vs cabang lain",
+    "_s10": "S10 · Waste hanya 1 hari",
+    "_s11": "S11 · Menumpuk di hari terakhir",
+    "_s12": "S12 · Pola 10× (salah ketik?)",
+}
+
+# v2.9.0 — tooltip chip sinyal: penjelasan Bahasa awam + angka threshold
+# + apa yang biasanya diperiksa. Hover chip = langsung paham.
+_CHIP_TIPS = {
+    "_s1": ("Nilai waste di satu hari ≥ 3× rata-rata harian item yang sama.\n"
+             "Sering karena salah ketik angka (mis. 7 → 70) — cek tanggal "
+             "di HARI TERSANGKA."),
+    "_s2": ("Nilai terbesar ≥ 2,5× rata-rata HARI YANG ADA WASTENYA saja.\n"
+             "Lebih adil dari S1: hari kosong tidak menarik rata-rata turun."),
+    "_s3": ("Nilai terbesar ≥ 3× nilai tengah (median) hari aktif.\n"
+             "Nilai tengah tahan terhadap 1 hari ekstrem — lonjakan besar "
+             "di sini lebih kuat mencurigakan."),
+    "_s4": ("≥ 50% waste sebulan terjadi di SATU hari (≥ 70% = skor penuh).\n"
+             "Waste terpusat satu tanggal — cek apa kejadian nyata."),
+    "_s5": ("Nilai terbesar ≥ 3× nilai terbesar kedua.\n"
+             "Puncaknya menjulang sendirian — bukan pola harian biasa."),
+    "_s6": ("Nilai terbesar SEHARI ≥ 25% penjualan SEMBULAN (≥ 50% = skor penuh).\n"
+             "BOM = qty penjualan (bukan waste)."),
+    "_s7": ("Total waste sebulan ≥ 50% penjualan (≥ 100% = skor penuh).\n"
+             "BOM = qty penjualan (bukan waste)."),
+    "_s8": ("Nilai terbesar ≥ 2× nilai tengah cabang lain, item sama "
+             "(≥ 3× = skor penuh). Butuh ≥ 3 cabang pembanding."),
+    "_s9": ("Total sebulan ≥ 3× nilai tengah total cabang lain (item sama).\n"
+             "Butuh ≥ 3 cabang pembanding."),
+    "_s10": ("Waste baris ini hanya terjadi 1 hari sebulan + nilainya besar\n"
+              "(≥ 10% penjualan atau ≥ 2× cabang lain)."),
+    "_s11": ("≥ 70% waste sebulan menumpuk di HARI TERAKHIR periode.\n"
+              "Pola tumpukan akhir bulan — cek input hari terakhir."),
+    "_s12": ("Nilai ≈ 10× / 100× / 1000× nilai tengah sendiri — pola khas "
+              "salah ketik digit tambahan (7 → 70 → 700).\n"
+              "Tab Hari Mencurigakan menunjukkan tanggalnya."),
 }
 SIGNALS: list[tuple[str, str, str]] = [
     (col, _CHIP_LABELS[col], frag) for col, frag in SIGNAL_PARTS
@@ -183,7 +218,13 @@ class DetailPanel(Card):
             else:
                 fg, bg = "#64748b", "#f1f5f9"
                 text = label
-            gl.addWidget(StatusChip(text, fg, bg), i // 3, i % 3)
+            chip = StatusChip(text, fg, bg)
+            # v2.9.0: hover chip = penjelasan sinyal Bahasa awam
+            # (permintaan user: tooltip SEMUA istilah, bukan hanya S-1).
+            tip = _CHIP_TIPS.get(col, "")
+            if tip:
+                chip.setToolTip(tip)
+            gl.addWidget(chip, i // 3, i % 3)
         lay.addWidget(grid)
 
         # Alasan (teks lengkap ANOMALY REASONS)
@@ -206,15 +247,31 @@ class DetailPanel(Card):
             if col in rec.index:
                 key = QLabel(f"{col}:", metrics)
                 key.setStyleSheet("color:#64748b;")
+                # v2.9.0: label metrik + nilai dapat tooltip kamus istilah
+                tip = COLUMN_TOOLTIPS.get(col)
+                if tip:
+                    key.setToolTip(tip)
                 # v2.8.1: kolom rasio (BOM/SHARE) tampil sebagai persen —
                 # '0,00080' mentah tak terbaca manusia.
                 val = rec.get(col)
                 shown = (fmt_pct(val) if col in PCT_COLS
+                         else fmt_ratio_x(val) if col in RATIO_X_COLS
                          else fmt_cell(val))
                 val_lbl = WLabel(shown, metrics)
                 val_lbl.setStyleSheet("font-weight:600;")
+                if tip:
+                    val_lbl.setToolTip(tip)
                 fl.addRow(key, val_lbl)
         lay.addWidget(metrics)
+
+        # Peta hari 1-31 (v2.9.0): nilai waste per hari dalam mini-grid —
+        # hari tersangka disorot merah. "Grafik batang" tanpa matplotlib:
+        # 31 sel kecil (8 per baris) menunjukkan di tanggal mana angka
+        # besar itu duduk — jawaban visual utk "potensi salah angka di
+        # tanggal berapa".
+        lay.addWidget(self._section(
+            "Nilai per hari (1–31) — sel merah = hari tersangka"))
+        lay.addWidget(self._day_map(rec))
 
         # Tombol drill-down (filter langsung dari baris ini)
         lay.addWidget(self._section("Drill-down dari baris ini"))
@@ -246,6 +303,56 @@ class DetailPanel(Card):
         lbl.setStyleSheet(
             "color:#0f172a; font-weight:700; border:none; background:transparent;")
         return lbl
+
+    def _day_map(self, rec: pd.Series) -> QWidget:
+        """Mini-grid 31 sel: nilai per hari; hari tersangka merah (v2.9.0).
+
+        Sel berisi 'hari: nilai' bila ada wastenya, nomor hari saja (redup)
+        bila kosong. Tooltip sel = 'Hari N: nilai X'. Data dari kolom hari
+        '1'..'31' (ada di df hasil pipeline) + HARI TERSANGKA / HARI MAX.
+        """
+        host = QWidget()
+        gl = QGridLayout(host)
+        gl.setContentsMargins(0, 0, 0, 0)
+        gl.setSpacing(3)
+        day_cols = [c for c in (str(i) for i in range(1, 32))
+                    if c in rec.index]
+        tersangka = None
+        for src in ("HARI TERSANGKA", "HARI MAX"):
+            v = rec.get(src)
+            try:
+                if v is not None and not pd.isna(v):
+                    tersangka = int(float(v))
+                    break
+            except (TypeError, ValueError):
+                pass
+        for i, name in enumerate(day_cols):
+            hari = int(name)
+            v = pd.to_numeric(pd.Series([rec.get(name)]),
+                              errors="coerce").iloc[0]
+            has_val = v == v and v and v > 0
+            if has_val:
+                text = f"{hari}:{fmt_cell(v, 0)}"
+            else:
+                text = str(hari)
+            cell = QLabel(text)
+            cell.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            cell.setMinimumWidth(74)
+            if hari == tersangka:
+                cell.setStyleSheet(
+                    "background:#fee2e2; color:#dc2626; font-weight:700; "
+                    "border-radius:4px;")
+            elif has_val:
+                cell.setStyleSheet(
+                    "background:#f1f5f9; color:#334155; "
+                    "border-radius:4px;")
+            else:
+                cell.setStyleSheet(
+                    "color:#cbd5e1; background:transparent;")
+            tip_val = fmt_cell(v, 1) if has_val else "kosong"
+            cell.setToolTip(f"Hari {hari}: {tip_val}")
+            gl.addWidget(cell, i // 8, i % 8)
+        return host
 
 
 class DetailDialog(QDialog):

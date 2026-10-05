@@ -21,19 +21,23 @@ import pandas as pd
 # menentukan chip sinyal mana yang terpicu dari teks ANOMALY REASONS
 # (kolom _s1.._s12 sengaja di-drop sebelum df keluar dari pipeline;
 # v2.7.0: chip tidak lagi baca _s* yang memang tidak pernah sampai UI).
+# v2.9.0 (permintaan user "permudah istilah"): fragmen jadi Bahasa
+# Indonesia awam — TANPA jargon (AVG/median/spike/outlier). Urutan &
+# arti tidak berubah; penjelasan lengkap tiap sinyal ada di tooltip
+# chip (_CHIP_TIPS, ui/view_anomali.py) + tabel README.
 SIGNAL_PARTS: list[tuple[str, str]] = [
-    ("_s1", "Spike vs AVG"),
-    ("_s2", "MAX jauh di atas AVG aktif"),
-    ("_s3", "MAX jauh di atas MEDIAN aktif"),
-    ("_s4", "Konsentrasi MAX tinggi"),
-    ("_s5", "Gap MAX vs SECOND MAX"),
-    ("_s6", "MAX terhadap BOM tinggi"),
-    ("_s7", "TOTAL terhadap BOM tinggi"),
-    ("_s8", "MAX outlier terhadap peer"),
-    ("_s9", "TOTAL outlier terhadap peer"),
-    ("_s10", "Single-day event"),
-    ("_s11", "Dominasi hari terakhir"),
-    ("_s12", "Potensi salah skala"),
+    ("_s1", "Lonjakan vs rata-rata harian"),
+    ("_s2", "Lonjakan vs hari aktif"),
+    ("_s3", "Lonjakan vs nilai tengah"),
+    ("_s4", "Terpusat di satu hari"),
+    ("_s5", "Jauh di atas hari kedua"),
+    ("_s6", "Puncak harian vs BOM"),
+    ("_s7", "Total bulanan vs BOM"),
+    ("_s8", "Puncak vs cabang lain"),
+    ("_s9", "Total vs cabang lain"),
+    ("_s10", "Waste hanya satu hari"),
+    ("_s11", "Menumpuk di hari terakhir"),
+    ("_s12", "Pola 10× (mungkin salah ketik)"),
 ]
 
 

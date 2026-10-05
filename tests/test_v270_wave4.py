@@ -41,7 +41,7 @@ MANIFEST = Path(__file__).resolve().parent / "fixtures" / "ui_methods_manifest.t
 EXPECTED_MODULES = [
     "__init__.py", "shared.py", "theme.py", "state.py", "models.py",
     "workers.py", "widgets.py", "app.py",
-    "view_anomali.py", "view_periode.py", "view_pipeline.py",
+    "view_anomali.py", "view_hari.py", "view_periode.py", "view_pipeline.py",
 ]
 
 
@@ -209,6 +209,10 @@ class TestRefitTerjadwal:
         t._auto_columns()
         assert not t._refit_timer.isActive()  # lebar auto-fit tak menjadwal
         assert not t._in_fit                  # guard mati (bukan auto-fit)
+        # v2.9.0: jendela tenang 300ms pasca-fit menelan resize deferred
+        # Qt internal — tirukan drag user SETELAH jendela itu lewat.
+        import time
+        t._fit_ts = time.monotonic() - 1.0
         t.setColumnWidth(0, 60)               # resize manual ala user
         assert t._refit_timer.isActive()
 
@@ -244,11 +248,11 @@ class TestFmtIdNone:
 
 class TestVersiSync:
     def test_versi_sama_di_tiga_situs(self):
-        """v2.8.3: versi disinkronkan di ui/shared.py, __init__.py, dan
+        """v2.9.0: versi disinkronkan di ui/shared.py, __init__.py, dan
         config.json (ganti nama kelas dari TestVersi270 — angka versi
         berubah tiap rilis, lock-nya cukup 'ketiga situs SAMA')."""
         from ui.shared import APP_VERSION
         from waste_anomaly import __version__
         cfg = json.loads(
             (REPO / "waste_anomaly" / "config.json").read_text(encoding="utf-8"))
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.8.3"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.9.0"

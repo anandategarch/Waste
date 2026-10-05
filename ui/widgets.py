@@ -13,6 +13,8 @@ Import matplotlib juga hilang dari jalur start-up UI.
 from __future__ import annotations
 
 import time
+import weakref
+from collections import OrderedDict
 from contextlib import contextmanager
 
 import pandas as pd
@@ -116,6 +118,23 @@ class DataTable(QTableView):
         self._narrow_hide: list[str] = []  # v2.6.1: kolom boleh-disebunyikan
         self._visible_cols: list[str] | None = None  # v2.7.0: kolom tampak (V26-C1)
         self._in_fit = False  # v2.7.0 (V26-M4): guard umpan-balik sectionResized
+        # v2.9.0 (perf): cache hasil _auto_columns+_refit_rows LRU per objek
+        # df — unfilter/drill bolak-balik mengembalikan df PERSIS sama (memo
+        # state.anomali_df) → lebar kolom + tinggi baris tinggal dipasang
+        # ulang TANPA pengukuran (diukur v2.8.3: pengukuran 220-460 ms per
+        # render; hit ≈ 10 ms). Entri hanya disimpan saat urutan baris =
+        # urutan sort default (deterministik: df sama → urutan sama); sort
+        # user mengubah tinggi per baris → entri tak boleh ditimpa.
+        self._fit_cache: OrderedDict[tuple, dict] = OrderedDict()
+        self._src_df: pd.DataFrame | None = None  # df terakhir (strong ref)
+        self._src_key: tuple | None = None
+        self._default_order = True  # urutan model == urutan sort default?
+        # v2.9.0: waktu (monotonic) fit programatik TERAKHIR — layout
+        # Qt yang di-queue bisa memancarkan sectionResized UTk lebar yang
+        # BARU kita pasang sendiri SETELAH _in_fit berakhir (deferred);
+        # jangan anggap itu drag user (bukti: kolom ANOMALY SCORE idx 77
+        # 132→136 tiap pasca-hit) → jendela tenang 300ms.
+        self._fit_ts: float = -1.0
         # v2.7.0 (V26-M4/L9): resize kolom manual → tinggi baris wrap harus
         # dihitung ulang; DEBOUNCE 120ms mencegah refit berkali-kali selama
         # drag (flicker). Lebar yang dipasang sendiri oleh _auto_columns /
@@ -127,10 +146,16 @@ class DataTable(QTableView):
         self.doubleClicked.connect(self._on_double)
         # Sort by header → tinggi baris harus dihitung ulang (baris visual
         # berganti isi; tinggi lama tidak cocok → teks wrap terpotong).
+        # v2.9.0: juga tandai urutan non-default → entri cache fit untuk
+        # df ini tidak boleh ditimpa tinggi urutan lain.
         self.horizontalHeader().sortIndicatorChanged.connect(
-            lambda *_: self._refit_rows())
+            self._on_sort_changed)
         self.horizontalHeader().sectionResized.connect(
             self._on_section_resized)
+
+    def _on_sort_changed(self, *_args) -> None:
+        self._default_order = False
+        self._refit_rows()
 
     def _refit_rows(self) -> None:
         """Hitung tinggi baris utk teks wrap (ukuran sendiri — QTableView's
@@ -164,15 +189,40 @@ class DataTable(QTableView):
         finally:
             self._in_fit = False
 
-    def _on_section_resized(self, *_args) -> None:
+    def _on_section_resized(self, logical: int, _old: int, _new: int) -> None:
         """Resize kolom (drag user / program) → jadwal refit tinggi baris.
 
         Refit di-DEBOUNCE lewat timer single-shot 120ms — selama drag hanya
         timer yang di-restart (bukan refit penuh per piksel → flicker V26-L9).
+        v2.9.0: drag user = preferensi manual — entri cache fit utk df ini
+        tidak lagi valid (lebar tersimpan ≠ lebar sekarang) → buang supaya
+        render berikutnya mengukur ulang jujur, bukan memasang lebar basi.
+        KECUALI kolom TERAKHIR: stretchLastSection aktif → kolom terakhir
+        diatur OTOMATIS Qt tiap viewport berubah (scrollbar muncul/hilang
+        ±14px) — resize itu BUKAN preferensi user; membuang entri di sini
+        membuat unfilter berikutnya selalu miss (terbukti diag: unfilter #2
+        436ms padahal #1 93ms). Tinggi baris tetap dijadwalkan ulang.
         """
         if self._in_fit:
             return  # lebar dipasang oleh _auto_columns/_refit_rows sendiri
-        if 0 < self._model.rowCount() <= 3000:
+        header = self.horizontalHeader()
+        stretch_last = (header.stretchLastSection()
+                        and logical == header.count() - 1)
+        # v2.9.0: hanya resize kolom YANG KITA KELOLA (kolom tampak — ada
+        # di entri widths) LEBIH DARI 300ms setelah fit programatik kita
+        # yang dianggap preferensi-drag user. Qt internal (reset model /
+        # layout deferred / stretch) me-resize kolom managed & unmanaged
+        # di luar _in_fit (terbukti diag: kolom idx 77 ±4px setiap render,
+        # bahkan lebar yang BARU kita pasang sendiri) — resize itu TIDAK
+        # boleh membuang entri cache (kalau dibuang, unfilter berikutnya
+        # selalu miss: 440ms vs 98ms).
+        entry = self._fit_cache.get(self._src_key) \
+            if self._src_key is not None else None
+        managed = entry is not None and logical in entry["widths"]
+        quiet = (time.monotonic() - self._fit_ts) < 0.3
+        if (entry is not None and not stretch_last and managed and not quiet):
+            del self._fit_cache[self._src_key]
+        if not quiet and 0 < self._model.rowCount() <= 3000:
             self._refit_timer.start()
 
     def _on_double(self, index) -> None:
@@ -211,13 +261,40 @@ class DataTable(QTableView):
         self.setTextElideMode(
             Qt.TextElideMode.ElideRight if big
             else Qt.TextElideMode.ElideNone)
+        # v2.9.0 (perf): cari hasil fit utk df PERSIS ini (objek sama via
+        # memo state.anomali_df) → render unfilter/drill-balik jadi pasang
+        # ulang lebar+tinggi tanpa pengukuran. avail dicek: viewport berubah
+        # (window di-resize) → ukur ulang.
+        fit: dict | None = None
+        if df is not None:
+            key = (id(df), len(df), tuple(map(str, df.columns)),
+                   tuple(self._visible_cols or ()), tuple(self._narrow_hide))
+            cand = self._fit_cache.get(key)
+            if cand is not None and cand["ref"]() is df:
+                self._fit_cache.move_to_end(key)
+                # toleransi ±20px: lebar scrollbar vertikal (~14px) muncul/
+                # hilang saat jumlah baris berubah — bukan perubahan window;
+                # lebar tersimpan tetap valid (stretch-terakhir menyerap
+                # selisih, layout konvergen sendiri).
+                if abs((self.viewport().width() - 4) - cand["avail"]) <= 20:
+                    fit = cand
+            self._src_key = key
+        else:
+            self._src_key = None
+        self._src_df = df
+        # v2.9.0: setSortIndicator EMIT sortIndicatorChanged (handler
+        # men-set _default_order=False) — set ulang True SETELAH sort
+        # bawaan dipasang agar entri cache boleh disimpan (urutan default
+        # deterministik: df sama → urutan sort sama).
         if sort_desc and df is not None and sort_desc in df.columns:
+            self._default_order = False
             col = list(df.columns).index(sort_desc)
             self.horizontalHeader().setSortIndicator(
                 col, Qt.DescendingOrder)
             self._model.sort(col, Qt.DescendingOrder)
+            self._default_order = True
         self._pending_fit = True
-        self._auto_columns()
+        self._auto_columns(fit=fit)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -255,8 +332,14 @@ class DataTable(QTableView):
         return None
 
     def _auto_columns(self, sample: int = 250, cap: int = 420,
-                      min_w: int = 84) -> None:
+                      min_w: int = 84, fit: dict | None = None) -> None:
         """Lebar kolom dari sampel isi + header, lalu di-FIT ke viewport.
+
+        v2.9.0 (perf): parameter ``fit`` — entri cache LRU utk df PERSIS
+        yang sama (lebar+tinggi+hidden terukur sebelumnya). Bila ada dan
+        viewport tak berubah: pasang ulang tanpa pengukuran (unfilter/
+        drill-balik; lihat docstring kelas). Bila tidak: jalur ukur penuh
+        seperti sebelumnya + simpan hasilnya ke cache.
 
         ANTI-TERPOTONG (aturan v2.6.0): bila total lebar melebihi viewport,
         seluruh kolom diskalakan proporsional supaya semua kolom terlihat.
@@ -271,9 +354,35 @@ class DataTable(QTableView):
         (scroll ≠ terpotong; sama seperti sheet ekstrem mis. Detail 53
         kolom — didampingi tooltip + wrap sel)."""
         model = self._model
+        n_cols = model.columnCount()
+        avail = self.viewport().width() - 4
+        if avail < 200:
+            avail = 200
+        # ================= FAST PATH (v2.9.0) =================
+        # toleransi avail ±20px = lebar scrollbar (lihat set_dataframe).
+        if fit is not None and fit.get("n_cols") == n_cols \
+                and abs(avail - fit["avail"]) <= 20:
+            self.setUpdatesEnabled(False)  # batch 400+ setRow/ColWidth
+            self._in_fit = True
+            try:
+                for c in range(n_cols):
+                    self.setColumnHidden(c, c in fit["hidden"])
+                for c, w in fit["widths"].items():
+                    self.setColumnWidth(c, w)
+                for r, h in enumerate(fit["heights"]):
+                    if h > 0:
+                        self.setRowHeight(r, h)
+            finally:
+                self._in_fit = False
+                self.setUpdatesEnabled(True)
+            self._last_fit_w = self.viewport().width()
+            if sum(fit["widths"].values()) <= avail + 2:
+                self._pending_fit = False
+            self._fit_ts = time.monotonic()  # jendela tenang anti false-drag
+            return
+        # ================= SLOW PATH (ukur penuh) =================
         n_rows = min(sample, model.rowCount())
         fm = self.fontMetrics()
-        n_cols = model.columnCount()
         names = [str(model.headerData(c, Qt.Horizontal))
                  for c in range(n_cols)]
         # v2.7.0 (V26-C1): kolom di luar visible_cols disembunyikan permanen
@@ -377,6 +486,26 @@ class DataTable(QTableView):
         # UTUH — tinggi baris dihitung manual (lihat _refit_rows). Di-skip
         # utk tabel raksasa (25k×53) demi kecepatan (tooltip + fit kolom).
         self._refit_rows()
+        self._fit_ts = time.monotonic()  # jendela tenang anti false-drag
+        # v2.9.0 (perf): simpan hasil fit LRU utk df persis ini — dipakai
+        # ulang saat df objek sama muncul lagi (unfilter / drill balik /
+        # re-render tanpa perubahan). Hanya urutan default (sort bawaan)
+        # yang boleh tersimpan: sort user mengubah tinggi per baris.
+        if self._default_order and self._src_key is not None \
+                and self._src_df is not None:
+            heights = ([self.rowHeight(r) for r in range(model.rowCount())]
+                       if 0 < model.rowCount() <= 3000 else [])
+            self._fit_cache[self._src_key] = {
+                "ref": weakref.ref(self._src_df),
+                "avail": avail,
+                "n_cols": n_cols,
+                "widths": {c: final[c] for c in keep},
+                "hidden": set(hidden) | set(vis_hidden),
+                "heights": heights,
+            }
+            self._fit_cache.move_to_end(self._src_key)
+            while len(self._fit_cache) > 8:
+                self._fit_cache.popitem(last=False)
 
 
 # ============================================================
@@ -387,7 +516,8 @@ class KpiCard(QFrame):
     """Kartu KPI: label kecil + angka besar + konteks (wrap)."""
 
     def __init__(self, title: str, color: str = "#0f172a",
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None,
+                 tooltip: str = "") -> None:
         super().__init__(parent)
         self.setObjectName("kpiframe")
         lay = QVBoxLayout(self)
@@ -396,6 +526,10 @@ class KpiCard(QFrame):
         self._title = WLabel(title, self)
         self._title.setObjectName("hint")
         lay.addWidget(self._title)
+        # v2.9.0: penjelasan istilah di tooltip (permintaan user — semua
+        # istilah harus mudah dicerna, bukan hanya sinyal S-1).
+        if tooltip:
+            self.setToolTip(tooltip)
         self._value = WLabel("0", self)
         self._value.setStyleSheet(
             f"color:{color}; font-size:20px; font-weight:700; border:none;")
@@ -427,12 +561,24 @@ class KpiStrip(QWidget):
         gl = QGridLayout(row)
         gl.setContentsMargins(0, 0, 0, 0)
         gl.setSpacing(8)
-        self.kpi_total = KpiCard("TOTAL BARIS", "#0f172a")
-        self.kpi_prioritas = KpiCard("PRIORITAS TINGGI", "#dc2626")
-        self.kpi_potensi = KpiCard("POTENSI ANOMALI", "#ea580c")
-        self.kpi_review = KpiCard("PERLU REVIEW", "#b45309")
-        self.kpi_waste = KpiCard("TOTAL WASTE", "#0f766e")
-        self.kpi_cabang = KpiCard("CABANG", "#9333ea")
+        self.kpi_total = KpiCard("TOTAL BARIS", "#0f172a",
+                                  tooltip="Banyak baris data yang lolos filter "
+                                          "(semua status, termasuk Normal).")
+        self.kpi_prioritas = KpiCard("PRIORITAS TINGGI", "#dc2626",
+                                     tooltip="Anomali ber-skor ≥ 8 — periksa "
+                                             "paling duluan.")
+        self.kpi_potensi = KpiCard("POTENSI ANOMALI", "#ea580c",
+                                   tooltip="Anomali ber-skor 5–7.")
+        self.kpi_review = KpiCard("PERLU REVIEW", "#b45309",
+                                  tooltip="Anomali ber-skor 3–4 — sisi batas, "
+                                          "cek kalau sempat.")
+        self.kpi_waste = KpiCard("TOTAL WASTE", "#0f766e",
+                                 tooltip="Jumlah kolom TOTAL baris terfilter. "
+                                         "Satuan bisa campur — anggap petunjuk "
+                                         " kasar, bukan angka final.")
+        self.kpi_cabang = KpiCard("CABANG", "#9333ea",
+                                  tooltip="Banyak cabang berbeda pada data "
+                                          "terfilter.")
         for i, card in enumerate((self.kpi_total, self.kpi_prioritas,
                                   self.kpi_potensi, self.kpi_review,
                                   self.kpi_waste, self.kpi_cabang)):

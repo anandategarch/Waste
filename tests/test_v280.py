@@ -34,7 +34,7 @@ REMOVED_VIEW_FILES = [
     "view_jelajah.py", "view_waktu.py",                  # v2.8.1
 ]
 REMOVED_TAB_TITLES = ["Uang", "Peer", "Kualitas Data", "Jelajah", "Waktu"]
-EXPECTED_TAB_TITLES = ["Anomali", "Banding Periode", "Pipeline"]
+EXPECTED_TAB_TITLES = ["Anomali", "Hari Mencurigakan", "Banding Periode", "Pipeline"]
 
 
 def _qapp():
@@ -91,10 +91,10 @@ class TestHapusLimaView:
             assert not (REPO / "waste_anomaly" / fname).exists(), (
                 f"waste_anomaly/{fname} masih ada — dead code pasca-hapus view")
 
-    def test_tab_tepat_tiga_dengan_judul_benar(self):
+    def test_tab_tepat_empat_dengan_judul_benar(self):
         win = _make_window()
         try:
-            assert win._tabs.count() == 3
+            assert win._tabs.count() == 4
             for i in range(win._tabs.count()):
                 assert win._tabs.tabText(i) == EXPECTED_TAB_TITLES[i]
         finally:

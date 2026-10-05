@@ -4,7 +4,9 @@ app.py::main
 models.py::PandasTableModel
 models.py::fmt_cell
 models.py::fmt_pct
+models.py::fmt_ratio_x
 shared.py::_apply_filters
+shared.py::_build_search_blob
 shared.py::app_dir
 shared.py::bundle_res_dir
 shared.py::fmt_id
@@ -12,6 +14,7 @@ state.py::AppContext
 view_anomali.py::AnomaliView
 view_anomali.py::DetailDialog
 view_anomali.py::DetailPanel
+view_hari.py::HariView
 view_periode.py::PeriodeView
 view_periode.py::fmt_run_label
 view_pipeline.py::PipelineView

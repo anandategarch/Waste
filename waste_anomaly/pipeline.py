@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 from . import stages
+from .day_focus import annotate_day_evidence
 from .loader import load_bom, load_database_satuan, load_rekap_mentah
 from .schema import SchemaValidationError, validate_rekap_schema
 from .utils import clamp, load_config
@@ -277,6 +278,14 @@ def _run_pipeline(
     _gate("Stage 14 — Final column order", 84)
     df = stages.stage_14_final(df, key_akhir, config)
 
+    # ---- STAGE 15: BUKTI HARI TERSANGKA (v2.9.0) ----
+    # Bukti pembuktian v2.8.3 jadi kolom permanen: lokalizasi anomali ke
+    # hari 1-31 (rasio peer x hari + share + pola 10x + single-day).
+    _gate("Stage 15 — Bukti hari tersangka", 86)
+    df = annotate_day_evidence(df, key_akhir, config)
+    _n_bukti = int((df["BUKTI HARI"] == "YES").sum()) if "BUKTI HARI" in df.columns else 0
+    _log(f"  → {_n_bukti} baris anomali bisa dilokalisasi ke hari tersangka", 87)
+
     # ---- BUILD SUMMARY (NO Excel export — display directly in UI) ----
     _log("Build summary statistics ...", 88)
     summary = _build_summary(df, key_akhir, log_lines, config=config)
@@ -323,4 +332,9 @@ def _build_summary(df, key_akhir, log_lines, config: dict | None = None):
         "key_akhir": key_akhir,
         "config_load_error": (config or {}).get("config_load_error"),
         "timestamp": datetime.now().isoformat(),
+        # v2.9.0: baris anomali yang bisa dilokalisasi ke hari tersangka
+        # (tab "Hari Mencurigakan"; dihitung Stage 15 day_focus).
+        "day_evidence_count": (
+            int((df["BUKTI HARI"] == "YES").sum())
+            if "BUKTI HARI" in df.columns else 0),
     }

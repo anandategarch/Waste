@@ -15,12 +15,13 @@ sheet analisanya sendiri (ui/workers.py::_extra_sheets).
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from datetime import datetime
 
 import pandas as pd
 from PySide6.QtCore import QObject, Signal
 
-from .shared import _apply_filters
+from .shared import _apply_filters, _build_search_blob
 
 # Label filter aktif → chip Indonesia (dari shared lama)
 CHIP_LABELS = {
@@ -67,6 +68,21 @@ class AppContext(QObject):
         # ekstra per hit.
         self._filtered_cache: pd.DataFrame | None = None
         self._filter_cache_valid = False
+        # v2.9.0 (perf): LRU anomali_df() BERDASARKAN TANDA TANGAN FILTER —
+        # bukan satu slot memo: unfilter/drill bolak-balik kembali ke state
+        # filter yang SAMA → objek df yang PERSIS sama dikembalikan →
+        # DataTable mengenali df identik (id sama) dan memasang ulang hasil
+        # pengukuran lebar/tinggi tanpa hitung ulang (diukur v2.8.3:
+        # 220-460 ms per render). Satu slot memo (iterasi-1 v2.9.0) gagal
+        # karena tiap invalidasi membuat objek BARU — cache fit tak pernah
+        # kena. Tanda tangan mencakup data_version (dataset baru ≠ state lama).
+        self._anomali_cache: "OrderedDict[tuple, pd.DataFrame]" = OrderedDict()
+        # v2.9.0 (perf): blob pencarian (semua kolom digabung per baris,
+        # sudah lower-case) — dibangun SEKALI per dataset, dipakai
+        # _apply_filters utk jalur cepat search (dari 1,5 dtk per kata
+        # → ~0,1 dtk; lihat shared._build_search_blob).
+        self._search_blob: pd.Series | None = None
+        self._search_blob_version: int = -1
 
     # ------------------------------------------------------------
     # DATA
@@ -81,6 +97,20 @@ class AppContext(QObject):
             self.key_akhir = 31
         self.last_run_time = datetime.now()
         self.data_version += 1
+        # v2.9.0: LRU anomali berisi df dari dataset LAMA — data_version
+        # baru membuat tanda tangan tak cocok, tapi entri tetap memakan
+        # memori → kosongkan eksplisit.
+        self._anomali_cache.clear()
+        # v2.9.0 (perf): blob pencarian dibangun PipelineWorker di thread
+        # background (1,2 dtk di luar UI); bila ada dan index cocok →
+        # pakai, kalau tidak (jalur test/set_dataset manual) → dibangun
+        # malas saat pencarian pertama (lihat filtered_df).
+        blob = summary.get("search_blob")
+        if isinstance(blob, pd.Series) and blob.index.equals(df.index):
+            self._search_blob = blob
+            self._search_blob_version = self.data_version
+        else:
+            self._search_blob = None
         self.reset_filters()  # juga meng-invalidasi memo filtered_df
         self.data_ready.emit()
         # v2.7.0 (V26-H2): siarkan reset filter SEKALI SETELAH data_ready —
@@ -100,33 +130,69 @@ class AppContext(QObject):
 
         v2.7.0: hasil di-memo — dipakai ulang sampai filter/data berubah
         (lihat invalidasi di setter + invalidate_filter_cache).
+        v2.9.0: pencarian memakai blob gabungan per-baris yang dibangun
+        sekali per dataset (cache data_version) — lihat _build_search_blob.
         """
         if self.df is None:
             return None
         if not self._filter_cache_valid:
+            search = (self.search or "").strip()
+            blob = None
+            if search:
+                if (self._search_blob is None
+                        or self._search_blob_version != self.data_version):
+                    self._search_blob = _build_search_blob(self.df)
+                    self._search_blob_version = self.data_version
+                blob = self._search_blob
             self._filtered_cache = _apply_filters(
                 self.df, self.active_filters,
                 day_min=self.day_min, day_max=self.day_max,
                 search=self.search,
+                search_blob=blob,
             )
             self._filter_cache_valid = True
         return self._filtered_cache
 
     def invalidate_filter_cache(self) -> None:
         """Batalkan memo filtered_df — WAJIB dipanggil bila filter state
-        dimutasi langsung (bypass setter), mis. pemulihan profil filter."""
+        dimutasi langsung (bypass setter), mis. pemulihan profil filter.
+        (LRU anomali tak perlu dibatalkan: kunci = tanda tangan filter yang
+        dibaca ULANG saat query — hasil selalu konsisten dgn state.)"""
         self._filter_cache_valid = False
 
+    def _filter_signature(self) -> tuple:
+        """Kunci state filter utk LRU anomali (v2.9.0)."""
+        af = tuple(sorted(
+            (k, tuple(v) if isinstance(v, list) else v)
+            for k, v in self.active_filters.items()))
+        return (self.data_version, self.search, af,
+                self.day_min, self.day_max, self.score_min)
+
     def anomali_df(self) -> pd.DataFrame | None:
-        """df terfilter, hanya baris ANOMALY STATUS ≠ Normal, skor ≥ min."""
+        """df terfilter, hanya baris ANOMALY STATUS ≠ Normal, skor ≥ min.
+
+        v2.9.0: LRU per tanda tangan filter (≤ 8 entri, objek sama dipakai
+        ulang antar-refresh/antar-view Anomali & Hari Mencurigakan) —
+        kembali ke state filter lama = kembali objek lama → cache fit
+        DataTable tetap valid. Konsumen hanya membaca (sort model bekerja
+        pada salinannya sendiri) — kontrak aman tanpa copy defensif.
+        """
         df = self.filtered_df()
         if df is None:
             return None
+        key = self._filter_signature()
+        cached = self._anomali_cache.get(key)
+        if cached is not None:
+            self._anomali_cache.move_to_end(key)
+            return cached
         if "ANOMALY STATUS" in df.columns:
             df = df[df["ANOMALY STATUS"] != "Normal"]
         if self.score_min > 0 and "ANOMALY SCORE" in df.columns:
             df = df[pd.to_numeric(df["ANOMALY SCORE"], errors="coerce")
                     .fillna(0) >= self.score_min]
+        self._anomali_cache[key] = df
+        while len(self._anomali_cache) > 8:
+            self._anomali_cache.popitem(last=False)
         return df
 
     def set_filter(self, key: str, value) -> None:

@@ -2,6 +2,8 @@
 
 Python + PySide6 (Qt) **anomaly workbench** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif**, **filter profile persistence**, **benchmark peer aktif (pop-up detail + sinyal S8/S9)**, **kolom % to BOM (waste vs penjualan kuantiti)**, **data quality otomatis (pipeline & export)**, dan **compare periode bulan-ke-bulan** (v2.8.1: 5 → 3 view — tab Jelajah & Waktu + seluruh modul chart dihapus; v2.8.0: 8 → 5 view — tab Uang/Peer/Kualitas Data dihapus).
 
+> **v2.9.0** — **Tab baru "Hari Mencurigakan"** (jawaban: "potensi salah angka terjadi di **tanggal berapa** 1–31?"): Stage 15 pipeline menghitung bukti per-hari — **HARI TERSANGKA** (tanggal nilai terbesar), **TIPIKAL CABANG LAIN** (median item sama di hari sama di outlet lain), **RASIO VS CABANG LAIN** (mis. **404×**), **SHARE HARI TERSANGKA**, dan **ALASAN HARI** satu kalimat siap baca; BUKTI HARI = YES bila rasio ≥ 5× ATAU share ≥ 50% ATAU pola 10× ATAU waste cuma 1 hari (golden data asli: 484/797 baris non-Normal = 60,7%). **Istilah dimudahkan + tooltip di SEMUA tempat** (permintaan: "bukan hanya S-1"): 12 fragmen sinyal jadi Bahasa awam ("Spike vs AVG" → "Lonjakan vs rata-rata"), kamus `COLUMN_TOOLTIPS` di judul kolom semua tabel, label metrik pop-up, chip S1–S12, KPI, dan kontrol filter — hover = penjelasan sehari-hari; pop-up detail kini punya **peta nilai per hari 1–31** dengan hari tersangka disorot merah. **Perf anti-lambat** (diukur data asli, sandbox): **Hapus Filter 461 → 87–95 ms (≈5×)**, **pencarian 1.456 → ~95 ms (≈15×)** — memo `anomali_df` LRU per tanda tangan filter + cache teks sel model + cache fit lebar/tinggi tabel LRU + blob pencarian (dibangun di worker thread; jebol NUL-separator numpy ditemukan & dihindari). 436+40 = 476 test.
+
 > **v2.8.3** — UX anti-freeze: **apply/unapply filter kini memberi feedback "masih proses"** (keluhan nyata: "waktu aku apply unfilter kok kaya lag/freeze"). Diagnosa terukur di data asli 25.901 baris: rantai filter → refresh tabel berjalan **sinkron di thread UI 75–460 ms** (sandbox) — auto-fit kolom + pengukuran tinggi baris per sel — di laptop user bisa **1–2+ detik beku tanpa umpan balik**. Fix: helper `busy_feedback` membungkus titik tunggal render tabel — **cursor sibuk + pesan status "⏳ Menyarkan & menampilkan data…" dipasang SEBELUM kerja berat** (dijamin tergambar via `processEvents`), **pulih + laporan durasi "✓ … selesai (X ms)"** setelahnya; semua pintu masuk tercakup otomatis (search, dropdown, rentang hari, Hapus Filter, drill-down, dataset baru). Aman bersarang (Qt cursor stack). 436 test.
 
 > **v2.8.2** — hotfix installer: **`SETUP.bat` gagal di langkah [5/5] Verifikasi** pada instalasi baru ("`ModuleNotFoundError: No module named 'matplotlib'`" lalu "[ERROR] Verifikasi gagal") — akarnya BUKAN instalasi gagal, melainkan baris verifikasi `SETUP.bat` masih mengimpor **matplotlib** yang sudah dihapus dari dependensi sejak v2.8.1 (instalasi sebenarnya sukses, hanya ceknya yang basi). Fix: verifikasi & banner `SETUP.bat` kini sinkron dengan `requirements.txt` (5 paket: pandas, numpy, openpyxl, python-calamine, PySide6); daftar dependensi di README diperbaiki; referensi matplotlib mati di `logging_setup.py` dibersihkan; **test kontrak baru** mengunci baris verifikasi `SETUP.bat` ↔ `requirements.txt` agar tidak diverver lagi (431 test). Jika Anda kena error ini: `git pull` (atau unduh ulang) → jalankan `SETUP.bat` ulang — tidak perlu hapus `.venv`.
@@ -74,11 +76,12 @@ Query data → Olah di Excel → Save as DATA_WASTE.xlsx → Replace file lama �
 Kalau sheet BOM/DATABASE_SATUAN tidak ada, sinyal BOM (S6/S7) & STATUS (Sesuai/Tidak Sesuai) tidak akan trigger tapi pipeline tetap jalan.
 
 ### 3. Jalankan (setiap kali)
-Jalankan `MULAI.bat`. UI terbuka dengan **3 view** (v2.8.1 — rebuild PySide6; landing default = **Anomali**):
+Jalankan `MULAI.bat`. UI terbuka dengan **4 view** (v2.9.0 — rebuild PySide6; landing default = **Anomali**):
 
 | View | Fungsi |
 |------|--------|
-| 🎯 Anomali (**default**) | Tabel anomali ter-ranking (skor ↓, tanpa cap baris, pewarnaan severity, kolom TOTAL + % to BOM) + detail **pop-up** saat baris diklik (12 sinyal S1–S12, peer, uang) + drill-down 1-klik (cabang/item/alasan) + ambang "Skor ≥" + KPI mengikuti filter |
+| 🎯 Anomali (**default**) | Tabel anomali ter-ranking (skor ↓, tanpa cap baris, pewarnaan severity, kolom TOTAL + % to BOM) + detail **pop-up** saat baris diklik (12 sinyal S1–S12, peer, uang, **peta nilai per hari 1–31**) + drill-down 1-klik (cabang/item/alasan) + ambang "Skor ≥" + KPI mengikuti filter |
+| 📅 **Hari Mencurigakan** (v2.9.0) | "Potensi salah angka terjadi di **tanggal berapa** (1–31)?" — tabel anomali + bukti hari: HARI TERSANGKA · NILAI HARI · TIPIKAL CABANG LAIN · RASIO (×) · SHARE · ALASAN HARI; combo hanya-ada-bukti / semua; KPI rasio terbesar; pop-up detail + peta hari; hover judul kolom = arti istilah |
 | 🔀 Banding Periode | Run saat ini vs workbook lain (normalisasi waste/hari, item baru/hilang) |
 | ▶ Pipeline | Workbook + key akhir + Run/⏹Batal + progress + log + ringkasan + editor threshold |
 
@@ -185,20 +188,24 @@ lebar penuh jendela.
 
 ## 12 Sinyal Anomali (S1-S12)
 
-| # | Nama | Trigger | Skor |
-|---|------|---------|------|
-| S1 | Spike vs AVG | `Count≥2 & MAX/AVG≥3` | 1 |
-| S2 | MAX vs AVG Aktif | `Count≥3 & MAX/AVG_AKTIF≥2.5` (≥4 → skor 2) | 1 atau 2 |
-| S3 | MAX vs Median Aktif | `Count≥3 & MAX/MEDIAN_AKTIF≥3` | 2 |
-| S4 | MAX Share | `MAX/TOTAL≥0.70` (≥0.50 → skor 1) | 1 atau 2 |
-| S5 | MAX vs Second Max | `Count≥2 & MAX/SECOND_MAX≥3` | 1 |
-| S6 | MAX / BOM | `MAX/TOTAL_BOM≥0.50` (≥0.25 → skor 1) | 1 atau 2 |
-| S7 | TOTAL / BOM | `TOTAL/TOTAL_BOM≥1.00` (≥0.50 → skor 1) | 1 atau 2 |
-| S8 | Peer MAX | `PeerCount≥3 & MAX/PeerMedMax≥3` (≥2 → skor 1) | 1 atau 2 |
-| S9 | Peer TOTAL | `PeerCount≥3 & TOTAL/PeerMedTot≥3` | 1 |
-| S10 | Single-day event | `Count=1 & (MaxBOM≥0.10 atau MaxPeer≥2)` | 1 |
-| S11 | Last Day Share | `LastDay/TOTAL≥0.70` | 1 |
-| S12 | Scale Signal | heuristic rasio (8-12 / 80-120 / 800-1200 / 8000-12000) | 2 |
+Nama sinyal v2.9.0 = **Bahasa awam** (fragmen `ANOMALY REASONS` + chip UI;
+perubahan dari "Spike vs AVG" dkk. — permintaan user). Trigger & skor tidak
+berubah. Hover chip di pop-up detail / judul kolom tabel = penjelasan lengkap.
+
+| # | Nama (v2.9.0, awam) | Nama lama (teknis) | Trigger | Skor |
+|---|------|------|---------|------|
+| S1 | Lonjakan vs rata-rata harian | Spike vs AVG | `Count≥2 & MAX/AVG≥3` | 1 |
+| S2 | Lonjakan vs hari aktif | MAX vs AVG Aktif | `Count≥3 & MAX/AVG_AKTIF≥2.5` (≥4 → skor 2) | 1 atau 2 |
+| S3 | Lonjakan vs nilai tengah | MAX vs Median Aktif | `Count≥3 & MAX/MEDIAN_AKTIF≥3` | 2 |
+| S4 | Terpusat di satu hari | MAX Share | `MAX/TOTAL≥0.70` (≥0.50 → skor 1) | 1 atau 2 |
+| S5 | Jauh di atas hari kedua | MAX vs Second Max | `Count≥2 & MAX/SECOND_MAX≥3` | 1 |
+| S6 | Puncak harian vs BOM | MAX / BOM | `MAX/TOTAL_BOM≥0.50` (≥0.25 → skor 1) | 1 atau 2 |
+| S7 | Total bulanan vs BOM | TOTAL / BOM | `TOTAL/TOTAL_BOM≥1.00` (≥0.50 → skor 1) | 1 atau 2 |
+| S8 | Puncak vs cabang lain | Peer MAX | `PeerCount≥3 & MAX/PeerMedMax≥3` (≥2 → skor 1) | 1 atau 2 |
+| S9 | Total vs cabang lain | Peer TOTAL | `PeerCount≥3 & TOTAL/PeerMedTot≥3` | 1 |
+| S10 | Waste hanya satu hari | Single-day event | `Count=1 & (MaxBOM≥0.10 atau MaxPeer≥2)` | 1 |
+| S11 | Menumpuk di hari terakhir | Last Day Share | `LastDay/TOTAL≥0.70` | 1 |
+| S12 | Pola 10× (mungkin salah ketik) | Scale Signal | heuristic rasio (8-12 / 80-120 / 800-1200 / 8000-12000) | 2 |
 
 **Max skor = 18.** Status final:
 - `≥ 8` → **Prioritas Tinggi**
@@ -208,7 +215,7 @@ lebar penuh jendela.
 
 ## Testing
 
-**436 test** — golden regression end-to-end (fixture `DATA_WASTE.xlsx` 25.901 baris), unit test 12 sinyal S1–S12, join BOM & normalisasi kunci, presisi float, kontrak summary dict, validasi skema, cancel hook antar-stage, exporter dual-mode, logging framework, path frozen-mode, semantik filter (v2.5.1), 14 test struktural paket ui/ v2.6.0 (modul ada, mixin lama tak kembali, kontrak shared, kontrak view refresh/on_shown, worker QThread, manifest metode, MainWindow offscreen, infra chart dihapus), **49 test regresi fix audit v2.7.0** (gelombang 1–4: kontrak banding periode + closeEvent worker + memo filter; record penuh panel detail + 12 chip sinyal + fmt numpy + tabel besar; validasi threshold + default 20/20 key; manifest dua-arah + lantai header tabel + `fmt_id(None)` + versi), **dan 27 test regresi v2.8.0+v2.8.1** (3 view + file view/modul chart dihapus + tabel memanjang penuh + pop-up detail + kolom % to BOM + sidebar hide/unhide + help jujur; test view/chart lama dihapus jujur bersama subjeknya: −13 kontrak chart, −12 gelombang-3 view, −2 derived-sheets, −2 Pareto), **plus 2 test kontrak v2.8.2** (baris verifikasi SETUP.bat wajib sinkron dengan requirements.txt — anti bug "import matplotlib" basi), **dan 5 test v2.8.3** (busy feedback: cursor sibuk aktif selama render & dipulihkan; jalur sinyal filter terbungkus; pesan status ⏳/✓ terkirim; helper aman bersarang; kontrak sumber titik-tunggal). Jalankan setiap kali mengubah kode — angka golden berubah tanpa alasan = regresi.
+**476 test** — golden regression end-to-end (fixture `DATA_WASTE.xlsx` 25.901 baris), unit test 12 sinyal S1–S12, join BOM & normalisasi kunci, presisi float, kontrak summary dict, validasi skema, cancel hook antar-stage, exporter dual-mode, logging framework, path frozen-mode, semantik filter (v2.5.1), 14 test struktural paket ui/ v2.6.0 (modul ada, mixin lama tak kembali, kontrak shared, kontrak view refresh/on_shown, worker QThread, manifest metode, MainWindow offscreen, infra chart dihapus), **49 test regresi fix audit v2.7.0** (gelombang 1–4: kontrak banding periode + closeEvent worker + memo filter; record penuh panel detail + 12 chip sinyal + fmt numpy + tabel besar; validasi threshold + default 20/20 key; manifest dua-arah + lantai header tabel + `fmt_id(None)` + versi), **dan 27 test regresi v2.8.0+v2.8.1** (3 view + file view/modul chart dihapus + tabel memanjang penuh + pop-up detail + kolom % to BOM + sidebar hide/unhide + help jujur; test view/chart lama dihapus jujur bersama subjeknya: −13 kontrak chart, −12 gelombang-3 view, −2 derived-sheets, −2 Pareto), **plus 2 test kontrak v2.8.2** (baris verifikasi SETUP.bat wajib sinkron dengan requirements.txt — anti bug "import matplotlib" basi), **dan 5 test v2.8.3** (busy feedback: cursor sibuk aktif selama render & dipulihkan; jalur sinyal filter terbungkus; pesan status ⏳/✓ terkirim; helper aman bersarang; kontrak sumber titik-tunggal), **plus 40 test v2.9.0** (Stage 15 day_focus unit + golden hari tersangka data asli + tab Hari Mencurigakan offscreen + istilah awam & tooltip kontrak + cache perf). Jalankan setiap kali mengubah kode — angka golden berubah tanpa alasan = regresi.
 
 ## Packaging — EXE Standalone
 
@@ -218,7 +225,7 @@ Jalankan `BUILD_EXE.bat` di Windows (butuh Python + SETUP.bat sekali). Hasil: `d
 
 ```
 Waste/
-├── MULAI.bat                       ← ENTRY POINT (buka UI 3 view)
+├── MULAI.bat                       ← ENTRY POINT (buka UI 4 view)
 ├── SETUP.bat                       ← One-time install (buat .venv + pip install, hardened v2.7.0)
 ├── BUILD_EXE.bat                   ← Build .exe standalone (PyInstaller)
 ├── waste_anomaly.spec              ← Konfigurasi PyInstaller (icon, datas)
@@ -239,14 +246,15 @@ Waste/
 │   ├── widgets.py                 ← Blok anti-terpotong: WLabel, DataTable
 │   │                                 (auto-fit + wrap), KpiStrip, StatusChip
 │   ├── app.py                     ← MainWindow (toolbar + sidebar + 3 view) + main()
-│   ├── view_anomali.py            ← View 1 Anomali (default): ranking + % to BOM
+│   ├── view_anomali.py            ← View 1 Anomali (default): ranking + % to BOM + pop-up detail + peta hari
 │   │                                 + DetailDialog pop-up + drill (v2.8.1)
-│   ├── view_periode.py            ← View 2 Banding Periode
+│   ├── view_hari.py               ← View 2 Hari Mencurigakan (v2.9.0): bukti hari 1-31
+│   ├── view_periode.py            ← View 3 Banding Periode
 │   └── view_pipeline.py           ← View 3 Pipeline (+ ringkasan + threshold editor)
 ├── assets/                         ← Ikon aplikasi (ico + png)
 ├── make_sample.py                  ← Generate sample workbook untuk testing
 ├── sample_workbook.xlsx            ← Fixture test in-repo (v2.7.0 — hasil make_sample.py)
-├── tests/                          ← Test suite pytest (436 test)
+├── tests/                          ← Test suite pytest (476 test)
 │   ├── conftest.py
 │   ├── fixtures/ui_methods_manifest.txt  ← Manifest def top-level ui/ (kunci struktural DUA-ARAH, v2.7.0)
 │   ├── test_pipeline_regression.py ← Golden regression 25.901 baris (14 test)
@@ -270,16 +278,17 @@ Waste/
 │   ├── test_v270_wave4.py          ← Regresi fix audit v2.7.0 gel. 4 (10)
 │   └── test_v280.py                ← Regresi v2.8.0–v2.8.3: 3 view + pop-up detail
 │                                     + kolom % to BOM + sidebar + busy feedback (32)
-├── .github/workflows/ci.yml        ← CI: matrix Python × OS, lint + 436 test
+├── .github/workflows/ci.yml        ← CI: matrix Python × OS, lint + 476 test
 ├── waste_anomaly/
-│   ├── __init__.py                 ← __version__ single-source (2.8.3)
+│   ├── __init__.py                 ← __version__ single-source (2.9.0)
 │   ├── frozen.py                   ← Resolusi path PyInstaller exe vs dev (v2.4.1)
-│   ├── config.json                 ← Thresholds + sheet name candidates (version 2.8.3)
+│   ├── config.json                 ← Thresholds + sheet name candidates (version 2.9.0)
 │   ├── pipeline.py                 ← Orchestrator 14 stage + cancel_check (in-memory)
 │   ├── schema.py                   ← Validasi skema input (anti degradasi senyap)
 │   ├── logging_setup.py            ← Rotating file log + hook exception
 │   ├── loader.py                   ← Excel loaders (auto-detect sheet + normalisasi 15 digit)
 │   ├── stages.py                   ← 14 stage replika M code (idempotent v2.3.2)
+│   ├── day_focus.py                ← Stage 15 (v2.9.0): bukti hari tersangka per anomali
 │   ├── signals.py                  ← 12 sinyal anomali + composite score (max 19)
 │   ├── temporal.py                 ← Analisa temporal (waste/hari, weekday, alasan×hari)
 │   │                                 — dipakai export + KPI unit note
