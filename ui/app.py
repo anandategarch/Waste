@@ -61,6 +61,12 @@ from .view_pipeline import PipelineView
 from .widgets import Card, WLabel
 from .workers import ExportWorker
 
+# v2.11.0: chip slicer bisa memfilter beberapa nilai sekaligus (list) —
+# combo sidebar (single-select) menampilkan placeholder ini alih-alih
+# berbohong '(Semua)' padahal filter aktif. Memilih nilai lain dari combo
+# = override jadi single (perilaku lama utuh).
+_MULTI_TAG = "▪ beberapa dipilih"
+
 _HELP_HTML = """
 <h2>Panduan Singkat</h2>
 <p><b>Alur kerja:</b> tab <b>Pipeline</b> → pilih workbook → <b>Mulai Pipeline</b>
@@ -480,6 +486,8 @@ class MainWindow(QMainWindow):
 
     def _on_combo(self, key: str, combo: QComboBox) -> None:
         val = combo.currentText()
+        if val == _MULTI_TAG:
+            return  # placeholder multi slicer — bukan pilihan user (no-op)
         value = None if (not val or val == "(Semua)") else val
         self.ctx.set_filter(key, value)
 
@@ -520,8 +528,19 @@ class MainWindow(QMainWindow):
         self._lbl_chips.setText(self.ctx.filter_summary() or "Tidak ada filter aktif.")
 
     def _combo_set(self, combo: QComboBox, value) -> None:
+        """Sinkronkan combo ke nilai state (v2.11.0: sadar list multi-slicer).
+
+        List non-kosong → placeholder _MULTI_TAG dipilih (dipasang sementara
+        di indeks 0, dibuang lagi saat nilai kembali single/None — supaya
+        tidak menumpuk)."""
         combo.blockSignals(True)
-        if value is None or (isinstance(value, list) and not value):
+        idx_tag = combo.findText(_MULTI_TAG)
+        if idx_tag >= 0:
+            combo.removeItem(idx_tag)
+        if isinstance(value, list) and value:
+            combo.insertItem(0, _MULTI_TAG)
+            combo.setCurrentIndex(0)
+        elif value is None or (isinstance(value, list) and not value):
             combo.setCurrentIndex(0)
         else:
             idx = combo.findText(str(value))

@@ -43,7 +43,8 @@ from waste_anomaly.period_history import CHANGE_CATEGORIES, change_vs_history
 from .shared import fmt_id
 from .state import AppContext
 from .widgets import (
-    Card, DataTable, KpiStrip, StatusChip, WLabel, busy_feedback, status_chip_for,
+    Card, DataTable, KpiStrip, SlicerBar, StatusChip, WLabel, busy_feedback,
+    status_chip_for,
 )
 from waste_anomaly.signals import SIGNAL_PARTS
 
@@ -471,6 +472,11 @@ class AnomaliView(QWidget):
         title = WLabel("Tabel Anomali Ter-ranking", table_card)
         title.setObjectName("cardTitle")
         tcl.addWidget(title)
+        # v2.11.0: slicer multi-select (JENIS·KETERANGAN·STATUS) di atas
+        # tabel — state global ctx.active_filters (chip antar-tab sinkron
+        # otomatis). Banding Periode sengaja tanpa slicer (file ≠ baris).
+        self._slicer = SlicerBar(ctx, table_card)
+        tcl.addWidget(self._slicer)
         self._table = DataTable(table_card)
         self._table.setMinimumHeight(200)
         self._table.selectionModel().currentRowChanged.connect(

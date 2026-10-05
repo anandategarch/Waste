@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 from .shared import fmt_id
 from .state import AppContext
 from .view_anomali import DetailDialog
-from .widgets import Card, DataTable, KpiCard, WLabel, busy_feedback
+from .widgets import Card, DataTable, KpiCard, SlicerBar, WLabel, busy_feedback
 from waste_anomaly.period_history import day_evidence_vs_history
 
 # Kolom tabel hari-mencurigakan (ramping — detail lengkap di pop-up).
@@ -125,6 +125,12 @@ class HariView(QWidget):
         self._lbl_count.setObjectName("hint")
         ctl.addWidget(self._lbl_count, 1)
         cl.addWidget(ctrl)
+
+        # v2.11.0: slicer multi-select (JENIS·KETERANGAN·STATUS) di atas
+        # tabel — SATU state global dgn tab Anomali (dua instance SlicerBar,
+        # chip otomatis sinkron karena sama-sama membaca ctx.active_filters).
+        self._slicer = SlicerBar(ctx, card)
+        cl.addWidget(self._slicer)
 
         self._table = DataTable(card)
         self._table.setMinimumHeight(200)

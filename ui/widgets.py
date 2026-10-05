@@ -18,14 +18,17 @@ from collections import OrderedDict
 from contextlib import contextmanager
 
 import pandas as pd
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QFrame,
     QHeaderView,
     QLabel,
+    QLayout,
+    QLayoutItem,
     QTableView,
+    QToolButton,
     QVBoxLayout,
     QWidget,
     QSizePolicy,
@@ -34,6 +37,7 @@ from PySide6.QtWidgets import (
 from .models import PandasTableModel
 from .shared import fmt_id
 from .theme import STATUS_COLORS
+from waste_anomaly.utils import norm_text
 
 
 # ============================================================
@@ -673,3 +677,279 @@ class StatusChip(QFrame):
 def status_chip_for(status: str, parent=None) -> StatusChip:
     fg, bg = STATUS_COLORS.get(status, ("#334155", "#f1f5f9"))
     return StatusChip(status, fg, bg, parent)
+
+
+# ============================================================
+# v2.11.0 — SLICER: tombol filter kilat multi-select (pola Excel)
+# ============================================================
+
+# Dimensi slicer (urutan tampil): kunci state → label baris.
+SLICER_DIMS: list[tuple[str, str]] = [
+    ("jenis", "JENIS"),
+    ("keterangan", "KETERANGAN"),
+    ("status", "STATUS"),
+]
+# Urutan nilai tetap (bukan alfabetis) — WASTE dulu (subjek utama).
+_JENIS_ORDER = ["WASTE", "SUSUT", "TRIAL"]
+_STATUS_ORDER = ["Prioritas Tinggi", "Potensi Anomali", "Perlu Review", "Normal"]
+# Debounce klik beruntun (ms) — pola search 300 ms (app.py), lebih cepat
+# karena chip = 1 klik saja (bukan mengetik). 3 klik cepat = 1 render.
+_SLICER_DEBOUNCE_MS = 150
+
+
+class FlowLayout(QLayout):
+    """Layout yang membungkus item ke baris berikutnya saat sempit.
+
+    v2.11.0: dipakai SlicerBar — baris chip tidak pernah terpotong di
+    jendela sempit; chip turun ke baris baru, urutan tetap kiri→kanan.
+    (Implementasi pola FlowLayout klasik Qt, dipadatkan.)
+    """
+
+    def __init__(self, parent: QWidget | None = None,
+                 hspacing: int = 6, vspacing: int = 4) -> None:
+        super().__init__(parent)
+        self._items: list[QLayoutItem] = []
+        self._h = hspacing
+        self._v = vspacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item: QLayoutItem) -> None:
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, i: int) -> QLayoutItem | None:
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i: int) -> QLayoutItem | None:
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self) -> Qt.Orientations:
+        return Qt.Orientations(Qt.Orientation(0))
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, w: int) -> int:
+        return self._do_layout(QRect(0, 0, w, 0), test=True)
+
+    def setGeometry(self, rect: QRect) -> None:
+        super().setGeometry(rect)
+        self._do_layout(rect, test=False)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        size += QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def _do_layout(self, rect: QRect, test: bool) -> int:
+        m = self.contentsMargins()
+        eff = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x, y = eff.x(), eff.y()
+        line_h = 0
+        for item in self._items:
+            hint = item.sizeHint()
+            nx = x + hint.width() + self._h
+            if nx - self._h > eff.right() + 1 and line_h > 0:
+                x = eff.x()
+                y += line_h + self._v
+                line_h = 0
+                nx = x + hint.width() + self._h
+            if not test:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x = nx
+            line_h = max(line_h, hint.height())
+        return y + line_h - rect.y() + 1
+
+
+class SlicerBar(QWidget):
+    """Baris tombol filter kilat multi-select — JENIS·KETERANGAN·STATUS.
+
+    v2.11.0: dipakai tab Anomali & Hari Mencurigakan (satu komponen,
+    DUA instance — state tetap tunggal di ctx.active_filters sehingga
+    chip antar-tab otomatis sinkron). Tab Banding Periode sengaja TIDAK
+    memakai slicer (membandingkan file bulan, bukan baris data).
+
+    Kontrak:
+    - Klik chip = toggle nilai dalam set dimensi; klik beruntun di-
+      koalesce debounce _SLICER_DEBOUNCE_MS → SATU set_filters_multi
+      (satu broadcast → satu render, bukan satu per klik).
+    - Nilai disimpan LIST pada active_filters (semantik _apply_filters
+      sudah mendukung list semua dimensi — v2.5.1). Set kosong → []
+      utk jenis / None utk keterangan+status (kanonik reset_filters).
+    - Sinkron dua arah: combo sidebar (str) → chip aktif tunggal;
+      chip → sidebar menampilkan placeholder 'beberapa dipilih'
+      (lihat app._combo_set). Reset/profil/drill → semua chip ikut.
+    - Sebelum ada data: bar disembunyikan (tanpa ruang kosong).
+    """
+
+    def __init__(self, ctx, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._ctx = ctx
+        self._chips: dict[str, dict[str, QToolButton]] = {
+            k: {} for k, _ in SLICER_DIMS}
+        self._pending: dict[str, list[str]] = {}
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(_SLICER_DEBOUNCE_MS)
+        self._timer.timeout.connect(self._apply_pending)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        self._rows: dict[str, tuple[QWidget, FlowLayout]] = {}
+        for key, label in SLICER_DIMS:
+            row = QWidget(self)
+            hl = QVBoxLayout(row)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(2)
+            head = QLabel(f"{label}:", row)
+            head.setObjectName("muted")
+            # child layout TANPA parent — row sudah punya QVBoxLayout
+            # (QLayout(parent) akan bentrok: "already has a layout").
+            flow = FlowLayout()
+            hl.addWidget(head)
+            hl.addLayout(flow)
+            lay.addWidget(row)
+            self._rows[key] = (row, flow)
+
+        # Baris aksi: bersihkan ketiga dimensi slicer sekali klik.
+        act = QWidget(self)
+        al = FlowLayout()
+        act.setLayout(al)
+        al.setContentsMargins(0, 0, 0, 0)
+        self._btn_clear = QToolButton(act)
+        self._btn_clear.setText("✕ Bersihkan slicer")
+        self._btn_clear.setObjectName("slicerChip")
+        self._btn_clear.setToolTip(
+            "Hapus pilihan JENIS + KETERANGAN + STATUS slicer ini\n"
+            "(filter lain — cabang, pencarian, rentang hari — tidak disentuh).")
+        self._btn_clear.clicked.connect(self._clear)
+        al.addWidget(self._btn_clear)
+        lay.addWidget(act)
+
+        ctx.filters_changed.connect(self._sync_from_state)
+        ctx.data_ready.connect(self._on_data_ready)
+        self.setVisible(False)  # muncul begitu ada data
+
+    # ------------------------------------------------------------
+    # POPULASI NILAI
+    # ------------------------------------------------------------
+    def set_dim_values(self, key: str, values: list[str]) -> None:
+        """Ganti kumpulan nilai satu dimensi (dataset baru)."""
+        row, flow = self._rows[key]
+        for btn in self._chips[key].values():
+            flow.removeWidget(btn)
+            btn.deleteLater()
+        self._chips[key].clear()
+        active = set(self._effective(key))
+        for val in values:
+            btn = QToolButton(row)
+            btn.setText(val)
+            btn.setCheckable(True)
+            btn.setObjectName("slicerChip")
+            btn.setToolTip(
+                f"Klik = tampilkan hanya {val} (klik lagi = lepas).\n"
+                "Bisa pilih beberapa sekaligus — hasil = gabungan.")
+            if key == "status":
+                # warna severity saat tercentang (QSS [sev=...])
+                btn.setProperty("sev", val)
+            btn.setChecked(val in active)
+            btn.clicked.connect(
+                lambda checked, k=key, v=val: self._on_chip(k, v, checked))
+            flow.addWidget(btn)
+            self._chips[key][val] = btn
+        row.setVisible(bool(values))
+        self.setVisible(any(self._chips[k] for k, _ in SLICER_DIMS))
+
+    def _on_data_ready(self) -> None:
+        """Dataset baru → ganti nilai chip (JENIS/KETERANGAN dari data;
+        STATUS tetap 4 — filter sudah direset set_dataset)."""
+        df = self._ctx.df
+        if df is None:
+            return
+        if "JENIS" in df.columns:
+            present = set(df["JENIS"].dropna().astype(str))
+            jenis = [v for v in _JENIS_ORDER if v in present] + sorted(
+                v for v in present if v not in _JENIS_ORDER)
+            self.set_dim_values("jenis", jenis)
+        if "KETERANGAN" in df.columns:
+            # nilai ternormalisasi — SAMA dgn combo sidebar (app._on_data_ready)
+            kets = sorted({norm_text(v)
+                           for v in df["KETERANGAN"].dropna().astype(str)})
+            self.set_dim_values("keterangan", kets)
+        self.set_dim_values("status", list(_STATUS_ORDER))
+        self._sync_from_state()
+
+    # ------------------------------------------------------------
+    # INTERAKSI CHIP
+    # ------------------------------------------------------------
+    def _effective(self, key: str) -> list[str]:
+        """Set nilai dimensi saat ini (pending menang atas state)."""
+        if key in self._pending:
+            return list(self._pending[key])
+        v = self._ctx.active_filters.get(key)
+        if isinstance(v, list):
+            return list(v)
+        if isinstance(v, str) and v:
+            return [v]
+        return []
+
+    def _on_chip(self, key: str, value: str, checked: bool) -> None:
+        cur = self._effective(key)
+        if checked and value not in cur:
+            cur.append(value)
+        elif not checked and value in cur:
+            cur.remove(value)
+        else:
+            return
+        self._pending[key] = cur
+        self._timer.start()  # restart — klik beruntun = satu broadcast
+
+    def _apply_pending(self) -> None:
+        if not self._pending:
+            return
+        values = self._canonical(dict(self._pending))
+        self._pending.clear()
+        self._ctx.set_filters_multi(values)
+
+    def _clear(self) -> None:
+        """Klik '✕ Bersihkan slicer' — kosongkan ketiga dimensi."""
+        self._timer.stop()
+        self._pending.clear()
+        self._ctx.set_filters_multi(
+            self._canonical({key: [] for key, _ in SLICER_DIMS}))
+
+    def _canonical(self, values: dict) -> dict:
+        """[] utk jenis; None utk keterangan/status kosong (kanonik
+        reset_filters) + urut stabil → tanda tangan LRU konsisten
+        terlepas dari urutan klik."""
+        out: dict = {}
+        for key, vals in values.items():
+            if not vals:
+                out[key] = [] if key == "jenis" else None
+            else:
+                out[key] = sorted(vals)
+        return out
+
+    # ------------------------------------------------------------
+    # SINKRON DARI STATE (sidebar / profil / drill / reset)
+    # ------------------------------------------------------------
+    def _sync_from_state(self) -> None:
+        for key, chips in self._chips.items():
+            if key in self._pending:
+                continue  # klik user belum ter-apply — visual menang
+            active = set(self._effective(key))
+            for val, btn in chips.items():
+                btn.setChecked(val in active)
+
+    def chip(self, key: str, value: str) -> QToolButton | None:
+        """Akses chip (test/E2E — klik programatik)."""
+        return self._chips.get(key, {}).get(value)

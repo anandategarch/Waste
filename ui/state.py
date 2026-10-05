@@ -266,6 +266,19 @@ class AppContext(QObject):
         self._filter_cache_valid = False
         self.filters_changed.emit()
 
+    def set_filters_multi(self, values: dict) -> None:
+        """Set BEBERAPA filter sekaligus + broadcast SEKALI (v2.11.0 slicer).
+
+        Klik beruntun chip slicer dikoalesce timer di SlicerBar; metode ini
+        memastikan beberapa dimensi berganti bersamaan hanya memicu SATU
+        filters_changed (satu render) — pola coalesce _batch_filters V26-L4
+        diangkat ke state. Kunci tak dikenal diabaikan."""
+        for k, v in values.items():
+            if k in self.active_filters:
+                self.active_filters[k] = v
+        self._filter_cache_valid = False
+        self.filters_changed.emit()
+
     def set_day_range(self, day_min: int | None, day_max: int | None) -> None:
         self.day_min = day_min
         self.day_max = day_max

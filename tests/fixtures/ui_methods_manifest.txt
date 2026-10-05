@@ -22,8 +22,10 @@ view_periode.py::fmt_run_label
 view_pipeline.py::PipelineView
 widgets.py::Card
 widgets.py::DataTable
+widgets.py::FlowLayout
 widgets.py::KpiCard
 widgets.py::KpiStrip
+widgets.py::SlicerBar
 widgets.py::StatusChip
 widgets.py::WLabel
 widgets.py::busy_feedback
