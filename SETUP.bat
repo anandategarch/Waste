@@ -5,7 +5,7 @@ title Waste Anomaly Detection - SETUP (One-Time)
 color 0B
 cls
 echo ============================================================
-echo   SETUP - Install Dependencies (One-Time) - v2.7.0
+echo   SETUP - Install Dependencies (One-Time) - v2.8.0
 echo ============================================================
 echo.
 echo  Menginstall dependencies untuk Waste Anomaly Detection:

@@ -5,20 +5,20 @@ title Waste Anomaly Detection
 color 0A
 cls
 echo ============================================================
-echo   WASTE ANOMALY DETECTION - v2.7.0
+echo   WASTE ANOMALY DETECTION - v2.8.0
 echo ============================================================
 echo.
-echo  PySide6 anomaly workbench - 8 view:
+echo  PySide6 anomaly workbench - 5 view:
 echo    1. Anomali   - tabel anomali ter-ranked skor + detail
 echo                   12 sinyal + drill-down 1-klik
 echo    2. Jelajah   - chart interaktif klik-untuk-filter + tabel
-echo                   data + banding 2 cabang
+echo                   data + 9 chart statistik
 echo    3. Waktu     - pola waste per hari + kelas hari mod-7
-echo    4. Uang      - money view, Pareto item, benchmark peer
-echo    5. Peer      - kuadran sistemik, rate league, SUSUT
-echo    6. Kualitas  - 7 pemeriksaan kualitas data otomatis
-echo    7. Banding   - compare periode bulan-ke-bulan
-echo    8. Pipeline  - run/batal + editor threshold + log
+echo    4. Banding   - compare periode bulan-ke-bulan
+echo    5. Pipeline  - run/batal + editor threshold + log
+echo.
+echo  Sidebar filter bisa disembunyikan: Ctrl+Shift+F
+echo  Panel detail bisa dirikan: tombol Rapikan Detail
 echo.
 echo  Pastikan SETUP.bat sudah dijalankan minimal sekali.
 echo.

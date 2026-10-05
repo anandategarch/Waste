@@ -197,15 +197,13 @@ class TestPlaceholderPraRun:
         return hits
 
     def test_view_chart_punya_placeholder(self):
-        """Jelajah/Waktu/Uang/Peer/Kualitas menampilkan placeholder sejak
-        konstruksi (tanpa perlu refresh/on_shown)."""
+        """Jelajah/Waktu menampilkan placeholder sejak konstruksi (tanpa
+        perlu refresh/on_shown). v2.8.0: Uang/Peer/Kualitas dihapus total
+        keluar dari cakupan test ini."""
         _qapp()
         from ui.view_jelajah import JelajahView
-        from ui.view_kualitas import KualitasView
-        from ui.view_peer import PeerView
-        from ui.view_uang import UangView
         from ui.view_waktu import WaktuView
-        for cls in (JelajahView, WaktuView, UangView, PeerView, KualitasView):
+        for cls in (JelajahView, WaktuView):
             view = cls(_make_ctx())
             self._assert_placeholder(view)
 
@@ -223,22 +221,9 @@ class TestPlaceholderPraRun:
 # ============================================================
 # FIX 4 — hint Kualitas (tanpa affordance Treeview)
 # ============================================================
-
-class TestHintKualitas:
-    def test_hint_tanpa_panah_expand(self):
-        """Hint tidak menyebut '▶' / 'expand' — QTableView tidak punya panah
-        expand; interaksi sebenarnya: sort header + kolom Detail/Contoh."""
-        _qapp()
-        from PySide6.QtWidgets import QLabel
-        from ui.view_kualitas import KualitasView
-        view = KualitasView(_make_ctx())
-        all_text = " ".join(l.text() for l in view.findChildren(QLabel))
-        assert "▶" not in all_text
-        assert "expand" not in all_text.lower()
-        assert "treeview" not in all_text.lower()
-        # penjelasan menunjuk interaksi yang benar-benar ada
-        assert "sort" in all_text.lower()
-        assert "Detail" in all_text
+# v2.8.0: TestHintKualitas DIHAPUS — view_kualitas.py dihapus total
+# (8 → 5 tab). Interaksi 'sort header + kolom Detail/Contoh' yang
+# dulu diuji di sini tidak lagi punya subjek.
 
 
 # ============================================================
@@ -345,18 +330,18 @@ class TestDrillDown:
 
 
 # ============================================================
-# FIX 8 — jalur refresh/on_shown tidak lagi modal (waktu/uang)
+# FIX 8 — jalur refresh/on_shown tidak lagi modal (waktu)
 # ============================================================
 
 class TestRefreshNonBlocking:
-    def test_error_tabel_waktu_uang_non_modal(self):
+    def test_error_tabel_waktu_non_modal(self):
         """Gagal membangun tabel saat refresh (dipicu on_shown) → status bar,
         BUKAN QMessageBox.warning bertumpuk (grep sumber: tidak ada pemanggil
-        QMessageBox di modul waktu/uang lagi)."""
+        QMessageBox di modul waktu lagi). v2.8.0: modul uang dihapus total
+        keluar dari cakupan test ini."""
         _qapp()
-        import ui.view_uang as vu
         import ui.view_waktu as vw
-        for mod in (vw, vu):
+        for mod in (vw,):
             src = Path(mod.__file__).read_text(encoding="utf-8")
             assert "QMessageBox.warning" not in src, (
                 f"{mod.__name__}: refresh path masih memakai dialog modal")
@@ -378,7 +363,7 @@ class TestNoteStale:
 
     def test_docstring_tanpa_era_v250(self):
         """Referensi era '(P1/P2 v2.5.0)' di docstring view diganti wording
-        8-view v2.6 (audit L14)."""
-        for fname in ("view_waktu.py", "view_uang.py"):
+        v2.6+ (audit L14). v2.8.0: view_uang dihapus total."""
+        for fname in ("view_waktu.py",):
             src = (REPO / "ui" / fname).read_text(encoding="utf-8")
             assert "v2.5.0" not in src, f"{fname}: docstring masih era v2.5.0"

@@ -216,7 +216,9 @@ class TestCloseEvent:
         from ui.app import MainWindow
 
         win = MainWindow()
-        periode = win._views[6][1]  # ("Banding Periode", PeriodeView)
+        # v2.8.0: lookup berdasar NAMA (bukan indeks) — urutan view berubah
+        # saat tab Uang/Peer/Kualitas Data dihapus (8 → 5).
+        periode = next(v for _n, v in win._views if _n == "Banding Periode")
         stub = _StubWorker()
         periode._running = True
         periode._worker = stub  # type: ignore[assignment]
@@ -374,7 +376,8 @@ class TestStaleResultMarker:
         })
         win = MainWindow()
         try:
-            pv = win._views[6][1]  # PeriodeView
+            # v2.8.0: lookup berdasar NAMA — urutan view berubah (8 → 5 tab)
+            pv = next(v for _n, v in win._views if _n == "Banding Periode")
             summary = {"key_akhir": 31, "total_rows": 1}
             win.ctx.set_dataset(df, summary)
             # simulasi hasil banding selesai (state seperti _on_done)

@@ -41,9 +41,8 @@ MANIFEST = Path(__file__).resolve().parent / "fixtures" / "ui_methods_manifest.t
 EXPECTED_MODULES = [
     "__init__.py", "shared.py", "theme.py", "state.py", "models.py",
     "workers.py", "widgets.py", "app.py",
-    "view_anomali.py", "view_jelajah.py", "view_waktu.py", "view_uang.py",
-    "view_peer.py", "view_kualitas.py", "view_periode.py",
-    "view_pipeline.py",
+    "view_anomali.py", "view_jelajah.py", "view_waktu.py",
+    "view_periode.py", "view_pipeline.py",
 ]
 
 
@@ -269,10 +268,13 @@ class TestParetoStringTotal:
 # V26-M13 — versi 2.7.0 tunggal di 3 situs
 # ============================================================
 
-class TestVersi270:
+class TestVersiSync:
     def test_versi_sama_di_tiga_situs(self):
+        """v2.8.0: versi disinkronkan di ui/shared.py, __init__.py, dan
+        config.json (ganti nama kelas dari TestVersi270 — angka versi
+        berubah tiap rilis, lock-nya cukup 'ketiga situs SAMA')."""
         from ui.shared import APP_VERSION
         from waste_anomaly import __version__
         cfg = json.loads(
             (REPO / "waste_anomaly" / "config.json").read_text(encoding="utf-8"))
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.7.0"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.8.0"

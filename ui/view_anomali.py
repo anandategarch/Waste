@@ -3,6 +3,14 @@
 Landing pertama aplikasi: tabel anomali TER-RANKING (skor turun) + KPI
 terfilter + panel detail baris terpilih (12 sinyal + peer + drill-down).
 Semua teks word-wrap; tabel tanpa cap baris; kolom auto-width + wrap.
+
+v2.8.0: tabel diberi ruang vertikal dominan — header kartu dirampingkan
+(judul satu baris + hint digabung), rasio splitter 3:2 → 5:2, tinggi
+minimum tabel 200px, dan panel detail bisa DIRINGKAN total lewat tombol
+"⌃ Rapikan Detail" (tabel memanjang memenuhi seluruh tinggi view).
+Diagnostik geometri v2.7.0 di laptop 1024×700: tabel hanya 133px
+(±3 baris terlihat) — 144px habis untuk judul wrap + hint terpisah +
+margin, dan detail mengambil 38% ruang walau kosong.
 """
 from __future__ import annotations
 
@@ -266,36 +274,57 @@ class AnomaliView(QWidget):
         self._lbl_count = WLabel("", ctrl)
         self._lbl_count.setObjectName("hint")
         cl.addWidget(self._lbl_count, 1)
+        # v2.8.0: rikan/munculkan panel detail — saat dirikan, tabel
+        # memanjang memenuhi seluruh tinggi view.
+        self._btn_detail = QPushButton("⌃ Rapikan Detail", ctrl)
+        self._btn_detail.setToolTip(
+            "Sembunyikan panel detail — tabel anomali memanjang penuh ke bawah.")
+        self._btn_detail.clicked.connect(self._toggle_detail)
+        cl.addWidget(self._btn_detail)
         lay.addWidget(ctrl)
 
         # Splitter: tabel (atas) + detail (bawah)
+        # v2.8.0: rasio 3:2 → 5:2 (tabel dominan; detail punya scroll
+        # internal sendiri) + tinggi minimum tabel 200px & kartu 240px.
         self._split = QSplitter(Qt.Orientation.Vertical, self)
         table_card = Card(self._split)
+        table_card.setMinimumHeight(240)
         tcl = QVBoxLayout(table_card)
         tcl.setContentsMargins(12, 10, 12, 10)
         tcl.setSpacing(6)
-        title = WLabel("Tabel Anomali Ter-ranking (klik header utk sort; pilih baris utk detail)", table_card)
+        # v2.8.0: judul satu baris (dulu wrap 2-3 baris — makan ±100px);
+        # petunjuk interaksi digabung ke satu baris hint.
+        title = WLabel("Tabel Anomali Ter-ranking", table_card)
         title.setObjectName("cardTitle")
         tcl.addWidget(title)
         self._table = DataTable(table_card)
+        self._table.setMinimumHeight(200)
         self._table.selectionModel().currentRowChanged.connect(
             lambda *_: self._on_selection())
         self._table.double_clicked.connect(self._on_double)
         tcl.addWidget(self._table, 1)
-        hint = WLabel("💡 Klik 2× baris untuk fokus cabang+item sekaligus", table_card)
+        hint = WLabel("💡 Klik header utk sort · klik 2× baris = fokus cabang+item · pilih baris utk detail", table_card)
         hint.setObjectName("hint")
         tcl.addWidget(hint)
 
         self._detail = DetailPanel(ctx, self._split)
-        self._split.setStretchFactor(0, 3)
+        self._detail.setMinimumHeight(150)
+        self._split.setStretchFactor(0, 5)
         self._split.setStretchFactor(1, 2)
-        self._split.setSizes([420, 260])
+        self._split.setSizes([560, 240])
+        # v2.8.0: tabel tidak boleh runtuh total oleh drag handle —
+        # hanya panel detail yang boleh dirikan (via tombol).
+        self._split.setCollapsible(0, False)
+        self._split.setCollapsible(1, True)
         lay.addWidget(self._split, 1)
 
         # Reaksi state — pola lazy H2: view tak terlihat → tandai dirty,
         # render saat dibuka (on_shown). View default biasanya terlihat saat
         # pipeline selesai → render langsung.
         self._dirty = True
+        # v2.8.0: ukuran splitter saat panel detail dirikan (dipulihkan
+        # saat detail dimunculkan lagi).
+        self._detail_sizes: list[int] = []
         # v2.7.0 (V26-L4): guard coalesce — _on_double menerapkan dua filter
         # sekaligus TANPA render perantara (satu render di akhir).
         self._batch_filters = False
@@ -320,6 +349,28 @@ class AnomaliView(QWidget):
         """Kontrak lazy-render: view dibuka setelah data baru / filter basi."""
         if self._dirty:
             self.refresh()
+
+    def _toggle_detail(self) -> None:
+        """v2.8.0: rikan/munculkan panel detail.
+
+        Saat dirikan: ukuran splitter disimpan dulu, DetailPanel di-hidden —
+        QSplitter lalu memberi SELURUH tinggi ke kartu tabel (tabel
+        memanjang ke bawah). Saat dimunculkan: ukuran tersimpan dipulihkan.
+        isHidden() (bukan isVisible()) dipakai agar toggle tetap benar saat
+        view sedang tidak aktif (tab lain terbuka).
+        """
+        if not self._detail.isHidden():
+            self._detail_sizes = self._split.sizes()
+            self._detail.setHidden(True)
+            self._btn_detail.setText("⌄ Tampilkan Detail")
+            self._ctx.set_status(
+                "✓ Panel detail dirikan — tabel memanjang penuh", "done")
+        else:
+            self._detail.setHidden(False)
+            if any(self._detail_sizes):
+                self._split.setSizes(self._detail_sizes)
+            self._btn_detail.setText("⌃ Rapikan Detail")
+            self._ctx.set_status("✓ Panel detail dimunculkan", "done")
 
     # ------------------------------------------------------------
     def refresh(self) -> None:

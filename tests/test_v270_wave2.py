@@ -425,7 +425,6 @@ class TestChipSinyalDariReasonsRiil:
         assert n_frag > 0, "fixture sample harus punya baris ber-sinyal"
 
         # Panel detail: render record top (tanpa Qt view penuh — cukup panel)
-        from PySide6.QtWidgets import QApplication
         from ui.state import AppContext
         from ui.view_anomali import DetailPanel
         ctx = AppContext({})

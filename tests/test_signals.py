@@ -11,7 +11,6 @@ terisolasi dari stage 1-10.
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from waste_anomaly.signals import compute_signals
 

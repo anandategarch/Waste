@@ -1,6 +1,8 @@
 # Waste Anomaly Detection
 
-Python + PySide6 (Qt) **anomaly workbench** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif lintas-tab**, **filter profile persistence**, **comparison mode 2 cabang**, **analisa temporal (hari/minggu)**, **money view (prioritas magnitude)**, **benchmark peer aktif**, **data quality otomatis**, **compare periode bulan-ke-bulan**, **quadrant & rate league**, dan **18+ grafik** matplotlib embedded (v2.7.0: 3 duplikat Jelajah dihapus).
+Python + PySide6 (Qt) **anomaly workbench** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif lintas-tab**, **filter profile persistence**, **analisa temporal (hari/minggu)**, **benchmark peer aktif (panel detail + sinyal S8/S9)**, **data quality otomatis (pipeline & export)**, **compare periode bulan-ke-bulan**, dan **15 grafik** matplotlib embedded (v2.8.0: tab Uang/Peer/Kualitas Data dihapus — 8 → 5 view; v2.7.0: 3 duplikat Jelajah dihapus).
+
+> **v2.8.0** — penyederhanaan UI atas permintaan user + ruang vertikal tabel: **8 → 5 view** — tab **Uang**, **Peer**, **Kualitas Data** dihapus total (file view terkait dihapus dari repo; fitur banding 2 cabang A/B, kuadran sistemik, rate league, dan tampilan pemeriksaan DQ ikut pensiun — **cek data_quality TETAP jalan di pipeline & export, sheet export tidak berubah**). **Tabel anomali memanjang ke bawah**: header kartu dirampingkan (judul satu baris + hint digabung — dulu judul wrap 2-3 baris makan ±100px), rasio splitter tabel:detail 3:2 → 5:2, tinggi minimum tabel 200px, tombol baru **"⌃ Rapikan Detail"** menyembunyikan panel detail → tabel memenuhi seluruh tinggi view (diagnostik geometri: di laptop 1024×700 tabel v2.7.0 hanya menampilkan ±3 baris). **Sidebar bisa disembunyikan/dimunculkan**: tombol **☰ Filter** di toolbar / shortcut **Ctrl+Shift+F** — tabel & chart memakai lebar penuh jendela saat sidebar disembunyikan; ukuran splitter dipulihkan saat dimunculkan. Golden regression utuh (25.901/399/41).
 
 > **v2.7.0** — hasil "deep audit v2.6.x + fix" (45 temuan unik dari 3 auditor read-only + audit lanjutan, dipecah 4 gelombang fix paralel): **CRITICAL** — 2 tab Mover "Banding Periode" selalu kosong sejak v2.6.0 (kunci hasil `compare_periods` salah dipetakan); 12 chip sinyal panel detail selalu abu-abu di data riil (panel membaca kolom `_s1.._s12` yang di-drop pipeline sebelum df sampai UI — kini tabel memegang DataFrame PENUH dan chip membaca fragmen teks `ANOMALY REASONS`). **HIGH** — sinyal S11 periode-B hidup lagi (key_akhir pipeline B kini auto-detect dari data mentah, seperti v2.5.1); validasi threshold editor dipulihkan dari v2.5.1 (tolak non-numerik "0,5"/"abc" & nilai ≤ 0 — dulu tersimpan senyap sebagai string ke config.json); `closeEvent` kini menghentikan SEMUA worker — pipeline + export + banding periode (dulu QThread dihancurkan saat masih berjalan = crash/UB); sidebar filter jujur lagi pasca re-run (combo/search/chip tak lagi menampilkan filter lama yang sudah di-reset); breakdown satuan KPI menampilkan total waste sesungguhnya (dulu jumlah baris tampil seolah waste). **MEDIUM/LOW** — `fmt_cell` memformat numpy int/float (pemisah ribuan + rata kanan); tabel >3.000 baris anti-terpotong vertikal (wrap mati + elide kanan "…", tooltip sel tetap teks penuh); 3 chart duplikat Jelajah dihapus (12→9); placeholder pra-run di 5 view (dulu area blank senyap); drill-down nilai kosong/NaN ditolak dengan pesan (bukan tabel kosong senyap); Reset Default 14/20→20/20 key threshold; memo cache filter (perf — `_apply_filters` tak lagi dijalankan 2× per refresh); tombol batal banding periode; penanda hasil banding basi saat data periode A berubah; koersi numerik TOTAL di sheet turunan (string tak lagi ter-`sum` jadi teks); `fmt_id(None)` → ""; plus bersihan dead code era Tkinter (`embed_figure`/FigureCanvasTkAgg, sinyal `run_state_changed` tanpa pelanggan, QSS rule & import mati) dan manifest metode ui/ kini dikunci DUA-ARAH (def baru tanpa update manifest = test gagal). `sample_workbook.xlsx` ikut repo sebagai fixture test (generate ulang via `make_sample.py`). Test: 420 → **432**. Golden regression utuh (25.901/399/41).
 >
@@ -66,20 +68,16 @@ Query data → Olah di Excel → Save as DATA_WASTE.xlsx → Replace file lama �
 Kalau sheet BOM/DATABASE_SATUAN tidak ada, sinyal BOM (S6/S7) & STATUS (Sesuai/Tidak Sesuai) tidak akan trigger tapi pipeline tetap jalan.
 
 ### 3. Jalankan (setiap kali)
-Jalankan `MULAI.bat`. UI terbuka dengan **8 view** (v2.6.0 — rebuild PySide6; landing default = **Anomali**):
+Jalankan `MULAI.bat`. UI terbuka dengan **5 view** (v2.8.0 — rebuild PySide6; landing default = **Anomali**):
 
 | View | Fungsi |
 |------|--------|
-| 🎯 Anomali (**default**) | Tabel anomali ter-ranking (skor ↓, tanpa cap baris, pewarnaan severity) + panel detail (12 sinyal S1–S12, peer, uang) + drill-down 1-klik (cabang/item/alasan) + ambang "Skor ≥" + KPI mengikuti filter |
+| 🎯 Anomali (**default**) | Tabel anomali ter-ranking (skor ↓, tanpa cap baris, pewarnaan severity) + panel detail (12 sinyal S1–S12, peer, uang) + drill-down 1-klik (cabang/item/alasan) + ambang "Skor ≥" + KPI mengikuti filter + tombol "⌃ Rapikan Detail" (tabel memanjang penuh) |
 | 🧭 Jelajah | Chart interaktif klik-untuk-filter + tabel data (5 sheet) + 9 chart statistik |
-| 🕐 Waktu | Pola waste per hari, kelas hari (mod-7), heatmap alasan×hari + tabel |
-| 💰 Uang | Money view top-100, Pareto item, benchmark peer aktif, profil alasan |
-| ⚖ Peer | Kuadran sistemik, rate league, benchmark SUSUT, share alasan per cabang, banding A/B |
-| 🧪 Kualitas Data | 7 pemeriksaan kualitas otomatis (NBSP satuan, split-source, waste-tanpa-BOM, dll.) |
 | 🔀 Banding Periode | Run saat ini vs workbook lain (normalisasi waste/hari, item baru/hilang) |
 | ▶ Pipeline | Workbook + key akhir + Run/⏹Batal + progress + log + ringkasan + editor threshold |
 
-Sidebar kiri (selalu terlihat): pencarian (debounce 300 ms), cabang, status, keterangan, rentang hari, profil filter tersimpan. Toolbar atas: **💾 Export Excel** (global — tidak duplikat per tab) + **❓ Bantuan**.
+Sidebar kiri (bisa disembunyikan — ☰ Filter / Ctrl+Shift+F, v2.8.0): pencarian (debounce 300 ms), cabang, status, keterangan, rentang hari, profil filter tersimpan. Saat disembunyikan, tabel & chart memakai lebar penuh jendela. Toolbar atas: **☰ Filter** + **💾 Export Excel** (global — tidak duplikat per tab) + **❓ Bantuan**.
 
 > **Catatan deviasi (v2.7.0):** nama tab di-elide `…` bila jendela sangat sempit — konvensi disengaja (elide kanan + tombol panah scroll tab, bukan terpotong mentah mid-kata); jaminan anti-terpotong tetap berlaku untuk semua konten view.
 
@@ -159,27 +157,21 @@ Bar aktif highlight dengan warna penuh, bar lain jadi abu-abu (visual feedback).
 7. 💾 Export Excel (toolbar) → laporan 10 sheet dari hasil pipeline
 ```
 
-## Banding 2 Cabang — Side-by-Side (tab Peer)
+## Banding 2 Cabang & Analisa Peer — DIHAPUS (v2.8.0)
 
-Bagian "Banding 2 Cabang (A vs B)" di tab Peer membandingkan 2 cabang secara langsung dengan 4 chart.
+Tab **Peer** (banding 2 cabang A/B, kuadran anomali, rate league, benchmark
+SUSUT, share alasan per cabang), tab **Uang** (money view top-100, Pareto
+item), dan tab **Kualitas Data** (tampilan 7 pemeriksaan DQ) dihapus total
+di v2.8.0 atas permintaan user — 8 view menjadi 5. Yang TIDAK hilang:
+- Metrik pembanding peer: sinyal **S8/S9** (outlier peer), panel detail
+  Anomali (PEER COUNT, PEER MEDIAN TOTAL/MAX, rasio ke median), prioritas
+  magnitude di scoring.
+- **Cek data_quality tetap jalan** di pipeline setiap run & ikut ke export
+  Excel (sheet kualitas data) — hanya tampilan tab-nya yang dihapus.
 
-### Cara Pakai
-1. Pilih **Cabang A** dan **Cabang B** dari dropdown (otomatis terisi dari data ter-load)
-2. Klik **🔀 Bandingkan** → 4 chart comparison ter-render:
-   - **Total Waste per JENIS** — grouped bar (WASTE/SUSUT/TRIAL)
-   - **Distribusi Status** — grouped bar (Prioritas Tinggi/Potensi/Review/Normal)
-   - **Top Item** — horizontal grouped bar (top item, A vs B)
-   - **Skor per Cabang** — grouped bar (avg & max anomali score)
-3. Ganti pasangan cabang + klik Bandingkan lagi untuk membandingkan yang lain
-
-> Catatan v2.6.0: banding ini kini bagian dari tab **Peer** (bukan tab
-> terpisah). Ringkasan teks metrik + tombol "Export PNG…" per-chart dari UI
-> Tkinter lama TIDAK dibawa ulang — export laporan kini satu jalur global:
-> 💾 Export Excel di toolbar.
-
-Tab Peer juga memuat **Kuadran Anomali** (prevalensi × persistensi), **Rate
-League** (waste/BOM per item, top 15), tabel **benchmark SUSUT**, dan tabel
-**share alasan per cabang** (pilih cabang dari dropdown).
+Sidebar filter (drill-down 8 cara) kini juga bisa **disembunyikan** lewat
+tombol **☰ Filter** di toolbar atau **Ctrl+Shift+F** — tabel & chart memakai
+lebar penuh jendela.
 
 ## Chart Statistik (tab Jelajah — 9 grafik, v2.7.0)
 
@@ -227,7 +219,7 @@ Bagian bawah tab **Jelajah** memuat galeri grafik statistik matplotlib embedded 
 
 ## Testing
 
-**432 test** — golden regression end-to-end (fixture `DATA_WASTE.xlsx` 25.901 baris), unit test 12 sinyal S1–S12, join BOM & normalisasi kunci, presisi float, kontrak summary dict, validasi skema, cancel hook antar-stage, exporter dual-mode, logging framework, path frozen-mode, kontrak chart interaktif + semantik filter (v2.5.1), 12 test struktural paket ui/ baru v2.6.0 (modul ada, mixin lama tak kembali, kontrak shared, kontrak view refresh/on_shown, worker QThread, manifest metode, MainWindow offscreen), **dan 65 test regresi fix audit v2.7.0** (gelombang 1–4: kontrak banding periode + closeEvent worker + memo filter; record penuh panel detail + 12 chip sinyal + fmt numpy + tabel besar; validasi threshold + placeholder pra-run + dedupe chart; manifest dua-arah + lantai header tabel + `fmt_id(None)` + Pareto numerik + versi). Jalankan setiap kali mengubah kode — angka golden berubah tanpa alasan = regresi.
+**445 test** — golden regression end-to-end (fixture `DATA_WASTE.xlsx` 25.901 baris), unit test 12 sinyal S1–S12, join BOM & normalisasi kunci, presisi float, kontrak summary dict, validasi skema, cancel hook antar-stage, exporter dual-mode, logging framework, path frozen-mode, kontrak chart interaktif + semantik filter (v2.5.1), 12 test struktural paket ui/ baru v2.6.0 (modul ada, mixin lama tak kembali, kontrak shared, kontrak view refresh/on_shown, worker QThread, manifest metode, MainWindow offscreen), **65 test regresi fix audit v2.7.0** (gelombang 1–4: kontrak banding periode + closeEvent worker + memo filter; record penuh panel detail + 12 chip sinyal + fmt numpy + tabel besar; validasi threshold + placeholder pra-run + dedupe chart; manifest dua-arah + lantai header tabel + `fmt_id(None)` + Pareto numerik + versi), **dan 14 test regresi v2.8.0** (5 view + file view dihapus + geometri tabel memanjang + toggle Rapikan Detail + sidebar hide/unhide + help jujur; 1 test kualitas lama dihapus bersama view-nya). Jalankan setiap kali mengubah kode — angka golden berubah tanpa alasan = regresi.
 
 ## Packaging — EXE Standalone
 
@@ -237,7 +229,7 @@ Jalankan `BUILD_EXE.bat` di Windows (butuh Python + SETUP.bat sekali). Hasil: `d
 
 ```
 Waste/
-├── MULAI.bat                       ← ENTRY POINT (buka UI 8 view)
+├── MULAI.bat                       ← ENTRY POINT (buka UI 5 view)
 ├── SETUP.bat                       ← One-time install (buat .venv + pip install, hardened v2.7.0)
 ├── BUILD_EXE.bat                   ← Build .exe standalone (PyInstaller)
 ├── waste_anomaly.spec              ← Konfigurasi PyInstaller (icon, datas)
@@ -256,19 +248,16 @@ Waste/
 │   ├── workers.py                 ← PipelineWorker / ExportWorker / PeriodWorker (QThread)
 │   ├── widgets.py                 ← Blok anti-terpotong: WLabel, MplCanvas, ChartCard,
 │   │                                 DataTable (auto-fit + wrap), KpiStrip, grid responsif
-│   ├── app.py                     ← MainWindow (toolbar + sidebar + 8 view) + main()
+│   ├── app.py                     ← MainWindow (toolbar + sidebar + 5 view) + main()
 │   ├── view_anomali.py            ← View 1 Anomali (default): ranking + detail + drill
 │   ├── view_jelajah.py            ← View 2 Jelajah: chart interaktif + tabel + statistik
 │   ├── view_waktu.py              ← View 3 Waktu (temporal)
-│   ├── view_uang.py               ← View 4 Uang (money view + benchmark)
-│   ├── view_peer.py               ← View 5 Peer (kuadran + rate league + banding A/B)
-│   ├── view_kualitas.py           ← View 6 Kualitas Data
-│   ├── view_periode.py            ← View 7 Banding Periode
-│   └── view_pipeline.py           ← View 8 Pipeline (+ ringkasan + threshold editor)
+│   ├── view_periode.py            ← View 4 Banding Periode
+│   └── view_pipeline.py           ← View 5 Pipeline (+ ringkasan + threshold editor)
 ├── assets/                         ← Ikon aplikasi (ico + png)
 ├── make_sample.py                  ← Generate sample workbook untuk testing
 ├── sample_workbook.xlsx            ← Fixture test in-repo (v2.7.0 — hasil make_sample.py)
-├── tests/                          ← Test suite pytest (432 test)
+├── tests/                          ← Test suite pytest (445 test)
 │   ├── conftest.py
 │   ├── fixtures/ui_methods_manifest.txt  ← Manifest def top-level ui/ (kunci struktural DUA-ARAH, v2.7.0)
 │   ├── test_pipeline_regression.py ← Golden regression 25.901 baris (14 test)
@@ -289,13 +278,14 @@ Waste/
 │   ├── test_ui_structure.py        ← Struktur paket ui/ (manifest + offscreen) (14)
 │   ├── test_v270_wave1.py          ← Regresi fix audit v2.7.0 gel. 1 (12)
 │   ├── test_v270_wave2.py          ← Regresi fix audit v2.7.0 gel. 2 (23)
-│   ├── test_v270_wave3.py          ← Regresi fix audit v2.7.0 gel. 3 (19)
-│   └── test_v270_wave4.py          ← Regresi fix audit v2.7.0 gel. 4 (12)
-├── .github/workflows/ci.yml        ← CI: matrix Python × OS, lint + 432 test
+│   ├── test_v270_wave3.py          ← Regresi fix audit v2.7.0 gel. 3 (18)
+│   ├── test_v270_wave4.py          ← Regresi fix audit v2.7.0 gel. 4 (12)
+│   └── test_v280.py                ← Regresi v2.8.0: 5 view + tabel memanjang + toggle (14)
+├── .github/workflows/ci.yml        ← CI: matrix Python × OS, lint + 445 test
 ├── waste_anomaly/
-│   ├── __init__.py                 ← __version__ single-source (2.7.0)
+│   ├── __init__.py                 ← __version__ single-source (2.8.0)
 │   ├── frozen.py                   ← Resolusi path PyInstaller exe vs dev (v2.4.1)
-│   ├── config.json                 ← Thresholds + sheet name candidates (version 2.7.0)
+│   ├── config.json                 ← Thresholds + sheet name candidates (version 2.8.0)
 │   ├── pipeline.py                 ← Orchestrator 14 stage + cancel_check (in-memory)
 │   ├── schema.py                   ← Validasi skema input (anti degradasi senyap)
 │   ├── logging_setup.py            ← Rotating file log + hook exception

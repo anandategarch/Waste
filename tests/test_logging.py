@@ -5,7 +5,6 @@ hook Tk, dan tidak crash di environment tanpa lokasi writable.
 """
 
 import logging
-from pathlib import Path
 
 from waste_anomaly.logging_setup import setup_logging
 

@@ -26,9 +26,8 @@ MANIFEST = Path(__file__).resolve().parent / "fixtures" / "ui_methods_manifest.t
 EXPECTED_MODULES = [
     "__init__.py", "shared.py", "theme.py", "state.py", "models.py",
     "workers.py", "widgets.py", "app.py",
-    "view_anomali.py", "view_jelajah.py", "view_waktu.py", "view_uang.py",
-    "view_peer.py", "view_kualitas.py", "view_periode.py",
-    "view_pipeline.py",
+    "view_anomali.py", "view_jelajah.py", "view_waktu.py",
+    "view_periode.py", "view_pipeline.py",
 ]
 
 # File mixin Tkinter lama — TIDAK BOLEH kembali (rebuild = penggantian total)
@@ -40,19 +39,17 @@ OLD_MIXIN_FILES = [
 ]
 
 # View data wajib punya kontrak lazy-render (refresh + on_shown)
+# v2.8.0: view_uang / view_peer / view_kualitas dihapus total (8 → 5 tab)
 DATA_VIEWS = {
     "view_anomali.py": "AnomaliView",
     "view_jelajah.py": "JelajahView",
     "view_waktu.py": "WaktuView",
-    "view_uang.py": "UangView",
-    "view_peer.py": "PeerView",
-    "view_kualitas.py": "KualitasView",
     "view_periode.py": "PeriodeView",
 }
 
+# v2.8.0: 8 → 5 tab (Uang, Peer, Kualitas Data dihapus total)
 VIEW_TAB_TITLES = [
-    "Anomali", "Jelajah", "Waktu", "Uang", "Peer", "Kualitas Data",
-    "Banding Periode", "Pipeline",
+    "Anomali", "Jelajah", "Waktu", "Banding Periode", "Pipeline",
 ]
 
 
@@ -162,18 +159,18 @@ class TestUiStructure:
         src = inspect.getsource(MainWindow._build_body)
         for title in VIEW_TAB_TITLES:
             assert f'("{title}"' in src, f"tab '{title}' tidak dibangun"
-        # 8 judul, tidak ada duplikat
-        assert len(VIEW_TAB_TITLES) == len(set(VIEW_TAB_TITLES)) == 8
+        # 5 judul (v2.8.0), tidak ada duplikat
+        assert len(VIEW_TAB_TITLES) == len(set(VIEW_TAB_TITLES)) == 5
 
     def test_window_dibangun_offscreen(self):
-        """MainWindow + 8 view ter-instantiate tanpa display (smoke)."""
+        """MainWindow + 5 view ter-instantiate tanpa display (smoke)."""
         import sys
         from PySide6.QtWidgets import QApplication
         app = QApplication.instance() or QApplication(sys.argv)
         from ui.app import MainWindow
         win = MainWindow()
-        assert win._tabs.count() == 8
-        for i in range(8):
+        assert win._tabs.count() == 5
+        for i in range(5):
             assert win._tabs.tabText(i) == VIEW_TAB_TITLES[i]
         win.close()
 

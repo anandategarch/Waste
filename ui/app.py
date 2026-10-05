@@ -1,12 +1,14 @@
 """app.py — MainWindow + main() (v2.6.0 rebuild PySide6).
 
 Struktur:
-- Toolbar: Export Excel + Bantuan (satu tombol export global — tidak
-  duplikat di banyak tab seperti UI lama)
+- Toolbar: toggle sidebar filter (☰ Filter / Ctrl+Shift+F, v2.8.0) +
+  Export Excel + Bantuan
 - Sidebar kiri: filter (cari, cabang, status, keterangan, rentang hari,
-  chip aktif) + profil filter tersimpan
-- QTabWidget 8 view: Anomali (default) · Jelajah · Waktu · Uang · Peer ·
-  Kualitas · Banding Periode · Pipeline — render lazy per-view (H2)
+  chip aktif) + profil filter tersimpan — bisa disembunyikan/dimunculkan
+  (v2.8.0: tabel & chart memakai lebar penuh saat sidebar disembunyikan)
+- QTabWidget 5 view (v2.8.0: 8 → 5 — tab Uang, Peer, Kualitas Data
+  dihapus total): Anomali (default) · Jelajah · Waktu · Banding Periode ·
+  Pipeline — render lazy per-view (H2)
 - Status bar: pesan status + hitungan baris/anomali permanen
 """
 from __future__ import annotations
@@ -55,11 +57,8 @@ from .state import AppContext
 from .theme import QSS
 from .view_anomali import AnomaliView
 from .view_jelajah import JelajahView
-from .view_kualitas import KualitasView
-from .view_peer import PeerView
 from .view_periode import PeriodeView
 from .view_pipeline import PipelineView
-from .view_uang import UangView
 from .view_waktu import WaktuView
 from .widgets import Card, WLabel
 from .workers import ExportWorker
@@ -80,14 +79,12 @@ _HELP_HTML = """
 <li>Cari, cabang, status, keterangan, rentang hari — berlaku di tab Anomali & chart interaktif Jelajah.</li>
 <li>Chart interaktif di tab Jelajah bisa DIKLIK untuk drill-down; klik ulang untuk melepas.</li>
 <li>Profil filter bisa disimpan & dipulihkan.</li>
+<li>Sidebar bisa disembunyikan (☰ Filter / Ctrl+Shift+F) — tabel & chart memakai lebar penuh.</li>
 </ul>
 <h3>Tab lain</h3>
 <ul>
 <li><b>Jelajah</b> — tabel data semua sheet + 12 chart statistik.</li>
 <li><b>Waktu</b> — pola waste per hari / kelas hari / alasan×hari.</li>
-<li><b>Uang</b> — baris & item waste terbesar + benchmark peer.</li>
-<li><b>Peer</b> — kuadran sistemik, rate league, banding 2 cabang.</li>
-<li><b>Kualitas</b> — pemeriksaan kualitas data.</li>
 <li><b>Banding Periode</b> — run saat ini vs workbook bulan lalu.</li>
 </ul>
 <p><b>Export</b>: tombol <b>💾 Export Excel</b> di toolbar (selalu tersedia).</p>
@@ -98,7 +95,7 @@ kecil); tabel tanpa cap baris.</p>
 
 
 class MainWindow(QMainWindow):
-    """Jendela utama: toolbar + sidebar filter + 8 tab view + status bar."""
+    """Jendela utama: toolbar + sidebar filter (bisa di-hide) + 5 tab view + status bar."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -108,6 +105,9 @@ class MainWindow(QMainWindow):
         self.ctx = AppContext(load_config(), self)
         self._export_worker: ExportWorker | None = None
         self._exporting = False
+        # v2.8.0: ukuran splitter tersimpan saat sidebar disembunyikan
+        # (dipulihkan saat sidebar dimunculkan kembali).
+        self._sidebar_sizes: list[int] = []
 
         # Ukuran awal: clamp ke layar (M15) + posisi tengah
         screen = self.screen().availableGeometry() if self.screen() else None
@@ -161,17 +161,32 @@ class MainWindow(QMainWindow):
         act_help.triggered.connect(self._show_help)
         bar.addAction(act_help)
 
+        # v2.8.0: toggle sidebar filter — disembunyikan → QTabWidget (tabel/
+        # chart) memakai lebar penuh jendela; dimunculkan → ukuran splitter
+        # tersimpan dipulihkan. Checkable supaya status terlihat jelas.
+        act_filter = QAction("☰ Filter", self)
+        act_filter.setCheckable(True)
+        act_filter.setChecked(True)
+        act_filter.setShortcut("Ctrl+Shift+F")
+        act_filter.setToolTip(
+            "Sembunyikan/tampilkan sidebar filter (Ctrl+Shift+F) — "
+            "saat disembunyikan, tabel & chart memakai lebar penuh.")
+        act_filter.toggled.connect(self._toggle_sidebar)
+        bar.addAction(act_filter)
+        self._act_filter = act_filter
+
     def _build_body(self) -> None:
         split = QSplitter(Qt.Orientation.Horizontal, self)
+        self._split = split  # v2.8.0: referensi utk toggle sidebar
         split.addWidget(self._build_sidebar())
         self._tabs = QTabWidget(split)
+        # v2.8.0: 8 → 5 view — tab Uang, Peer, Kualitas Data dihapus total
+        # (keputusan user; analisis banding lintas-peer & tampilan DQ ikut
+        # hilang; cek data_quality TETAP jalan di pipeline & export).
         self._views: list[tuple[str, QWidget]] = [
             ("Anomali", AnomaliView(self.ctx)),
             ("Jelajah", JelajahView(self.ctx)),
             ("Waktu", WaktuView(self.ctx)),
-            ("Uang", UangView(self.ctx)),
-            ("Peer", PeerView(self.ctx)),
-            ("Kualitas Data", KualitasView(self.ctx)),
             ("Banding Periode", PeriodeView(self.ctx)),
             ("Pipeline", PipelineView(self.ctx)),
         ]
@@ -180,8 +195,8 @@ class MainWindow(QMainWindow):
         self._tabs.currentChanged.connect(self._on_tab_changed)
         # Anti-terpotong: bila tab bar sempit, teks di-elide dengan '…'
         # (konvensi jelas) + tombol panah scroll — TIDAK pernah dipotong
-        # mentah mid-character. Padding ramping (QSS) membuat 8 tab muat
-        # bahkan di jendela 1000px.
+        # mentah mid-character. 5 tab (v2.8.0) muat longgar bahkan di
+        # jendela 1000px.
         self._tabs.setElideMode(Qt.TextElideMode.ElideRight)
         self._tabs.setUsesScrollButtons(True)
         split.setSizes([300, 1200])
@@ -317,6 +332,30 @@ class MainWindow(QMainWindow):
         sb.addWidget(self._lbl_status, 1)
         self._lbl_perm = QLabel("—", self)
         sb.addPermanentWidget(self._lbl_perm)
+
+    # ------------------------------------------------------------
+    # SIDEBAR HIDE/UNHIDE (v2.8.0)
+    # ------------------------------------------------------------
+    def _toggle_sidebar(self, visible: bool) -> None:
+        """Sembunyikan/munculkan sidebar filter.
+
+        Saat disembunyikan: ukuran splitter disimpan dulu, lalu sidebar
+        di-hidden — QSplitter memberi seluruh lebar ke QTabWidget (tabel
+        & chart memakai lebar penuh; kolom JENIS yang tadinya responsif
+        disembunyikan di 1024px ikut tampil). Saat dimunculkan: ukuran
+        tersimpan dipulihkan (rasio 3:12 tetap berlaku bila belum tersimpan).
+        """
+        if visible:
+            self._sidebar.setHidden(False)
+            if any(self._sidebar_sizes):
+                self._split.setSizes(self._sidebar_sizes)
+            self.ctx.set_status("✓ Panel filter dimunculkan", "done")
+        else:
+            self._sidebar_sizes = self._split.sizes()
+            self._sidebar.setHidden(True)
+            self.ctx.set_status(
+                "✓ Panel filter disembunyikan — Ctrl+Shift+F utk memunculkan",
+                "done")
 
     # ------------------------------------------------------------
     # KONTEKS → UI

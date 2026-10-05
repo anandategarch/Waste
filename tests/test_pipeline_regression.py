@@ -128,7 +128,6 @@ class TestIdempotency:
     def test_rerun_sama_hasil(self, summary):
         # Ambil hasil df stage final, jadikan input ulang
         df_out = summary["df"]
-        import pandas as pd
 
         # Simpan ke xlsx temp — pipeline baca dari file, bukan df
         tmp = REPO_ROOT / "tests" / "_idempotency_tmp.xlsx"
