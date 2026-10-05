@@ -5,7 +5,7 @@ title Waste Anomaly Detection - SETUP (One-Time)
 color 0B
 cls
 echo ============================================================
-echo   SETUP - Install Dependencies (One-Time) - v2.8.1
+echo   SETUP - Install Dependencies (One-Time) - v2.8.2
 echo ============================================================
 echo.
 echo  Menginstall dependencies untuk Waste Anomaly Detection:
@@ -13,7 +13,6 @@ echo    - pandas          (data processing)
 echo    - numpy           (numerical computation)
 echo    - openpyxl        (Excel I/O)
 echo    - python-calamine (Excel READ engine cepat, Rust-based)
-echo    - matplotlib      (visualisasi grafik)
 echo    - PySide6         (framework UI Qt6)
 echo.
 echo  Install dilakukan ke .venv lokal di folder ini.
@@ -100,7 +99,7 @@ if errorlevel 1 goto :pipfail
 
 echo.
 echo [5/5] Verifikasi instalasi...
-"%PY%" -c "import pandas, numpy, openpyxl, matplotlib, python_calamine, PySide6; print('OK: pandas', pandas.__version__, '| numpy', numpy.__version__, '| openpyxl', openpyxl.__version__, '| matplotlib', matplotlib.__version__, '| PySide6', PySide6.__version__, '| calamine OK')"
+"%PY%" -c "import pandas, numpy, openpyxl, python_calamine, PySide6; print('OK: pandas', pandas.__version__, '| numpy', numpy.__version__, '| openpyxl', openpyxl.__version__, '| PySide6', PySide6.__version__, '| calamine OK')"
 if errorlevel 1 (
     echo [ERROR] Verifikasi gagal. Coba jalankan SETUP.bat ulang.
     pause

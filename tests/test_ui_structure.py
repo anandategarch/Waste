@@ -193,3 +193,55 @@ class TestWidgets:
             "widgets.py masih mengimpor matplotlib (chart infra sudah mati)")
         assert "import matplotlib" not in src, (
             "widgets.py masih mengimpor matplotlib (chart infra sudah mati)")
+
+
+class TestSetupBatContract:
+    """v2.8.2 — kontrak SETUP.bat ↔ requirements.txt.
+
+    Akar bug v2.8.1: matplotlib dihapus dari requirements.txt, tetapi
+    langkah [5/5] Verifikasi SETUP.bat masih `import matplotlib` →
+    setup "gagal" padahal instalasi sukses (error user nyata di
+    Windows). Kontrak ini mengunci baris verifikasi agar selalu
+    sinkron dengan requirements.txt.
+    """
+
+    def _verification_line(self) -> str:
+        setup = (REPO / "SETUP.bat").read_text(encoding="utf-8")
+        # Baris verifikasi final [5/5] = satu-satunya -c import yang
+        # mencetak penanda 'OK:' (baris -c "import sys..." di langkah
+        # lain tidak dihitung).
+        lines = [l for l in setup.splitlines()
+                 if '" -c "import ' in l and "print('OK:" in l]
+        assert len(lines) == 1, (
+            "SETUP.bat harus punya tepat 1 baris verifikasi -c import")
+        return lines[0]
+
+    def test_verifikasi_import_sesuai_requirements(self):
+        """Modul yang diimpor baris verifikasi = paket di requirements.txt."""
+        ver = self._verification_line()
+        mods = ver.split("import ", 1)[1].split(";", 1)[0]
+        imported = {m.strip() for m in mods.split(",")}
+        # calamine: nama modul ≠ nama distribusi
+        dist_map = {"python_calamine": "python-calamine"}
+        imported_dist = {dist_map.get(m, m.lower()) for m in imported}
+        req = set()
+        for line in (REPO / "requirements.txt").read_text(
+                encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            name = line.split(">")[0].split("<")[0].split("=")[0].split("!")[0]
+            req.add(name.strip().lower())
+        assert imported_dist == req, (
+            f"verifikasi SETUP.bat ({sorted(imported_dist)}) != "
+            f"requirements.txt ({sorted(req)}) — dependensi berubah tanpa "
+            "menyamakan langkah verifikasi installer (bug v2.8.1)")
+
+    def test_tanpa_referensi_paket_terhapus(self):
+        """SETUP.bat/MULAI.bat tidak menyebut paket yang sudah dihapus."""
+        for name in ("SETUP.bat", "MULAI.bat"):
+            src = (REPO / name).read_text(encoding="utf-8").lower()
+            for dead in ("matplotlib", "seaborn", "tkinter"):
+                assert dead not in src, (
+                    f"{name} masih menyebut '{dead}' — paket sudah dihapus "
+                    "dari dependensi (jangan biarkan referensi basi)")

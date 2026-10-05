@@ -48,4 +48,7 @@ class TestSetupLogging:
 
     def test_library_berisik_dibatasi(self, tmp_path):
         setup_logging(log_dir=tmp_path)
-        assert logging.getLogger("matplotlib").level == logging.WARNING
+        assert logging.getLogger("PIL").level == logging.WARNING
+        assert logging.getLogger("openpyxl").level == logging.WARNING
+        # v2.8.2: matplotlib dibuang dari daftar pembisukan (dependensi
+        # dihapus v2.8.1) — jangan tambah referensi mati lagi.

@@ -89,9 +89,10 @@ def setup_logging(
             root.removeHandler(existing)
     root.addHandler(handler)
 
-    # Matikan propagasi log library paling berisik ke file (matplotlib/openpyxl
+    # Matikan propagasi log library paling berisik ke file (PIL/openpyxl
     # DEBUG sangat verbose); kita tetap menangkap WARNING+ mereka.
-    for noisy in ("matplotlib", "PIL", "openpyxl"):
+    # v2.8.2: "matplotlib" dibuang — dependensi sudah dihapus sejak v2.8.1.
+    for noisy in ("PIL", "openpyxl"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     _configured = True
