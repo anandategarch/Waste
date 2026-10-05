@@ -2,6 +2,8 @@
 
 Python + PySide6 (Qt) **anomaly workbench** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif**, **filter profile persistence**, **benchmark peer aktif (pop-up detail + sinyal S8/S9)**, **kolom % to BOM (waste vs penjualan kuantiti)**, **data quality otomatis (pipeline & export)**, dan **compare periode bulan-ke-bulan** (v2.8.1: 5 → 3 view — tab Jelajah & Waktu + seluruh modul chart dihapus; v2.8.0: 8 → 5 view — tab Uang/Peer/Kualitas Data dihapus).
 
+> **v2.8.3** — UX anti-freeze: **apply/unapply filter kini memberi feedback "masih proses"** (keluhan nyata: "waktu aku apply unfilter kok kaya lag/freeze"). Diagnosa terukur di data asli 25.901 baris: rantai filter → refresh tabel berjalan **sinkron di thread UI 75–460 ms** (sandbox) — auto-fit kolom + pengukuran tinggi baris per sel — di laptop user bisa **1–2+ detik beku tanpa umpan balik**. Fix: helper `busy_feedback` membungkus titik tunggal render tabel — **cursor sibuk + pesan status "⏳ Menyarkan & menampilkan data…" dipasang SEBELUM kerja berat** (dijamin tergambar via `processEvents`), **pulih + laporan durasi "✓ … selesai (X ms)"** setelahnya; semua pintu masuk tercakup otomatis (search, dropdown, rentang hari, Hapus Filter, drill-down, dataset baru). Aman bersarang (Qt cursor stack). 436 test.
+
 > **v2.8.2** — hotfix installer: **`SETUP.bat` gagal di langkah [5/5] Verifikasi** pada instalasi baru ("`ModuleNotFoundError: No module named 'matplotlib'`" lalu "[ERROR] Verifikasi gagal") — akarnya BUKAN instalasi gagal, melainkan baris verifikasi `SETUP.bat` masih mengimpor **matplotlib** yang sudah dihapus dari dependensi sejak v2.8.1 (instalasi sebenarnya sukses, hanya ceknya yang basi). Fix: verifikasi & banner `SETUP.bat` kini sinkron dengan `requirements.txt` (5 paket: pandas, numpy, openpyxl, python-calamine, PySide6); daftar dependensi di README diperbaiki; referensi matplotlib mati di `logging_setup.py` dibersihkan; **test kontrak baru** mengunci baris verifikasi `SETUP.bat` ↔ `requirements.txt` agar tidak diverver lagi (431 test). Jika Anda kena error ini: `git pull` (atau unduh ulang) → jalankan `SETUP.bat` ulang — tidak perlu hapus `.venv`.
 
 > **v2.8.1** — penyederhanaan lanjutan + detail pop-up: **5 → 3 view** — tab **Jelajah** & **Waktu** dihapus total bersama modul `charts.py` / `dashboard.py` / `chart_helpers.py` + infrastruktur chart di UI (widget matplotlib tidak lagi diimpor saat start-up). **Panel detail kini POP-UP**: klik baris di Tabel Anomali Ter-ranking membuka jendela non-modal berisi 12 sinyal S1–S12, angka peer, uang, dan tombol drill-down — tabel memenuhi seluruh tinggi view (splitter & tombol "Rapikan Detail" dihapus; hint lama "pilih baris utk detail" dihapus). **Kolom baru "% to BOM"** di tabel anomali per-ranking (waste dibanding penjualan kuantiti — nilai rasio ditampilkan sebagai persen `1,34%`; penanda `Cek` = item tanpa data penjualan); kolom rasio lain (MAX / BOM, TOTAL / BOM, MAX SHARE, LAST DAY SHARE) kini juga tampil sebagai persen. Sheet analisa export (Waste per Hari, Alasan×Hari, Money View, Data Quality) TETAP diexport — modul temporal/priority/data_quality tetap hidup di jalur pipeline & export. Golden regression utuh (25.901/399/41).
@@ -206,7 +208,7 @@ lebar penuh jendela.
 
 ## Testing
 
-**431 test** — golden regression end-to-end (fixture `DATA_WASTE.xlsx` 25.901 baris), unit test 12 sinyal S1–S12, join BOM & normalisasi kunci, presisi float, kontrak summary dict, validasi skema, cancel hook antar-stage, exporter dual-mode, logging framework, path frozen-mode, semantik filter (v2.5.1), 14 test struktural paket ui/ v2.6.0 (modul ada, mixin lama tak kembali, kontrak shared, kontrak view refresh/on_shown, worker QThread, manifest metode, MainWindow offscreen, infra chart dihapus), **49 test regresi fix audit v2.7.0** (gelombang 1–4: kontrak banding periode + closeEvent worker + memo filter; record penuh panel detail + 12 chip sinyal + fmt numpy + tabel besar; validasi threshold + default 20/20 key; manifest dua-arah + lantai header tabel + `fmt_id(None)` + versi), **dan 27 test regresi v2.8.0+v2.8.1** (3 view + file view/modul chart dihapus + tabel memanjang penuh + pop-up detail + kolom % to BOM + sidebar hide/unhide + help jujur; test view/chart lama dihapus jujur bersama subjeknya: −13 kontrak chart, −12 gelombang-3 view, −2 derived-sheets, −2 Pareto), **plus 2 test kontrak v2.8.2** (baris verifikasi SETUP.bat wajib sinkron dengan requirements.txt — anti bug "import matplotlib" basi). Jalankan setiap kali mengubah kode — angka golden berubah tanpa alasan = regresi.
+**436 test** — golden regression end-to-end (fixture `DATA_WASTE.xlsx` 25.901 baris), unit test 12 sinyal S1–S12, join BOM & normalisasi kunci, presisi float, kontrak summary dict, validasi skema, cancel hook antar-stage, exporter dual-mode, logging framework, path frozen-mode, semantik filter (v2.5.1), 14 test struktural paket ui/ v2.6.0 (modul ada, mixin lama tak kembali, kontrak shared, kontrak view refresh/on_shown, worker QThread, manifest metode, MainWindow offscreen, infra chart dihapus), **49 test regresi fix audit v2.7.0** (gelombang 1–4: kontrak banding periode + closeEvent worker + memo filter; record penuh panel detail + 12 chip sinyal + fmt numpy + tabel besar; validasi threshold + default 20/20 key; manifest dua-arah + lantai header tabel + `fmt_id(None)` + versi), **dan 27 test regresi v2.8.0+v2.8.1** (3 view + file view/modul chart dihapus + tabel memanjang penuh + pop-up detail + kolom % to BOM + sidebar hide/unhide + help jujur; test view/chart lama dihapus jujur bersama subjeknya: −13 kontrak chart, −12 gelombang-3 view, −2 derived-sheets, −2 Pareto), **plus 2 test kontrak v2.8.2** (baris verifikasi SETUP.bat wajib sinkron dengan requirements.txt — anti bug "import matplotlib" basi), **dan 5 test v2.8.3** (busy feedback: cursor sibuk aktif selama render & dipulihkan; jalur sinyal filter terbungkus; pesan status ⏳/✓ terkirim; helper aman bersarang; kontrak sumber titik-tunggal). Jalankan setiap kali mengubah kode — angka golden berubah tanpa alasan = regresi.
 
 ## Packaging — EXE Standalone
 
@@ -244,7 +246,7 @@ Waste/
 ├── assets/                         ← Ikon aplikasi (ico + png)
 ├── make_sample.py                  ← Generate sample workbook untuk testing
 ├── sample_workbook.xlsx            ← Fixture test in-repo (v2.7.0 — hasil make_sample.py)
-├── tests/                          ← Test suite pytest (431 test)
+├── tests/                          ← Test suite pytest (436 test)
 │   ├── conftest.py
 │   ├── fixtures/ui_methods_manifest.txt  ← Manifest def top-level ui/ (kunci struktural DUA-ARAH, v2.7.0)
 │   ├── test_pipeline_regression.py ← Golden regression 25.901 baris (14 test)
@@ -266,13 +268,13 @@ Waste/
 │   ├── test_v270_wave2.py          ← Regresi fix audit v2.7.0 gel. 2 (23)
 │   ├── test_v270_wave3.py          ← Regresi fix audit v2.7.0 gel. 3 (6)
 │   ├── test_v270_wave4.py          ← Regresi fix audit v2.7.0 gel. 4 (10)
-│   └── test_v280.py                ← Regresi v2.8.0+v2.8.1: 3 view + pop-up detail
-│                                     + kolom % to BOM + sidebar (27)
-├── .github/workflows/ci.yml        ← CI: matrix Python × OS, lint + 431 test
+│   └── test_v280.py                ← Regresi v2.8.0–v2.8.3: 3 view + pop-up detail
+│                                     + kolom % to BOM + sidebar + busy feedback (32)
+├── .github/workflows/ci.yml        ← CI: matrix Python × OS, lint + 436 test
 ├── waste_anomaly/
-│   ├── __init__.py                 ← __version__ single-source (2.8.2)
+│   ├── __init__.py                 ← __version__ single-source (2.8.3)
 │   ├── frozen.py                   ← Resolusi path PyInstaller exe vs dev (v2.4.1)
-│   ├── config.json                 ← Thresholds + sheet name candidates (version 2.8.2)
+│   ├── config.json                 ← Thresholds + sheet name candidates (version 2.8.3)
 │   ├── pipeline.py                 ← Orchestrator 14 stage + cancel_check (in-memory)
 │   ├── schema.py                   ← Validasi skema input (anti degradasi senyap)
 │   ├── logging_setup.py            ← Rotating file log + hook exception

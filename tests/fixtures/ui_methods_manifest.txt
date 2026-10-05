@@ -21,6 +21,7 @@ widgets.py::KpiCard
 widgets.py::KpiStrip
 widgets.py::StatusChip
 widgets.py::WLabel
+widgets.py::busy_feedback
 widgets.py::status_chip_for
 workers.py::ExportWorker
 workers.py::PeriodWorker

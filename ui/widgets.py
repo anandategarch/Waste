@@ -12,10 +12,14 @@ Import matplotlib juga hilang dari jalur start-up UI.
 """
 from __future__ import annotations
 
+import time
+from contextlib import contextmanager
+
 import pandas as pd
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QFrame,
     QHeaderView,
     QLabel,
@@ -28,6 +32,36 @@ from PySide6.QtWidgets import (
 from .models import PandasTableModel
 from .shared import fmt_id
 from .theme import STATUS_COLORS
+
+
+# ============================================================
+# v2.8.3 — feedback "masih proses" untuk kerja sinkron yang berat
+# ============================================================
+@contextmanager
+def busy_feedback(status_cb=None, label: str = "Memproses"):
+    """WaitCursor + pesan status SELAMA kerja sinkron di thread UI.
+
+    Diagnosa freeze apply/unapply filter (data asli 25.901 baris, offscreen):
+    rantai set_filter → filters_changed → _refresh_table sinkron 75–460 ms
+    di sandbox; di laptop user (Windows, 2-4× lebih lambat) = 1-2+ detik
+    UI beku TANPA umpan balik — terasa seperti hang. Helper ini:
+    (1) pasang cursor sibuk + pesan status "⏳ …" SEBELUM kerja berat,
+    (2) processEvents() agar cursor/pesan benar-benar tergambar dulu,
+    (3) pulihkan cursor + laporkan durasi saat selesai.
+    Aman bersarang (cursor stack Qt) dan aman dipakai lintas view.
+    """
+    QApplication.setOverrideCursor(Qt.BusyCursor)
+    if status_cb is not None:
+        status_cb(f"⏳ {label}…", "busy")
+    QApplication.processEvents()
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        QApplication.restoreOverrideCursor()
+        if status_cb is not None:
+            ms = (time.perf_counter() - t0) * 1000
+            status_cb(f"✓ {label} selesai ({ms:.0f} ms)", "done")
 
 
 class Card(QFrame):

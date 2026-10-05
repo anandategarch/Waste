@@ -30,7 +30,9 @@ from PySide6.QtWidgets import (
 from .models import PCT_COLS, fmt_cell, fmt_pct
 from .shared import fmt_id
 from .state import AppContext
-from .widgets import Card, DataTable, KpiStrip, StatusChip, WLabel, status_chip_for
+from .widgets import (
+    Card, DataTable, KpiStrip, StatusChip, WLabel, busy_feedback, status_chip_for,
+)
 from waste_anomaly.signals import SIGNAL_PARTS
 
 # Kolom tabel anomali — ramping (detail lengkap ada di pop-up detail).
@@ -381,6 +383,17 @@ class AnomaliView(QWidget):
         self._ctx.set_score_min(value)
 
     def _refresh_table(self) -> None:
+        """v2.8.3 — titik tunggal SEMUA jalur render tabel (filter/search/
+        rentang hari/Hapus Filter/drill-down/dataset baru) dibungkus
+        busy_feedback: cursor sibuk + pesan status "⏳ …" dipasang SEBELUM
+        kerja berat sinkron (auto-fit kolom + ukur tinggi baris per sel;
+        diukur data asli: 75–460 ms sandbox = 1–2+ dtk di laptop user) —
+        proses terlihat 'masih jalan', bukan beku senyap. Selesai → durasi
+        dilaporkan ke status bar."""
+        with busy_feedback(self._ctx.set_status, "Menyaring & menampilkan data"):
+            self._refresh_table_impl()
+
+    def _refresh_table_impl(self) -> None:
         # v2.7.0 (V26-L12): dataset/filter berubah → seleksi + detail lama
         # bisa basi (record terpilih mungkin sudah tak lolos filter) —
         # kosongkan keduanya (model reset mengosongkan seleksi).

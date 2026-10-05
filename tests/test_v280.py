@@ -426,3 +426,92 @@ class TestDokumentasiJujur:
             "Bantuan harus menyebut shortcut sidebar hide/unhide")
         assert "pop-up" in _HELP_HTML.lower(), (
             "Bantuan harus menyebut detail pop-up (perilaku v2.8.1)")
+
+
+# ============================================================
+# v2.8.3 — busy feedback saat apply/unapply filter (anti "freeze")
+# ============================================================
+
+class TestBusyFeedbackV283:
+    """Apply/unapply filter → refresh sinkron berat (auto-fit kolom +
+    ukur tinggi baris per sel; 75–460 ms di sandbox = 1–2+ dtk di laptop
+    user) kini dibungkus busy_feedback: cursor sibuk + pesan status
+    SEBELUM kerja berat, pulih + durasi SESUDAHnya."""
+
+    def test_cursor_sibuk_aktif_selama_refresh_dan_pulih(self):
+        """Selama _refresh_table bekerja, override cursor = BusyCursor;
+        setelah selesai, cursor dipulihkan (stack kosong)."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication
+        view, _ = _make_view()
+        seen = []
+        orig = view._refresh_table_impl
+        view._refresh_table_impl = lambda: (
+            seen.append(QApplication.overrideCursor()), orig())[-1]
+        view._refresh_table()
+        assert seen and seen[0] is not None, (
+            "cursor sibuk tidak aktif selama refresh bekerja")
+        assert seen[0].shape() == Qt.CursorShape.BusyCursor, (
+            f"cursor selama kerja: {seen[0]} (harus BusyCursor)")
+        assert QApplication.overrideCursor() is None, (
+            "cursor tidak dipulihkan setelah refresh selesai")
+
+    def test_jalur_sinyal_filter_juga_terbungkus(self):
+        """ctx.set_day_range → filters_changed → render tabel: jalur yang
+        DIPAKAI USER saat apply filter harus melewati busy_feedback juga
+        (bukan hanya pemanggilan manual _refresh_table)."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication
+        view, ctx = _make_view()
+        view.show()
+        QApplication.processEvents()
+        seen = []
+        orig = view._refresh_table_impl
+        view._refresh_table_impl = lambda: (
+            seen.append(QApplication.overrideCursor()), orig())[-1]
+        ctx.set_day_range(2, 3)
+        QApplication.processEvents()
+        assert seen, "set_day_range tidak memicu render (jalur filter putus)"
+        assert seen[0] is not None and seen[0].shape() == Qt.CursorShape.BusyCursor
+        assert QApplication.overrideCursor() is None
+        view.hide()
+
+    def test_pesan_status_progres_lalu_selesai(self):
+        """Status bar: '⏳ …' terkirim sebelum kerja, '✓ … selesai (X ms)'
+        setelahnya — user tahu prosesnya hidup dan berapa lama."""
+        view, ctx = _make_view()
+        texts = []
+        ctx.status.connect(lambda t, k: texts.append(t))
+        view._refresh_table()
+        assert any(t.startswith("⏳") for t in texts), (
+            f"pesan progres ⏳ tidak terkirim: {texts}")
+        assert any("selesai" in t for t in texts), (
+            f"pesan selesai tidak terkirim: {texts}")
+
+    def test_helper_aman_bersarang(self):
+        """busy_feedback dalam busy_feedback: cursor tetap sibuk di lapisan
+        dalam, kembali ke lapisan luar setelah inner selesai, None setelah
+        keduanya (kontrak Qt override-stack)."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication
+        from ui.widgets import busy_feedback
+        _qapp()
+        with busy_feedback():
+            with busy_feedback():
+                inner = QApplication.overrideCursor()
+                assert inner is not None and inner.shape() == Qt.CursorShape.BusyCursor
+            mid = QApplication.overrideCursor()
+            assert mid is not None, "inner exit tidak kembali ke lapisan luar"
+        assert QApplication.overrideCursor() is None, (
+            "stack cursor bocor setelah semua lapisan selesai")
+
+    def test_sumber_pakai_helper_di_titik_tunggal(self):
+        """Kontrak sumber: helper ada di widgets.py; view_anomali membungkus
+        _refresh_table (titik tunggal semua jalur render)."""
+        wsrc = (UI / "widgets.py").read_text(encoding="utf-8")
+        assert "def busy_feedback" in wsrc, "helper busy_feedback hilang dari widgets.py"
+        vsrc = (UI / "view_anomali.py").read_text(encoding="utf-8")
+        assert "busy_feedback(" in vsrc, (
+            "view_anomali tidak memakai busy_feedback (feedback proses mati)")
+        assert "_refresh_table_impl" in vsrc, (
+            "pola wrapper _refresh_table_impl berubah — cek pembungkusan")

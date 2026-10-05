@@ -244,11 +244,11 @@ class TestFmtIdNone:
 
 class TestVersiSync:
     def test_versi_sama_di_tiga_situs(self):
-        """v2.8.2: versi disinkronkan di ui/shared.py, __init__.py, dan
+        """v2.8.3: versi disinkronkan di ui/shared.py, __init__.py, dan
         config.json (ganti nama kelas dari TestVersi270 — angka versi
         berubah tiap rilis, lock-nya cukup 'ketiga situs SAMA')."""
         from ui.shared import APP_VERSION
         from waste_anomaly import __version__
         cfg = json.loads(
             (REPO / "waste_anomaly" / "config.json").read_text(encoding="utf-8"))
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.8.2"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.8.3"
