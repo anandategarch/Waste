@@ -24,14 +24,16 @@ from __future__ import annotations
 import pandas as pd
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QHBoxLayout,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 from .shared import fmt_id
 from .state import AppContext
-from .view_anomali import DetailDialog
+from .view_anomali import DetailDialog, _HF_COLS
 from .widgets import Card, DataTable, KpiCard, SlicerBar, WLabel, busy_feedback
 from waste_anomaly.period_history import day_evidence_vs_history
 
@@ -88,21 +90,45 @@ class HariView(QWidget):
             kl.addWidget(card)
         kl.addStretch(1)
         lay.addWidget(kpi_row)
+        self._kpi_row = kpi_row  # v2.12.3: toggle ⤢ (ciutkan KPI)
 
         # Kartu tabel
         card = Card(self)
         cl = QVBoxLayout(card)
         cl.setContentsMargins(12, 10, 12, 10)
         cl.setSpacing(6)
-        title = WLabel("📅 Hari Mencurigakan — potensi salah angka per tanggal (1–31)", card)
+        # v2.12.3: judul + tombol melebarkan SATU baris (pola tab Anomali
+        # — permintaan user "bisa diperbesar kaya tab lain").
+        head = QWidget(card)
+        hcl = QHBoxLayout(head)
+        hcl.setContentsMargins(0, 0, 0, 0)
+        hcl.setSpacing(8)
+        title = WLabel("📅 Hari Mencurigakan — potensi salah angka per tanggal (1–31)", head)
         title.setObjectName("cardTitle")
-        cl.addWidget(title)
+        hcl.addWidget(title)
+        hcl.addStretch(1)
+        self._btn_expand = QPushButton("⤢ Perbesar Tabel", head)
+        self._btn_expand.setToolTip(
+            "Sembunyikan KPI, judul & bar kontrol supaya tabel memakai "
+            "seluruh tinggi tampilan (slicer tetap terlihat — filter "
+            "tetap aktif). Klik lagi untuk mengembalikan.")
+        self._btn_expand.clicked.connect(self._on_expand)
+        hcl.addWidget(self._btn_expand)
+        self._btn_full = QPushButton("⛶ Layar Penuh", head)
+        self._btn_full.setToolTip(
+            "Buka tabel ini di jendela LAYAR PENUH (tekan Esc atau Tutup\n"
+            "untuk kembali). Sort / pop-up detail / klik 2× tetap\n"
+            "berfungsi penuh di jendela itu.")
+        self._btn_full.clicked.connect(self._on_fullscreen)
+        hcl.addWidget(self._btn_full)
+        cl.addWidget(head)
         hint = WLabel(_HINT_BASE, card)
         hint.setObjectName("hint")
         hint.setWordWrap(True)
         cl.addWidget(hint)
         # v2.10.0: diperbarui dinamis saat pembanding bulan lalu tersedia.
         self._hint = hint
+        self._head_row = head  # v2.12.3: toggle ⤢ (ciutkan judul+hint)
 
         # Bar kontrol: combo tampilkan
         ctrl = QWidget(card)
@@ -125,6 +151,7 @@ class HariView(QWidget):
         self._lbl_count.setObjectName("hint")
         ctl.addWidget(self._lbl_count, 1)
         cl.addWidget(ctrl)
+        self._ctrl = ctrl  # v2.12.3: toggle ⤢ (ciutkan bar kontrol)
 
         # v2.11.0: slicer multi-select (JENIS·KETERANGAN·STATUS) di atas
         # tabel — SATU state global dgn tab Anomali (dua instance SlicerBar,
@@ -134,13 +161,19 @@ class HariView(QWidget):
 
         self._table = DataTable(card)
         self._table.setMinimumHeight(200)
+        # v2.12.3: funnel filter + opsi sort di header tabel (satu state
+        # ctx dgn tab Anomali — chip slicer sinkron dua arah).
+        self._table.setup_header_filters(
+            _HF_COLS, self._on_header_filter, self._hf_state)
         self._table.selectionModel().currentRowChanged.connect(
             lambda *_: self._on_selection())
         self._table.double_clicked.connect(self._on_double)
         cl.addWidget(self._table, 1)
+        self._tcl = cl  # v2.12.3: reparent ⛶ (pulihkan index layout tabel)
         table_hint = WLabel(
             "💡 Klik baris = detail pop-up (12 sinyal + peta hari 1–31) · "
-            "klik 2× = fokus cabang+item · klik header = sort",
+            "klik 2× = fokus cabang+item · klik judul = sort · funnel di "
+            "judul = filter nilai",
             card)
         table_hint.setObjectName("hint")
         cl.addWidget(table_hint)
@@ -148,6 +181,11 @@ class HariView(QWidget):
 
         # Pop-up detail — satu instance dipakai ulang (pola AnomaliView).
         self._popup = DetailDialog(ctx, self)
+        # v2.12.3 — jendela layar penuh tabel (dibuat malas, dipakai ulang):
+        # WIDGET TABEL ASLI di-reparent sementara (pola AnomaliView v2.12.2)
+        # → interaksi sort/pop-up/klik-2× tetap hidup; Esc → pulihkan posisi.
+        self._fs_dlg: QDialog | None = None
+        self._fs_idx: int = 3
         # v2.9.0 (perf): memo irisan bukti-hari — kombinasi (df dasar, mode)
         # yang sama mengembalikan objek SAMA → cache fit LRU DataTable
         # (hit) + memo teks model tetap hidup. Strong ref ke df dasar = id
@@ -260,9 +298,12 @@ class HariView(QWidget):
         else:
             self._hint.setText(_HINT_BASE)
         cols = [c for c in TABLE_COLS if c in df_show.columns]
+        # v2.12.3: JENIS keluar dari narrow_hide (permintaan user "tambahkan
+        # kolom jenis" — dulu disembunyikan responsif di layar sempit
+        # 1366px; kini selalu tampil — SUSUT/TRIAL/WASTE terlihat langsung).
         self._table.set_dataframe(
             df_show, sort_desc="RASIO VS CABANG LAIN",
-            narrow_hide=["JENIS", "KETERANGAN", "NILAI BULAN LALU",
+            narrow_hide=["KETERANGAN", "NILAI BULAN LALU",
                          "TIPIKAL BEBERAPA BULAN", "ALASAN HARI"],
             visible_cols=cols)
         n_tampil = len(df_show)
@@ -331,3 +372,93 @@ class HariView(QWidget):
         finally:
             self._batch_filters = False
         self._refresh_table()
+
+    def _on_header_filter(self, col: str, key: str, values) -> None:
+        """v2.12.3 — menu funnel header → state ctx (sinkron dgn tab
+        Anomali + chip slicer — satu sumber active_filters)."""
+        self._ctx.set_filter(key, values)
+
+    def _hf_state(self, col: str):
+        """v2.12.3 — status funnel kolom utk MELUKIS (aktif = terisi)."""
+        key = _HF_COLS.get(col)
+        if key is None:
+            return None
+        v = self._ctx.active_filters.get(key)
+        if isinstance(v, list):
+            return v or None
+        if isinstance(v, str) and v:
+            return [v]
+        return None
+
+    # ------------------------------------------------------------
+    # v2.12.3 — MELEBARKAN TABEL (pola tab Anomali v2.12.2)
+    # ------------------------------------------------------------
+    def _on_expand(self) -> None:
+        """Ciutkan/kembalikan KPI + judul/hint + bar kontrol (pola
+        AnomaliView._on_expand — isHidden() agar toggle benar walau view
+        induk di-balik tab lain). Slicer TETAP terlihat (kontrol filter)."""
+        collapsed = self._kpi_row.isHidden()
+        show = collapsed
+        self._kpi_row.setVisible(show)
+        self._head_row.setVisible(show)
+        self._ctrl.setVisible(show)
+        self._btn_expand.setText(
+            "⤢ Perbesar Tabel" if show else "⤡ Tampilkan KPI & Filter")
+        self._ctx.set_status(
+            "⤡ KPI disembunyikan — tabel diperbesar" if not show
+            else "⤢ KPI & filter ditampilkan kembali", "done")
+
+    def _on_fullscreen(self) -> None:
+        """Pop-out TABEL ASLI ke jendela maximized (Esc = kembali) —
+        reparent + pulihkan index layout (pola AnomaliView v2.12.2)."""
+        if self._table.model().rowCount() == 0:
+            self._ctx.set_status(
+                "Belum ada data utk dibesarkan — jalankan pipeline dulu "
+                "(tab Pipeline)", "done")
+            return
+        if self._fs_dlg is None:
+            dlg = QDialog(self)
+            dlg.setWindowTitle(
+                "Tabel Hari Mencurigakan — Layar Penuh (Esc = kembali)")
+            dlay = QVBoxLayout(dlg)
+            dlay.setContentsMargins(10, 8, 10, 8)
+            dlay.setSpacing(6)
+            fhint = WLabel(
+                "💡 Klik baris = detail pop-up · klik 2× = fokus cabang+item "
+                "· sort klik header · Esc = kembali",
+                dlg)
+            fhint.setObjectName("hint")
+            dlay.addWidget(fhint)
+            btn = QPushButton("⤡ Kembali ke Tab (Esc)", dlg)
+            btn.clicked.connect(dlg.close)
+            brow = QWidget(dlg)
+            brl = QHBoxLayout(brow)
+            brl.setContentsMargins(0, 0, 0, 0)
+            brl.addStretch(1)
+            brl.addWidget(btn)
+            dlay.addWidget(brow)
+            # rejected = Esc (default QDialog) DAN tombol Tutup X — satu
+            # jalur pemulihan (pola AnomaliView).
+            dlg.rejected.connect(self._restore_table_from_fs)
+            self._fs_dlg = dlg
+        idx = self._tcl.indexOf(self._table)
+        self._fs_idx = idx if idx >= 0 else 3
+        self._tcl.removeWidget(self._table)
+        # insert di ANTARA hint (0) dan baris tombol (terakhir)
+        self._fs_dlg.layout().insertWidget(1, self._table, 1)
+        self._fs_dlg.showMaximized()
+        self._fs_dlg.raise_()
+        self._fs_dlg.activateWindow()
+        self._ctx.set_status("⛶ Tabel hari mencurigakan dibuka layar penuh "
+                             "— Esc utk kembali", "done")
+
+    def _restore_table_from_fs(self) -> None:
+        """Kembalikan tabel ke kartu pada index layout asli (idempoten —
+        guard parent, pola AnomaliView v2.12.2)."""
+        if (self._fs_dlg is None
+                or self._table.parent() is not self._fs_dlg):
+            return
+        self._fs_dlg.layout().removeWidget(self._table)
+        self._tcl.insertWidget(self._fs_idx, self._table, 1)
+        self._ctx.set_status("⤡ Tabel kembali ke tab Hari Mencurigakan",
+                             "done")

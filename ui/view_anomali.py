@@ -66,6 +66,14 @@ TABLE_COLS = [
     "BULAN LALU", "PERUBAHAN %", "PERUBAHAN",
 ]
 
+# v2.12.3: funnel filter di header tabel (permintaan user "daripada aku
+# harus pakai slicer"). Kolom → kunci filter ctx — STATE TETAP SATU di
+# ctx.active_filters → chip slicer sinkron otomatis dua arah.
+_HF_COLS = {
+    "NAMA RESTO": "cabang", "NAMA BARANG": "item", "JENIS": "jenis",
+    "KETERANGAN": "keterangan", "ANOMALY STATUS": "status",
+}
+
 # 12 sinyal — label ringkas utk chip + fragmen teks ANOMALY REASONS
 # (sumber tunggal fragmen: SIGNAL_PARTS di waste_anomaly/signals.py).
 # v2.7.0 (lanjutan V26-C1): kolom _s1.._s12 DI-DROP pipeline sebelum df
@@ -292,8 +300,14 @@ class DetailPanel(Card):
         # 31 sel kecil (8 per baris) menunjukkan di tanggal mana angka
         # besar itu duduk — jawaban visual utk "potensi salah angka di
         # tanggal berapa".
+        # v2.12.3 (redesain permintaan user): dulu sel berisi '13:1.245'
+        # (tanggal:nilai) — PEMBUANGKAN makna: user membaca '13:…' sebagai
+        # bagian nilai ("kira 13 itu nilainya"). Kini DUA BARIS: tanggal
+        # kecil redup di atas + nilai TEBAL di bawah — tanggal & nilai tak
+        # mungkin tertukar lagi.
         lay.addWidget(self._section(
-            "Nilai per hari (1–31) — sel merah = hari tersangka"))
+            "Nilai per hari (1–31) — angka kecil = TANGGAL, angka besar "
+            "= NILAI; sel merah = hari tersangka"))
         lay.addWidget(self._day_map(rec))
 
         # Tombol drill-down (filter langsung dari baris ini)
@@ -328,12 +342,11 @@ class DetailPanel(Card):
         return lbl
 
     def _day_map(self, rec: pd.Series) -> QWidget:
-        """Mini-grid 31 sel: nilai per hari; hari tersangka merah (v2.9.0).
-
-        Sel berisi 'hari: nilai' bila ada wastenya, nomor hari saja (redup)
-        bila kosong. Tooltip sel = 'Hari N: nilai X'. Data dari kolom hari
-        '1'..'31' (ada di df hasil pipeline) + HARI TERSANGKA / HARI MAX.
-        """
+        """Mini-grid 31 sel (v2.12.3 — redesain): tanggal kecil redup di
+        baris atas + NILAI tebal di baris bawah (dulu 'hari:nilai' satu
+        baris — membingungkan, '13' dikira bagian nilai). Hari kosong =
+        tanggal redup saja. Sel merah = hari tersangka (HARI TERSANGKA /
+        HARI MAX). Tooltip sel = 'Hari N: nilai X'."""
         host = QWidget()
         gl = QGridLayout(host)
         gl.setContentsMargins(0, 0, 0, 0)
@@ -355,12 +368,19 @@ class DetailPanel(Card):
                               errors="coerce").iloc[0]
             has_val = v == v and v and v > 0
             if has_val:
-                text = f"{hari}:{fmt_cell(v, 0)}"
+                # tanggal kecil redup + nilai tebal (rich text — warna nilai
+                # mengikuti stylesheet QLabel: merah utk tersangka, gelap
+                # utk hari biasa).
+                text = (f'<span style="color:#94a3b8; font-size:9px;">'
+                        f"{hari}</span><br><b>{fmt_cell(v, 0)}</b>")
             else:
-                text = str(hari)
+                text = (f'<span style="color:#cbd5e1; font-size:9px;">'
+                        f"{hari}</span>")
             cell = QLabel(text)
+            cell.setTextFormat(Qt.TextFormat.RichText)
             cell.setAlignment(Qt.AlignmentFlag.AlignCenter)
             cell.setMinimumWidth(74)
+            cell.setMinimumHeight(40)
             if hari == tersangka:
                 cell.setStyleSheet(
                     "background:#fee2e2; color:#dc2626; font-weight:700; "
@@ -525,6 +545,9 @@ class AnomaliView(QWidget):
         self._table.model().set_check_column(CHECK_COL)
         self._table.model().set_row_key_column(FP_COL)
         self._table.model().check_toggled.connect(self._on_check_toggled)
+        # v2.12.3: funnel filter + opsi sort di header tabel.
+        self._table.setup_header_filters(
+            _HF_COLS, self._on_header_filter, self._hf_state)
         self._table.selectionModel().currentRowChanged.connect(
             lambda *_: self._on_selection())
         self._table.double_clicked.connect(self._on_double)
@@ -535,7 +558,8 @@ class AnomaliView(QWidget):
         # lama mencuri 84px — kini tinggi label jujur, teks tetap ringkas).
         hint = WLabel(
             "💡 Klik baris = detail pop-up · klik 2× = fokus cabang+item · "
-            "sort klik header · centang ✓ = kumpulkan ke tab Follow Up",
+            "sort klik judul / funnel di judul = filter nilai · "
+            "centang ✓ = kumpulkan ke tab Follow Up",
             table_card)
         hint.setObjectName("hint")
         tcl.addWidget(hint)
@@ -835,6 +859,24 @@ class AnomaliView(QWidget):
             self._ctx.set_status(
                 f"Semua baris yang tampil sudah tercentang (total {fmt_id(total)})",
                 "done")
+
+    def _on_header_filter(self, col: str, key: str, values) -> None:
+        """v2.12.3 — menu funnel header → state ctx (chip slicer sinkron
+        otomatis: satu sumber kebenaran active_filters)."""
+        self._ctx.set_filter(key, values)
+
+    def _hf_state(self, col: str):
+        """v2.12.3 — status funnel kolom utk MELUKIS (aktif = terisi).
+        List kosong = tanpa filter (semantik _apply_filters)."""
+        key = _HF_COLS.get(col)
+        if key is None:
+            return None
+        v = self._ctx.active_filters.get(key)
+        if isinstance(v, list):
+            return v or None
+        if isinstance(v, str) and v:
+            return [v]
+        return None
 
     def _on_selection(self) -> None:
         """Klik baris (atau navigasi keyboard) → pop-up detail (v2.8.1)."""

@@ -21,6 +21,13 @@ Perilaku:
   KATEGORI/PENYEBAB — konvensi REKAP MENTAH), hari mencurigakan ikut
   diberi fill merah/amber.
 - Kosongkan: hapus seluruh daftar (dengan konfirmasi).
+
+v2.12.3:
+- Kolom TOTAL BULAN LALU + PERUBAHAN % muncul bila pembanding dimuat
+  (change_vs_history — match resto×item×jenis×keterangan; PERUBAHAN %
+  negatif otomatis merah; judul alias 'TOTAL BULAN LALU', kanonik tetap).
+- Funnel filter di header tabel = filter LOKAL tampilan (shortlist,
+  ✓ dan ekspor tak tersentuh) + tombol sort di menu funnel.
 """
 from __future__ import annotations
 
@@ -44,11 +51,18 @@ from waste_anomaly.followup import (
     export_followup_xlsx,
     suspicious_days,
 )
+from waste_anomaly.period_history import change_vs_history
 
 from .shared import fmt_id
 from .state import AppContext
 from .view_anomali import DetailDialog
 from .widgets import Card, DataTable, WLabel, busy_feedback
+
+# v2.12.3: kolom ber-funnel di header tab Follow Up — filter LOKAL
+# tampilan (BUKAN ctx: shortlist menetap by design — hanya menyaring
+# yang tampil; daftar ✓ & ekspor tak tersentuh).
+_HF_LOCAL = ("JENIS", "SOURCE DATA", "KETERANGAN", "NAMA BARANG",
+              "NAMA RESTO", "SATUAN")
 
 
 class FollowUpView(QWidget):
@@ -57,6 +71,10 @@ class FollowUpView(QWidget):
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._ctx = ctx
+        # v2.12.3: filter LOKAL tampilan per kolom {kolom: nilai terpilih}
+        # — shortlist menetap; hanya tampilan yang tersaring. (Didefinisikan
+        # SEBELUM pembuatan tabel — dipakai sbg state_fn funnel header.)
+        self._hfilters: dict[str, list] = {}
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(8)
@@ -72,11 +90,13 @@ class FollowUpView(QWidget):
         title.setToolTip(
             "Kumpulan baris anomali yang Anda centang (kolom ✓) di tab "
             "Anomali, ATAU baris tabel banding (tab Banding Periode — "
-            "halaman Cabang/Item: satu centang = semua baris anomali "
-            "resto/item itu masuk).\nDaftar ini TIDAK terpengaruh "
-            "filter/slicer — baris yang sudah dikumpulkan menetap.\n"
-            "Tertutup aplikasi pun aman: daftar tersimpan otomatis "
-            "(followup.json).")
+            "halaman Cabang/Item: satu centang = baris ANOMALI resto/item "
+            "itu masuk — baris Normal tidak ikut, jadi umumnya tepat 1 "
+            "baris per item per resto).\nDaftar ini TIDAK terpengaruh "
+            "filter/slicer — baris yang sudah dikumpulkan menetap.\nKolom "
+            "TOTAL BULAN LALU + PERUBAHAN % muncul bila file pembanding "
+            "dimuat di tab Banding Periode.\nTertutup aplikasi pun aman: "
+            "daftar tersimpan otomatis (followup.json).")
         cl.addWidget(title)
 
         # Bar kontrol: info jumlah + total + tombol ekspor & kosongkan.
@@ -110,6 +130,10 @@ class FollowUpView(QWidget):
         self._table.model().set_check_column(CHECK_COL)
         self._table.model().set_row_key_column(FP_COL)
         self._table.model().check_toggled.connect(self._on_check_toggled)
+        # v2.12.3: funnel filter LOKAL tampilan + opsi sort di header.
+        self._table.setup_header_filters(
+            {c: c for c in _HF_LOCAL},
+            self._on_header_filter, self._hfilters.get)
         # Klik baris = pop-up detail (komponen sama dgn tab Anomali).
         self._table.selectionModel().currentRowChanged.connect(
             lambda *_: self._on_selection())
@@ -117,7 +141,8 @@ class FollowUpView(QWidget):
 
         hint = WLabel(
             "💡 🔴 merah = hari tersangka (puncak) · 🟠 amber = ≥ 2× rata-rata hari aktif · "
-            "klik baris = detail · lepas centang ✓ = keluarkan dari daftar · sort klik header",
+            "klik baris = detail · funnel di judul = filter tampilan (daftar tak berubah) · "
+            "lepas centang ✓ = keluarkan · sort klik judul",
             card)
         hint.setObjectName("hint")
         cl.addWidget(hint)
@@ -130,12 +155,19 @@ class FollowUpView(QWidget):
         self._rows: pd.DataFrame | None = None
         self._red: dict[str, int] = {}
         self._amber: set[tuple[str, str]] = set()
+        self._disp: pd.DataFrame | None = None
+        self._visible: list[str] | None = None
 
         # Lazy render (pola H2): view tak terlihat → dirty; render saat
         # tab dibuka. Tidak terhubung ke filters_changed (by design).
         self._dirty = True
         ctx.data_ready.connect(self._on_data_ready)
         ctx.followup_changed.connect(self._on_followup_changed)
+        # v2.12.3: pembanding (bulan lalu) siap / combo berganti → kolom
+        # TOTAL BULAN LALU + PERUBAHAN % muncul / dihitung ulang (pola
+        # view_hari._on_history_ready).
+        ctx.history_ready.connect(self._on_history_ready)
+        ctx.baseline_changed.connect(self._on_history_ready)
 
     # ------------------------------------------------------------
     # REAKSI STATE
@@ -147,6 +179,13 @@ class FollowUpView(QWidget):
             self._dirty = True
 
     def _on_followup_changed(self) -> None:
+        if self.isVisible():
+            self.refresh()
+        else:
+            self._dirty = True
+
+    def _on_history_ready(self) -> None:
+        """v2.12.3: pembanding siap / berganti → kolom bulan lalu muncul."""
         if self.isVisible():
             self.refresh()
         else:
@@ -183,14 +222,29 @@ class FollowUpView(QWidget):
         with busy_feedback(self._ctx.set_status, "Menyusun daftar follow-up"):
             self._rows = rows
             self._red, self._amber = suspicious_days(rows, rows[FP_COL])
-            disp = rows.copy()
-            # URUTAN KOLOM = format rekap PERSIS permintaan user (TOTAL·AVG·
-            # MAX·SOURCE DATA·JENIS·KETERANGAN·NAMA BARANG·NAMA RESTO·
-            # SATUAN·1..31) — urutan df sumber bisa lain (TOTAL belakang).
+            # v2.12.3 — TOTAL BULAN LALU + PERUBAHAN % (permintaan user:
+            # "tampilkan juga total bulan lalu"): enrich vs baseline
+            # pembanding bila tersedia (pola view_anomali v2.10.2 —
+            # change_vs_history additive, merge vektor ~ms utk ratusan
+            # baris). Tanpa pembanding: tabel identik dulu (kolom absen).
+            baseline = self._ctx.banding_baseline_effective()
+            if baseline is not None:
+                disp = change_vs_history(rows, baseline, self._ctx.config)
+            else:
+                disp = rows.copy()
+            # URUTAN KOLOM = format rekap PERSIS permintaan user (TOTAL·
+            # [TOTAL BULAN LALU·PERUBAHAN % bila ada]·AVG·MAX·SOURCE
+            # DATA·JENIS·KETERANGAN·NAMA BARANG·NAMA RESTO·SATUAN·1..31)
+            # — urutan df sumber bisa lain (TOTAL belakang).
             # Kolom sisanya (skor, sinyal, peer…) ikut di belakang utk
             # pop-up detail (pola V26-C1: model pegang baris PENUH).
-            ordered = ([c for c in FOLLOWUP_COLS if c in disp.columns]
-                       + day_cols(disp))
+            base_cols = [c for c in FOLLOWUP_COLS if c in disp.columns]
+            if "BULAN LALU" in disp.columns:
+                base_cols = (
+                    ["TOTAL", "BULAN LALU", "PERUBAHAN %"]
+                    + [c for c in base_cols
+                       if c not in ("TOTAL", "BULAN LALU", "PERUBAHAN %")])
+            ordered = base_cols + day_cols(disp)
             rest = [c for c in disp.columns
                     if c not in ordered and c != FP_COL]
             disp = disp[ordered + rest + ([FP_COL] if FP_COL in disp.columns else [])]
@@ -201,28 +255,80 @@ class FollowUpView(QWidget):
             # himpunan (fp, kolom-hari) utk model (penanda level sel).
             red_hits = {(fp, str(day)) for fp, day in self._red.items()}
             self._table.model().set_highlights(red_hits, self._amber)
-            visible = ([CHECK_COL]
-                       + [c for c in FOLLOWUP_COLS if c in disp.columns]
-                       + day_cols(disp))
+            # v2.12.3: judul kolom 'BULAN LALU' tampil sbg 'TOTAL BULAN
+            # LALU' (nama kanonik tetap — kontrak konsumen/test utuh;
+            # alias di headerData, pola tab Banding v2.12.2).
+            alias_map = ({"BULAN LALU": "TOTAL BULAN LALU"}
+                         if "BULAN LALU" in disp.columns else None)
+            self._table.model().set_header_map(alias_map)
+            visible = ([CHECK_COL] + base_cols + day_cols(disp))
+            if alias_map:
+                # set_dataframe membandingkan nama JUDUL (alias!) dgn
+                # visible_cols → alias kolom ter-rename WAJIB ikut masuk
+                # daftar, kalau tidak kolomnya disembunyikan.
+                visible = visible + [alias_map[c] for c in base_cols
+                                     if c in alias_map]
             # Tanpa sort_desc (urutan dataset — deterministik) & tanpa
             # narrow_hide: format rekap = sheet lebar + scrollbar
             # horizontal (konvensi anti-terpotong: scroll ≠ terpotong).
             self._table.set_dataframe(disp, visible_cols=visible)
-            n = len(disp)
+            # v2.12.3: simpan bahan render + terapkan filter lokal
+            # (mask murah — tanpa hitung ulang suspicious_days).
+            self._disp = disp
+            self._visible = list(visible)
+            shown = self._apply_hfilter(disp)
+            if shown is not disp:
+                self._table.set_dataframe(shown, visible_cols=visible)
+            self._table.setup_header_filters(
+                {c: c for c in _HF_LOCAL if c in disp.columns},
+                self._on_header_filter, self._hfilters.get)
+            n = len(shown)
             total = (pd.to_numeric(rows.get("TOTAL"), errors="coerce")
                      .fillna(0).sum() if "TOTAL" in rows.columns else 0)
+            label_b = str(baseline.get("label") or "") if baseline else ""
             self._lbl_info.setText(
-                f"{fmt_id(n)} baris · TOTAL gabungan {fmt_id(total)}")
+                f"{fmt_id(n)} baris · TOTAL gabungan {fmt_id(total)}"
+                + (f" · pembanding: {label_b}" if label_b else ""))
             self._btn_export.setEnabled(True)
             self._btn_clear.setEnabled(True)
 
     def _set_empty(self, message: str) -> None:
         self._rows = None
+        self._disp = None
         self._red, self._amber = {}, set()
         self._table.set_dataframe(None)
         self._lbl_info.setText(message)
         self._btn_export.setEnabled(False)
         self._btn_clear.setEnabled(False)
+
+    # ------------------------------------------------------------
+    # v2.12.3 — FILTER LOKAL TAMPILAN (funnel header)
+    # ------------------------------------------------------------
+    def _on_header_filter(self, col: str, key: str, values) -> None:
+        """Menu funnel header → saring TAMPILAN saja (daftar follow-up
+        & ekspor tak tersentuh — shortlist menetap by design)."""
+        if values:
+            self._hfilters[col] = list(values)
+        else:
+            self._hfilters.pop(col, None)
+        if self._disp is not None and self._visible is not None:
+            shown = self._apply_hfilter(self._disp)
+            self._table.set_dataframe(shown, visible_cols=self._visible)
+        n = len(self._hfilters)
+        self._ctx.set_status(
+            f"⧩ Filter tampilan ({n} kolom) diterapkan — daftar follow-up "
+            "tidak berubah", "done")
+
+    def _apply_hfilter(self, disp: pd.DataFrame) -> pd.DataFrame:
+        """Mask isin per kolom terpilih (murah — ratusan baris)."""
+        if not self._hfilters:
+            return disp
+        m = pd.Series(True, index=disp.index)
+        for col, vals in self._hfilters.items():
+            if col in disp.columns and vals:
+                m &= disp[col].isin(vals)
+        out = disp[m]
+        return out if len(out) else disp.iloc[:0]
 
     # ------------------------------------------------------------
     # INTERAKSI

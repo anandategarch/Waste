@@ -270,7 +270,11 @@ class TestHariView:
         assert len(day_cells) >= 30, "peta hari 1-31 tidak ter-render"
         red = [l for l in day_cells if "#dc2626" in (l.styleSheet() or "")]
         assert red, "hari tersangka tidak disorot merah"
-        assert red[0].text().startswith("17"), red[0].text()
+        # v2.12.3 (redesain peta hari): dulu '17:70' (tanggal:nilai —
+        # membingungkan); kini tanggal kecil + nilai tebal terpisah —
+        # teks = '<span ...>17</span><br><b>70</b>'.
+        assert "17</span>" in red[0].text(), red[0].text()
+        assert "<b>70</b>" in red[0].text(), red[0].text()
 
     def test_refresh_dibungkus_busy_feedback(self):
         """Kontrak v2.8.3 tetap: titik tunggal render dibungkus (anti-beku)."""

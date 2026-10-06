@@ -201,8 +201,14 @@ class PeriodeView(QWidget):
         self._label_b_disp = "Pembanding"
         # v2.12.2: peta (jenis, resto[, barang]) → [sidik jari anomali]
         # (memo per data_version — dgn metode _fu_maps).
+        # v2.12.3 (Opsi A "1 item per resto"): peta CENTANG hanya baris
+        # ANOMALI; peta PENUH (_fu_*_full) utk LEPAS centang — membersihkan
+        # fps noise warisan v2.12.2 (baris Normal TOTAL=0 yang ikut masuk
+        # sebelum saringan ini ada).
         self._fu_item: dict | None = None
         self._fu_branch: dict | None = None
+        self._fu_item_full: dict = {}
+        self._fu_branch_full: dict = {}
         self._fu_ver: int = -1
         # v2.12.2: muat otomatis saat buka aplikasi → boleh auto-ciut
         # kartu daftar file begitu sukses (kelola file manual = JANGAN
@@ -973,7 +979,17 @@ class PeriodeView(QWidget):
         Memo per data_version — groupby 25.901 baris ≈ 0,1-0,2 dtk SEKALI
         per dataset (pipeline nyata sudah bawa followup_fps dari worker →
         fingerprints() = memo hit, tanpa md5 ulang). Normalisasi kunci =
-        konvensi _aggregate/_jenis_item_totals (strip + JENIS upper)."""
+        konvensi _aggregate/_jenis_item_totals (strip + JENIS upper).
+
+        v2.12.3 (Opsi A — "1 item aja per resto"): peta CENTANG hanya
+        memuat baris ber-ANOMALY STATUS ≠ 'Normal'. Data asli: 797 dari
+        25.901 baris adalah anomali — tanpa saringan, 1 centang item
+        memasukkan 6-14 baris (maks 34) yang 97%-nya baris placeholder
+        Normal TOTAL=0 (5 KETERANGAN standar × duplikat pengajuan);
+        terukur: 75% item×resto punya TEPAT 1 baris anomali → centang
+        = "1 item per resto". Kolom ANOMALY STATUS absen (fixture test)
+        → fallback perilaku lama PERSIS (semua baris). Peta PENUH tetap
+        dibangun untuk LEPAS centang (lihat _on_fu_check)."""
         c = self._ctx
         if c.df is None:
             return None
@@ -983,25 +999,41 @@ class PeriodeView(QWidget):
         if fps is None:
             return None
         d = c.df
-        n = len(d)
 
-        def _col(name: str) -> "pd.Series":
-            if name in d.columns:
-                return d[name].astype(str).str.strip()
-            return pd.Series([""] * n, index=d.index, dtype="object")
+        def _build(frame: pd.DataFrame,
+                   fp_series: pd.Series) -> tuple[dict, dict]:
+            n = len(frame)
 
-        jenis = _col("JENIS").str.upper()
-        base = pd.DataFrame({
-            "JENIS": jenis.to_numpy(),
-            "NAMA RESTO": _col("NAMA RESTO").to_numpy(),
-            "NAMA BARANG": _col("NAMA BARANG").to_numpy(),
-            "__FP": fps.astype(str).to_numpy(),
-        })
-        self._fu_item = base.groupby(
-            ["JENIS", "NAMA RESTO", "NAMA BARANG"],
-            sort=False)["__FP"].apply(list).to_dict()
-        self._fu_branch = base.groupby(
-            ["JENIS", "NAMA RESTO"], sort=False)["__FP"].apply(list).to_dict()
+            def _col(name: str) -> "pd.Series":
+                if name in frame.columns:
+                    return frame[name].astype(str).str.strip()
+                return pd.Series([""] * n, index=frame.index,
+                                 dtype="object")
+
+            base = pd.DataFrame({
+                "JENIS": _col("JENIS").str.upper().to_numpy(),
+                "NAMA RESTO": _col("NAMA RESTO").to_numpy(),
+                "NAMA BARANG": _col("NAMA BARANG").to_numpy(),
+                "__FP": fp_series.astype(str).to_numpy(),
+            })
+            it = base.groupby(
+                ["JENIS", "NAMA RESTO", "NAMA BARANG"],
+                sort=False)["__FP"].apply(list).to_dict()
+            br = base.groupby(
+                ["JENIS", "NAMA RESTO"], sort=False)["__FP"].apply(
+                    list).to_dict()
+            return it, br
+
+        # Peta PENUH (semua baris dataset) — dipakai saat LEPAS centang.
+        self._fu_item_full, self._fu_branch_full = _build(d, fps)
+        # v2.12.3 Opsi A: peta CENTANG = hanya baris anomali.
+        d2, fps2 = d, fps
+        if "ANOMALY STATUS" in d.columns:
+            st = d["ANOMALY STATUS"].astype(str).str.strip()
+            m = st.ne("Normal") & st.ne("") & st.ne("nan") & st.ne("None")
+            if bool(m.any()):
+                d2, fps2 = d[m], fps[m]
+        self._fu_item, self._fu_branch = _build(d2, fps2)
         self._fu_ver = c.data_version
         return self._fu_item, self._fu_branch
 
@@ -1042,14 +1074,18 @@ class PeriodeView(QWidget):
         return out, vis
 
     def _on_fu_check(self, page: str, row: int, checked: bool) -> None:
-        """Klik ✓ baris banding → centang/lepas SEMUA baris anomali
-        terkait (resto[+barang], jenis) SEKALIGUS — satu broadcast."""
+        """Klik ✓ baris banding → (v2.12.3 Opsi A) CENTANG = masukkan
+        SEMUA baris ANOMALI terkait (jenis, resto[, barang]) — baris
+        Normal TOTAL=0 tidak ikut; LEPAS = keluarkan SEMUA baris item
+        itu (anomali + fps noise warisan v2.12.2) sekaligus — satu
+        broadcast, satu tulis disk."""
         m = self._tables[page].model()
         rec = m.record(row)
         fps = rec.get(_FPS_COL) if rec is not None else None
         if not fps:
-            # Baris tanpa pasangan anomali (mis. item di luar run saat ini)
-            # → kembalikan centangan visual (state tak berubah).
+            # Baris tanpa pasangan anomali (mis. item di luar run saat
+            # ini, atau item tanpa baris anomali — semua Normal) →
+            # kembalikan centangan visual (state tak berubah).
             mdf = m.dataframe
             if (mdf is not None and CHECK_COL in mdf.columns
                     and 0 <= row < len(mdf)):
@@ -1058,8 +1094,9 @@ class PeriodeView(QWidget):
                 idx = m.index(row, col)
                 m.dataChanged.emit(idx, idx)
             self._ctx.set_status(
-                "Baris ini tidak punya pasangan anomali di bulan berjalan — "
-                "tidak bisa dimasukkan ke Follow Up.", "done")
+                "Item ini tidak punya baris anomali di bulan berjalan "
+                "(semua Normal) — tidak ada yang perlu ditindaklanjuti.",
+                "done")
             return
         if checked:
             n = self._ctx.add_followup_many(fps)
@@ -1068,7 +1105,24 @@ class PeriodeView(QWidget):
                 f"✓ {fmt_id(n)} baris anomali masuk Follow Up — total "
                 f"{fmt_id(total)}", "done")
         else:
-            n = self._ctx.remove_followup_many(fps)
+            # Lepas: keluarkan anomali fps + SEMUA fps item ini yang
+            # mungkin tersimpan dari centangan v2.12.2 (saat itu belum
+            # tersaring — ikut membawa baris Normal). Peta penuh =
+            # kebalikan saringan Opsi A.
+            jenis = str(rec.get("JENIS") or "").strip().upper()
+            resto = str(rec.get("NAMA RESTO") or "").strip()
+            barang = rec.get("NAMA BARANG")
+            maps = self._fu_maps()
+            if maps is not None:
+                if barang is not None:
+                    extra = self._fu_item_full.get(
+                        (jenis, resto, str(barang).strip()), [])
+                else:
+                    extra = self._fu_branch_full.get((jenis, resto), [])
+            else:
+                extra = []
+            remove_all = list(dict.fromkeys(list(fps) + list(extra)))
+            n = self._ctx.remove_followup_many(remove_all)
             total = len(self._ctx.followup_keys)
             self._ctx.set_status(
                 f"✓ {fmt_id(n)} baris dikeluarkan dari Follow Up — total "

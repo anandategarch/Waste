@@ -278,10 +278,16 @@ class TestKolomPctToBom:
         assert shown == "Cek"
 
     def test_kolom_pct_fit_tanpa_scrollbar_di_viewport_sempit(self):
-        """v2.8.1: 8 kolom — di viewport laptop (±740px) JENIS & KETERANGAN
+        """v2.8.1: 8 kolom — di viewport sempit (±740px) JENIS & KETERANGAN
         disembunyikan responsif (narrow_hide) supaya kolom inti + % to BOM
-        muat TANPA scrollbar horizontal (scroll ≠ terpotong, tapi kolom
-        inti wajib tampak)."""
+        tetap tampak.
+
+        v2.12.3: funnel filter di header = chrome baru ±20px per kolom
+        ber-funnel (5 kolom tabel anomali) — di 740px scrollbar
+        horizontal KINI BOLEH muncul (konvensi 'scroll ≠ terpotong');
+        jaminan yang TETAP: tidak ada judul kolom terpotong (lantai
+        header) & kolom inti tampak. Di viewport normal (980px) header
+        tetap muat tanpa scrollbar."""
         from PySide6.QtWidgets import QApplication, QWidget
         view, _ = _make_view()
         view.resize(740, 500)
@@ -292,18 +298,41 @@ class TestKolomPctToBom:
         view._table._auto_columns()
         QApplication.processEvents()
         dfm = view._table._model.dataframe
-        pct = list(dfm.columns).index("% to BOM")
-        assert not view._table.isColumnHidden(pct), (
-            "% to BOM harus tetap tampak di viewport sempit")
         t = view._table
-        vis = [c for c in range(dfm.shape[1]) if not t.isColumnHidden(c)]
+        pct = list(dfm.columns).index("% to BOM")
+        assert not t.isColumnHidden(pct), (
+            "% to BOM harus tetap tampak di viewport sempit")
+        j = list(dfm.columns).index("JENIS")
+        k = list(dfm.columns).index("KETERANGAN")
+        assert t.isColumnHidden(j), "JENIS harus narrow-hidden"
+        assert t.isColumnHidden(k), "KETERANGAN harus narrow-hidden"
+        # LANTAI HEADER (anti-terpotong): tiap kolom tampak ≥ lebar
+        # teks judulnya (+26 padding, +20 funnel bila ber-funnel).
+        fm = t.fontMetrics()
+        from ui.view_anomali import _HF_COLS
+        for c in range(dfm.shape[1]):
+            if t.isColumnHidden(c):
+                continue
+            name = str(dfm.columns[c])
+            floor = fm.horizontalAdvance(name) + 26
+            if name in _HF_COLS:
+                floor += 20
+            assert t.columnWidth(c) >= floor, (
+                f"judul '{name}' terpotong: {t.columnWidth(c)}px < lantai "
+                f"{floor}px")
+
+        # viewport NORMAL (980px): tanpa scrollbar — funnel termasuk.
+        view.resize(980, 500)
+        QApplication.processEvents()
+        QWidget.grab(view)
+        QApplication.processEvents()
+        view._table._auto_columns()
+        QApplication.processEvents()
         total = t.horizontalHeader().length()
         avail = t.viewport().width()
         assert total <= avail + 2, (
             f"panjang header {total}px > viewport {avail}px — scrollbar "
-            "horizontal muncul padahal narrow_hide harus menyelesaikannya")
-        j = list(dfm.columns).index("JENIS")
-        assert t.isColumnHidden(j), "JENIS harus narrow-hidden"
+            "horizontal padahal 980px harusnya cukup (termasuk funnel)")
 
     def test_fmt_pct_unit(self):
         from ui.models import fmt_pct

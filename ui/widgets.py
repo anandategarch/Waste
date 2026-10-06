@@ -18,7 +18,8 @@ from collections import OrderedDict
 from contextlib import contextmanager
 
 import pandas as pd
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QPointF, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QPainter, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -28,10 +29,16 @@ from PySide6.QtWidgets import (
     QLabel,
     QLayout,
     QLayoutItem,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
     QTableView,
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
+    QPushButton,
     QSizePolicy,
 )
 
@@ -39,6 +46,316 @@ from .models import PandasTableModel
 from .shared import fmt_id
 from .theme import STATUS_COLORS
 from waste_anomaly.utils import norm_text
+
+
+# ============================================================
+# v2.12.3 — FILTER DI HEADER TABEL (Excel AutoFilter ala app ini)
+# ============================================================
+# Permintaan user: "daripada aku harus pakai slicer bisa gak ditampilkan
+# semacam filter di header tabelnya? dan ada opsi sort gitu" — ikon
+# funnel di ujung kanan judul kolom → menu: tombol sort (naik/turun) +
+# daftar nilai bercentang + kotak cari. Semantik PERSIS slicer: nilai
+# TERCENTANG = ikut tampil; semua tercentang = filter kolom lepas.
+# State tetap SATU di ctx.active_filters (chip slicer sinkron otomatis).
+
+_HF_ACTIVE = "#dc2626"   # funnel terisi merah = kolom sedang terfilter
+_HF_IDLE = "#94a3b8"     # funnel garis tipis = tanpa filter
+_HF_BG = "#f8fafc"       # background QSS QHeaderView::section (backing)
+_HF_MAX_ITEMS = 400      # batas item daftar (kolom ribuan nilai → cari)
+
+
+def _paint_funnel(painter: QPainter, rect: QRect, active: bool) -> None:
+    """Ikon funnel kecil di ujung kanan judul section (backing menutup
+    area itu supaya tak bertabrakan dgn panah sort Qt)."""
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    bg = QRect(int(rect.right()) - 32, int(rect.top()) + 2, 20,
+               int(rect.height()) - 4)
+    painter.fillRect(bg, QColor(_HF_BG))
+    cx = float(rect.right()) - 22.0
+    cy = float(rect.center().y())
+    pts = QPolygonF([
+        QPointF(cx - 5.0, cy - 4.0), QPointF(cx + 5.0, cy - 4.0),
+        QPointF(cx + 2.0, cy + 2.0), QPointF(cx + 2.0, cy + 5.0),
+        QPointF(cx - 2.0, cy + 5.0), QPointF(cx - 2.0, cy + 2.0),
+    ])
+    if active:
+        painter.setPen(QColor(_HF_ACTIVE))
+        painter.setBrush(QColor(_HF_ACTIVE))
+    else:
+        # idle: fill terang + outline gelap — terlihat jelas tanpa anti-
+        # alias yang menipiskan garis 1px (diukur: outline polos nyaris tak
+        # terbaca di background #f8fafc).
+        painter.setPen(QColor("#64748b"))
+        painter.setBrush(QColor("#cbd5e1"))
+    painter.drawPolygon(pts)
+    painter.restore()
+
+
+class _HeaderFilterMenu(QMenu):
+    """Menu filter per kolom (v2.12.3) — filter nilai + opsi sort.
+
+    Susunannya: [↗ Urut Naik] [↘ Urut Turun] · [kotiak cari] · daftar
+    nilai (jumlah barisnya) · [☑ Pilih Semua] [Selesai]. Live-apply
+    di-DEBOUNCE 120 ms — centang beruntun = satu broadcast (pola
+    pending SlicerBar). Menu tetap terbuka saat tabel ter-update di
+    belakangnya (QMenu menutup saat klik di luar / tombol Selesai).
+    """
+
+    def __init__(self, view: QTableView, col: str, key: str,
+                 counts: "OrderedDict[object, int]",
+                 state: list | None, apply_fn, parent: QWidget) -> None:
+        super().__init__(parent)
+        self._view = view
+        self._col = col
+        self._key = key
+        self._counts = counts
+        self._apply = apply_fn
+        self._checked: dict[object, bool] = {}
+        st = set(state) if state else None
+        for v in counts:
+            self._checked[v] = True if st is None else (v in st)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(120)
+        self._timer.timeout.connect(self._apply_now)
+
+        w = QWidget(self)
+        w.setFixedWidth(290)
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(6)
+
+        # — Baris sort (permintaan "ada opsi sort") —
+        srow = QWidget(w)
+        sl = QHBoxLayout(srow)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setSpacing(6)
+        b_up = QPushButton("↗ Urut Naik", srow)
+        b_dn = QPushButton("↘ Urut Turun", srow)
+        b_up.setToolTip("Urutkan tabel menurut kolom ini, terkecil/"
+                        "A→Z duluan (klik judul kolom juga bisa).")
+        b_dn.setToolTip("Urutkan tabel menurut kolom ini, terbesar/"
+                        "Z→A duluan (klik judul kolom juga bisa).")
+        b_up.clicked.connect(lambda: self._sort(Qt.SortOrder.AscendingOrder))
+        b_dn.clicked.connect(lambda: self._sort(Qt.SortOrder.DescendingOrder))
+        sl.addWidget(b_up, 1)
+        sl.addWidget(b_dn, 1)
+        lay.addWidget(srow)
+
+        # — Kotak cari (kolom barang bisa ribuan nilai) —
+        self._ed = QLineEdit(w)
+        self._ed.setPlaceholderText("Cari nilai… (huruf besar/kecil sama)")
+        self._ed.setClearButtonEnabled(True)
+        self._ed.textChanged.connect(self._populate)
+        lay.addWidget(self._ed)
+
+        # — Daftar nilai bercentang —
+        self._lw = QListWidget(w)
+        self._lw.setMaximumHeight(300)
+        self._lw.setToolTip(
+            "Nilai TERCENTANG = ikut tampil (semantik slicer — chip di "
+            "baris slicer ikut sinkron).\nSemua tercentang = filter kolom "
+            "ini lepas.\nAngka dalam kurung = jumlah baris.")
+        self._lw.itemChanged.connect(self._on_item)
+        lay.addWidget(self._lw, 1)
+
+        # — Baris aksi —
+        arow = QWidget(w)
+        al = QHBoxLayout(arow)
+        al.setContentsMargins(0, 0, 0, 0)
+        al.setSpacing(6)
+        b_all = QPushButton("☑ Pilih Semua", arow)
+        b_all.setToolTip("Centang semua nilai = lepas filter kolom ini.")
+        b_all.clicked.connect(self._pick_all)
+        b_ok = QPushButton("Selesai ✓", arow)
+        b_ok.clicked.connect(self.close)
+        al.addWidget(b_all, 1)
+        al.addWidget(b_ok, 1)
+        lay.addWidget(arow)
+
+        wa = QWidgetAction(self)
+        wa.setDefaultWidget(w)
+        self.addAction(wa)
+        self._populate("")
+
+    # ------------------------------------------------------------
+    def _populate(self, term: str) -> None:
+        self._lw.blockSignals(True)
+        self._lw.clear()
+        term = (term or "").strip().lower()
+        shown = 0
+        rest = 0
+        for v, n in self._counts.items():
+            txt = "" if v is None else str(v)
+            if term and term not in txt.lower():
+                continue
+            if shown >= _HF_MAX_ITEMS:
+                rest += 1
+                continue
+            it = QListWidgetItem()
+            disp = txt if txt else "(kosong)"
+            if len(disp) > 48:
+                disp = disp[:45] + "…"
+            it.setText(f"{disp}   ({fmt_id(n)})")
+            it.setData(Qt.ItemDataRole.UserRole, v)
+            it.setToolTip(f"{txt} — {fmt_id(n)} baris")
+            it.setFlags(Qt.ItemFlag.ItemIsUserCheckable
+                        | Qt.ItemFlag.ItemIsEnabled)
+            it.setCheckState(
+                Qt.CheckState.Checked if self._checked.get(v, True)
+                else Qt.CheckState.Unchecked)
+            self._lw.addItem(it)
+            shown += 1
+        if rest:
+            note = QListWidgetItem(f"… {fmt_id(rest)} nilai lain — pakai "
+                                  "kotak cari")
+            note.setFlags(Qt.ItemFlag.NoItemFlags)
+            self._lw.addItem(note)
+        self._lw.blockSignals(False)
+
+    def _on_item(self, item: QListWidgetItem) -> None:
+        v = item.data(Qt.ItemDataRole.UserRole)
+        if v is None and "(kosong)" not in item.text():
+            return  # baris catatan non-interaktif
+        self._checked[v] = (item.checkState() == Qt.CheckState.Checked)
+        self._timer.start()  # debounce — centang beruntun = 1 broadcast
+
+    def _pick_all(self) -> None:
+        for v in self._counts:
+            self._checked[v] = True
+        self._populate(self._ed.text())
+        self._apply_now()
+
+    def _apply_now(self) -> None:
+        if self._apply is None:
+            return
+        allc = all(self._checked.get(v, True) for v in self._counts)
+        if allc:
+            self._apply(self._col, self._key, None)
+        else:
+            vals = [v for v in self._counts if self._checked.get(v, True)]
+            self._apply(self._col, self._key, vals)
+
+    def _sort(self, order: Qt.SortOrder) -> None:
+        m = self._view.model()
+        df = getattr(m, "dataframe", None)
+        if df is None or self._col not in list(df.columns):
+            return
+        idx = list(df.columns).index(self._col)
+        self._view.sortByColumn(idx, order)
+        self.close()
+
+
+class FilterHeader(QHeaderView):
+    """Header QTableView + ikon funnel filter per kolom (v2.12.3).
+
+    Kolom terdaftar di ``tabel._hf_cols`` digambar funnel di ujung kanan
+    judul; KLIK FUNNEL = menu nilai + sort (klik area judul seperti biasa
+    = sort — perilaku lama utuh). Funnel TERISI MERAH = kolom sedang
+    terfilter (status dibaca per-paint via ``tabel._hf_state`` — selalu
+    segar, sinkron dgn chip slicer karena satu sumber state).
+    Tabel TANPA mapping (default) tampil & berperilaku PERSIS header
+    bawaan — funnel tak digambar, klik = sort."""
+
+    def __init__(self, parent: QTableView) -> None:
+        super().__init__(Qt.Orientation.Horizontal, parent)
+
+    def _table(self) -> QTableView | None:
+        p = self.parent()
+        return p if isinstance(p, QTableView) else None
+
+    def _col_name(self, logical: int) -> str | None:
+        """Nama kolom KANONIK (df model — bukan alias headerData)."""
+        m = self.model()
+        if m is None:
+            return None
+        df = getattr(m, "dataframe", None)
+        if df is None or logical < 0 or logical >= len(df.columns):
+            return None
+        return str(df.columns[logical])
+
+    # ------------------------------------------------------------
+    def paintSection(self, painter, rect, logical):
+        super().paintSection(painter, rect, logical)
+        t = self._table()
+        if t is None:
+            return
+        name = self._col_name(logical)
+        if name is None or name not in t._hf_cols:
+            return
+        state = None
+        try:
+            if t._hf_state is not None:
+                state = t._hf_state(name)
+        except Exception:  # noqa: BLE001 — state_fn view tak boleh crash paint
+            state = None
+        _paint_funnel(painter, rect, active=bool(state))
+
+    def _hit_funnel(self, pos) -> int | None:
+        logical = self.logicalIndexAt(pos.toPoint())
+        if logical < 0:
+            return None
+        t = self._table()
+        name = self._col_name(logical)
+        if t is None or name is None or name not in t._hf_cols:
+            return None
+        x0 = self.sectionViewportPosition(logical)
+        w = self.sectionSize(logical)
+        fx = pos.x()
+        if w >= 60 and x0 + w - 34 <= fx <= x0 + w - 8:
+            return logical
+        return None
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            logical = self._hit_funnel(e.position())
+            if logical is not None:
+                self._open_menu(logical)
+                return
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        super().mouseMoveEvent(e)
+        if self._hit_funnel(e.position()) is not None:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def leaveEvent(self, e):
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        super().leaveEvent(e)
+
+    # ------------------------------------------------------------
+    def _open_menu(self, logical: int) -> None:
+        t = self._table()
+        if t is None:
+            return
+        name = self._col_name(logical)
+        if name is None or name not in t._hf_cols:
+            return
+        m = self.model()
+        df = getattr(m, "dataframe", None)
+        if df is None or name not in df.columns:
+            return
+        series = df[name]
+        vc = series.value_counts(dropna=True)
+        counts: "OrderedDict[object, int]" = OrderedDict(
+            (k, int(v)) for k, v in vc.items())
+        if not counts:
+            return
+        state = None
+        try:
+            if t._hf_state is not None:
+                state = t._hf_state(name)
+        except Exception:  # noqa: BLE001
+            state = None
+        key = t._hf_cols.get(name, name)
+        menu = _HeaderFilterMenu(t, name, key, counts, state,
+                                  t._hf_apply, self)
+        self._menu = menu  # deterministik (test/automation) + jaga umur
+        pos = self.mapToGlobal(QPoint(
+            int(self.sectionViewportPosition(logical)),
+            int(self.height())))
+        menu.popup(pos)
 
 
 # ============================================================
@@ -120,6 +437,14 @@ class DataTable(QTableView):
         super().__init__(parent)
         self._model = PandasTableModel(parent=self)
         self.setModel(self._model)
+        # v2.12.3: header khusus — funnel filter per kolom (opt-in via
+        # setup_header_filters; tabel TANPA mapping tampil & perilaku
+        # PERSIS header bawaan — funnel tak digambar, klik judul = sort).
+        self.setHorizontalHeader(FilterHeader(self))
+        # v2.12.3: wiring filter header (kosong = semua tabel lama utuh)
+        self._hf_cols: dict[str, str] = {}
+        self._hf_apply = None
+        self._hf_state = None
         self.setSortingEnabled(True)
         self.setAlternatingRowColors(True)
         self.setWordWrap(True)  # teks panjang wrap — baris tumbuh, tidak terpotong
@@ -253,6 +578,20 @@ class DataTable(QTableView):
         rec = self._model.record(index.row())
         if rec is not None:
             self.double_clicked.emit(rec)
+
+    def setup_header_filters(self, cols: "dict[str, str] | None",
+                             apply_fn=None, state_fn=None) -> None:
+        """v2.12.3 — kolom yang diberi ikon funnel filter di header.
+
+        cols: {nama kolom KANONIK: kunci filter}. ``apply_fn(col, key,
+        values|None)`` dipanggil menu saat menerapkan (None = lepas);
+        ``state_fn(col)`` → list nilai terpilih (None = tanpa filter) —
+        dibaca saat MELUKIS funnel (aktif = terisi merah). None/{} =
+        matikan semua funnel (tabel perilaku bawaan)."""
+        self._hf_cols = dict(cols or {})
+        self._hf_apply = apply_fn
+        self._hf_state = state_fn
+        self.horizontalHeader().viewport().update()
 
     def set_dataframe(self, df: pd.DataFrame | None,
                       sort_desc: str | None = None,
@@ -435,6 +774,10 @@ class DataTable(QTableView):
                 floors.append(0)
                 continue
             hw = fm.horizontalAdvance(names[c]) + 26
+            # v2.12.3: kolom ber-funnel butuh ±20px ekstra (ikon) supaya
+            # judul tak terpotong oleh funnel — lantai & lebar naik.
+            if names[c] in self._hf_cols:
+                hw += 20
             floors.append(min(max(min_w, hw), cap))
             w = hw
             for r in range(n_rows):
