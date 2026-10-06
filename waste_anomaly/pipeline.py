@@ -286,6 +286,13 @@ def _run_pipeline(
     _n_bukti = int((df["BUKTI HARI"] == "YES").sum()) if "BUKTI HARI" in df.columns else 0
     _log(f"  → {_n_bukti} baris anomali bisa dilokalisasi ke hari tersangka", 87)
 
+    # ---- STAGE 15b: PROFIL BARIS + KELEBIHAN (v2.13.0) ----
+    # Lensa "pola waktu + uang": Tiap Hari / Kadang / Sekali Ini +
+    # kelebihan vs tipikal cabang lain (peer aktif). Murni additive.
+    _gate("Stage 15b — Profil baris + kelebihan", 87)
+    from .profile import annotate_profile  # local import: modul murni
+    df = annotate_profile(df, key_akhir, config)
+
     # ---- BUILD SUMMARY (NO Excel export — display directly in UI) ----
     _log("Build summary statistics ...", 88)
     summary = _build_summary(df, key_akhir, log_lines, config=config)

@@ -155,6 +155,11 @@ COLUMN_TOOLTIPS = {
     "NILAI BULAN LALU": "Nilai item yang sama di cabang yang sama pada\nTANGGAL yang sama, bulan pembanding sebelumnya\n(jumlah semua alasan) — kebiasaan bulan lalu.",
     "RASIO VS BULAN LALU": "Berapa kali lipat nilai hari tersangka vs\ntanggal yang sama bulan lalu. ≥ 3× = jauh di atas\nkebiasaan bulan sebelumnya.",
     "TIPIKAL BEBERAPA BULAN": "Nilai tengah tanggal yang sama dari ≥ 2\nbulan pembanding (butuh beberapa file bulan lalu).",
+    # --- profil & kelebihan (v2.13.0) ---
+    "PROFIL": "Pola waktu waste baris ini:\nTiap Hari = hampir setiap hari ada waste (masalah proses/kronis) ·\nKadang = 2-19 hari sebulan · Sekali Ini = 1 hari saja (kejadian\ntunggal — kandidat salah input).\n'— Baru' = pasangan cabang×item tidak ada/nol di bulan pembanding.",
+    "KELEBIHAN": "TOTAL sebulan dikurangi tipikal (nilai tengah) cabang lain\npada item yang sama (hanya cabang yang memang punya waste).\nPlus = lebih boros dari tipikal; minus = lebih hemat.\nKosong = pembanding kurang (< 3 cabang lain ber-waste).",
+    "PEER MEDIAN (AKTIF)": "Nilai tengah TOTAL item ini di cabang lain yang\nmemang punya waste — baris cabang nol tidak ikut (tidak menarik\ntipikal turun).",
+    "PEER AKTIF": "Banyak cabang lain yang punya waste pada item yang sama\n(dipakai menghitung KELEBIHAN).",
     # --- banding periode ---
     "Hari Data": "Banyak hari berdata pada periode itu.",
     "Hari Aktif": "Banyak hari dengan waste > 0.",

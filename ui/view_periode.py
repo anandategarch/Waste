@@ -31,13 +31,14 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QMessageBox,
     QPushButton,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from waste_anomaly.followup import CHECK_COL, FP_COL  # v2.12.2: ✓ di tabel banding
 from waste_anomaly.period_history import (
     aggregate_current,
     compare_level,
@@ -49,7 +50,6 @@ from waste_anomaly.period_history import (
     save_history_entries,
     typical_months,
 )
-from waste_anomaly.followup import CHECK_COL, FP_COL  # v2.12.2: ✓ di tabel banding
 
 from .shared import fmt_id
 from .state import AppContext
@@ -101,7 +101,7 @@ class BandTableDialog(QDialog):
     anti-lambat); df di-clone-render, tabel asli di view tak tersentuh.
     """
 
-    def __init__(self, ctx: "AppContext", drill_cb, parent=None) -> None:
+    def __init__(self, ctx: AppContext, drill_cb, parent=None) -> None:
         super().__init__(parent)
         self._ctx = ctx
         self._drill_cb = drill_cb  # (level, payload, rec) → dikonsumsi view
@@ -539,10 +539,19 @@ class PeriodeView(QWidget):
                 n_item = fmt_id(res.get("item_count", 0))
                 ka = res.get("key_akhir", "?")
                 it_s = QTableWidgetItem(f"✓ {n_item} item • {ka} hari")
+                # v2.13.0: jawaban pertanyaan user "pembanding hanya ada
+                # hari 30, error?" — BUKAN error; tooltip menjelaskan
+                # kenapa 30 hari wajar + sudah dinormalkan.
+                ka_note = (""
+                           if str(ka).isdigit() and int(ka) >= 31 else
+                           "\n\nBulan pendek (30 hari) BUKAN error — "
+                           "September/April/Juni/November memang 30 hari. "
+                           "Banding tetap adil: metrik 'Waste per Hari' "
+                           "membagi total dgn jumlah hari tiap bulan.")
                 it_s.setToolTip(
                     f"Berhasil dimuat: {res.get('rows_kept', 0):,} baris "
                     f"waste disaring → {res.get('item_count', 0):,} "
-                    f"kombinasi cabang × item.")
+                    f"kombinasi cabang × item.{ka_note}")
             self._tbl_files.setItem(r, 2, it_s)
 
     # ------------------------------------------------------------
@@ -1074,7 +1083,7 @@ class PeriodeView(QWidget):
                    fp_series: pd.Series) -> tuple[dict, dict]:
             n = len(frame)
 
-            def _col(name: str) -> "pd.Series":
+            def _col(name: str) -> pd.Series:
                 if name in frame.columns:
                     return frame[name].astype(str).str.strip()
                 return pd.Series([""] * n, index=frame.index,

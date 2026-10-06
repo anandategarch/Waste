@@ -1,5 +1,5 @@
 {
-  "version": "2.12.5",
+  "version": "2.13.0",
   "_comment": "Threshold & defaults untuk Waste Anomaly Detection. Ubah nilai di sini, tidak perlu edit kode Python.",
   "thresholds": {
     "TH_SPIKE": 3,
@@ -26,7 +26,8 @@
     "STATUS_REVIEW": 3,
     "S2_SCORE2_MIN": 4,
     "S10_BOM_MIN": 0.1,
-    "QUADRANT_THRESHOLD": 0.5
+    "QUADRANT_THRESHOLD": 0.5,
+    "PROFIL_DAILY_MIN": 20
   },
   "non_handling_list": [
     "Alat/ Mesin",

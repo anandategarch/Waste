@@ -32,6 +32,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from waste_anomaly.followup import CHECK_COL, FP_COL, fingerprint_series
+from waste_anomaly.period_history import CHANGE_CATEGORIES, change_vs_history
+from waste_anomaly.profile import annotate_profile_vs_history
+from waste_anomaly.signals import SIGNAL_PARTS
+
 from .models import (
     COLUMN_TOOLTIPS,
     DELTA_PCT_COLS,
@@ -42,15 +47,17 @@ from .models import (
     fmt_pct,
     fmt_ratio_x,
 )
-from waste_anomaly.period_history import CHANGE_CATEGORIES, change_vs_history
-from waste_anomaly.followup import CHECK_COL, FP_COL, fingerprint_series
 from .shared import fmt_id
 from .state import AppContext
 from .widgets import (
-    Card, DataTable, KpiStrip, StatusChip, WLabel, busy_feedback,
+    Card,
+    DataTable,
+    KpiStrip,
+    StatusChip,
+    WLabel,
+    busy_feedback,
     status_chip_for,
 )
-from waste_anomaly.signals import SIGNAL_PARTS
 
 # Kolom tabel anomali — ramping (detail lengkap ada di pop-up detail).
 # v2.6.1: 10 → 7 kolom (MAX / HARI MAX / RANGKING WASTE duplikatif).
@@ -58,8 +65,8 @@ from waste_anomaly.signals import SIGNAL_PARTS
 # setelah TOTAL sesuai permintaan user: rasio per-ranking terlihat langsung
 # di tabel. Nilai 'Cek' = item tanpa data penjualan (tak bisa dihitung).
 TABLE_COLS = [
-    "ANOMALY SCORE", "ANOMALY STATUS", "NAMA RESTO", "NAMA BARANG",
-    "JENIS", "KETERANGAN", "TOTAL", "% to BOM",
+    "ANOMALY SCORE", "ANOMALY STATUS", "PROFIL", "NAMA RESTO",
+    "NAMA BARANG", "JENIS", "KETERANGAN", "TOTAL", "% to BOM",
     # v2.10.2: muncul hanya bila pembanding bulan lalu tersedia (kolom
     # ditambahkan ADDITIF oleh change_vs_history — tanpa pembanding tabel
     # identik v2.10.1, pola view Hari Mencurigakan).
@@ -146,6 +153,8 @@ DETAIL_COLS = [
     # v2.10.2: bukti perubahan vs bulan lalu (tampil bila pembanding ada)
     "BULAN LALU", "PERUBAHAN %", "PERUBAHAN",
     "LAST DAY SHARE", "KATEGORI ANOMALI", "RANGKING WASTE",
+    # v2.13.0: profil pola waktu + kelebihan vs tipikal cabang lain
+    "PROFIL", "KELEBIHAN", "PEER MEDIAN (AKTIF)", "PEER AKTIF",
 ]
 
 
@@ -586,7 +595,7 @@ class AnomaliView(QWidget):
         # kombinasi sama → salinan berkolom sama dipakai ulang.
         # v2.12.1: satu slot → LRU weakref (bolak-balik antar state filter
         # dulu selalu miss → change_vs_history dihitung ulang tiap toggle).
-        self._change_cache: "OrderedDict[tuple, tuple]" = OrderedDict()
+        self._change_cache: OrderedDict[tuple, tuple] = OrderedDict()
         # v2.12.0: memo display (df + ✓/__FP) & memo fingerprint — objek
         # STABIL per objek df supaya cache fit DataTable tetap kena;
         # nilai ✓ disegarkan tiap pemakaian (state bisa berubah).
@@ -597,7 +606,7 @@ class AnomaliView(QWidget):
         # tak pernah cocok lagi → jalur 'balik baseline' yang dulu ~30 ms
         # (v2.9.0) membesar ~350 ms. LRU mengembalikan objek display PERSIS
         # sama per state → cache fit kena seperti sebelum v2.12.0.
-        self._disp_cache: "OrderedDict[int, tuple]" = OrderedDict()
+        self._disp_cache: OrderedDict[int, tuple] = OrderedDict()
         self._fps_src: pd.DataFrame | None = None
         self._fps: pd.Series | None = None
         # v2.12.4: funnel LOKAL kolom non-ctx (SEMUA kolom ber-funnel;
@@ -607,7 +616,7 @@ class AnomaliView(QWidget):
         # v2.12.4: memo hasil mask per (objek display, state filter) —
         # objek mask stabil per state → cache fit DataTable tetap kena
         # (pola _disp_cache LRU; A→B→A memakai ulang objek A).
-        self._mask_cache: "OrderedDict[tuple, pd.DataFrame]" = OrderedDict()
+        self._mask_cache: OrderedDict[tuple, pd.DataFrame] = OrderedDict()
         ctx.data_ready.connect(self._on_data_ready)
         ctx.filters_changed.connect(self._on_filters_changed)
         # v2.10.2: pembanding siap / pilihan combo berganti → kolom
@@ -731,6 +740,10 @@ class AnomaliView(QWidget):
                         self._ctx.set_status,
                         "Menghitung perubahan vs bulan lalu"):
                     df = change_vs_history(df, baseline, self._ctx.config)
+                    # v2.13.0: PROFIL "+ Baru" (pasangan tidak ada/nol di
+                    # bulan pembanding) — dibaca dari kolom BULAN LALU yang
+                    # baru dihitung; idempoten, vektor, murah.
+                    df = annotate_profile_vs_history(df)
                 self._change_cache[key] = (weakref.ref(src), df)
                 while len(self._change_cache) > 4:
                     self._change_cache.popitem(last=False)
