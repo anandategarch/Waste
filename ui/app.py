@@ -446,8 +446,13 @@ class MainWindow(QMainWindow):
         self.ctx.followup_changed.connect(self._on_followup_changed)
 
     def _on_status(self, text: str, kind: str) -> None:
+        # v2.12.1 (perf): setStyleSheet HANYA saat warna berganti —
+        # parse QSS + repolish per pesan (2-6 pesan per interaksi tombol)
+        # terukur beberapa ms sia-sia di mesin lambat; teks tetap tiap kali.
         color = {"done": "#16a34a", "error": "#dc2626"}.get(kind, "#64748b")
-        self._lbl_status.setStyleSheet(f"color:{color};")
+        if color != getattr(self, "_status_color", None):
+            self._lbl_status.setStyleSheet(f"color:{color};")
+            self._status_color = color
         self._lbl_status.setText(text)
 
     def _on_data_ready(self) -> None:

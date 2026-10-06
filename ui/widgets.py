@@ -121,6 +121,7 @@ class DataTable(QTableView):
         self._last_fit_w = -1  # v2.6.1: lebar viewport saat fit terakhir
         self._narrow_hide: list[str] = []  # v2.6.1: kolom boleh-disebunyikan
         self._visible_cols: list[str] | None = None  # v2.7.0: kolom tampak (V26-C1)
+        self._no_wrap = False  # v2.12.1: tabel lebar/raksasa — wrap mati, tinggi seragam
         self._in_fit = False  # v2.7.0 (V26-M4): guard umpan-balik sectionResized
         # v2.9.0 (perf): cache hasil _auto_columns+_refit_rows LRU per objek
         # df — unfilter/drill bolak-balik mengembalikan df PERSIS sama (memo
@@ -167,8 +168,8 @@ class DataTable(QTableView):
         baris ke-2 terpotong; diukur via QFontMetrics.boundingRect)."""
         model = self._model
         n = model.rowCount()
-        if not (0 < n <= 3000):
-            return
+        if not (0 < n <= 3000) or self._no_wrap:
+            return  # v2.12.1: wrap mati → tinggi seragam, tak ada yang diukur
         fm = self.fontMetrics()
         default_h = self.verticalHeader().defaultSectionSize()
         self._in_fit = True  # jangan picu sectionResized-handler saat setRowHeight
@@ -178,7 +179,11 @@ class DataTable(QTableView):
                 for c in range(model.columnCount()):
                     if self.isColumnHidden(c):  # v2.6.1: kolom responsif tak dihitung
                         continue
-                    text = str(model.data(model.index(r, c), Qt.DisplayRole) or "")
+                    # v2.12.1: text_at = jalur bulk snapshot numpy —
+                    # pengukuran tinggi menyentuh SEMUA sel (mis. 797×41 =
+                    # 32 ribu); data() Qt (pandas iat per sel) terukur 1,7
+                    # dtk utk itu di data asli — terlalu lambat di jalur klik.
+                    text = model.text_at(r, c)
                     if not text:
                         continue
                     w = self.columnWidth(c) - 18  # padding sel (QSS 3px 8px)
@@ -260,7 +265,17 @@ class DataTable(QTableView):
         # VERTIKAL (tinggi baris tetap default). Ganti strategi: wrap mati +
         # elide kanan '…' — tooltip sel tetap menampilkan teks penuh
         # (konvensi terdokumentasi), baris tidak terpotong.
-        big = df is not None and len(df) > 3000
+        # v2.12.1 (perf): tabel LEBAR juga (>24 kolom tampak — mis. rekap
+        # Follow Up 797×41): pengukuran tinggi per sel = 32 ribu panggilan
+        # ukur (~0,35 dtk sandbox, 2-4× di laptop user) DI TIAP render;
+        # sel hari/angka tidak pernah wrap — hanya kolom teks panjang yang
+        # ter-elide (tooltip penuh, konvensi yang sama). Diukur: lepas ✓ di
+        # tab Follow Up (refresh per klik) 0,53 dtk → ~0,14 dtk.
+        big = df is not None and (
+            len(df) > 3000
+            or (self._visible_cols is not None
+                and len(self._visible_cols) > 24))
+        self._no_wrap = big
         self.setWordWrap(not big)
         self.setTextElideMode(
             Qt.TextElideMode.ElideRight if big
@@ -408,7 +423,8 @@ class DataTable(QTableView):
             floors.append(min(max(min_w, hw), cap))
             w = hw
             for r in range(n_rows):
-                text = str(model.data(model.index(r, c)) or "")
+                # v2.12.1: text_at = jalur bulk snapshot (lihat _refit_rows).
+                text = model.text_at(r, c)
                 if len(text) > 60:
                     text = text[:60]
                 w = max(w, fm.horizontalAdvance(text) + 26)
@@ -498,7 +514,8 @@ class DataTable(QTableView):
         if self._default_order and self._src_key is not None \
                 and self._src_df is not None:
             heights = ([self.rowHeight(r) for r in range(model.rowCount())]
-                       if 0 < model.rowCount() <= 3000 else [])
+                       if 0 < model.rowCount() <= 3000 and not self._no_wrap
+                       else [])
             self._fit_cache[self._src_key] = {
                 "ref": weakref.ref(self._src_df),
                 "avail": avail,

@@ -12,6 +12,9 @@ tabel per-ranking; kolom rasio ditampilkan sebagai persen.
 """
 from __future__ import annotations
 
+import weakref
+from collections import OrderedDict
+
 import pandas as pd
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -524,13 +527,20 @@ class AnomaliView(QWidget):
         self._batch_filters = False
         # v2.10.2: versi cache enrich (df + baseline + data/history) —
         # kombinasi sama → salinan berkolom sama dipakai ulang.
-        self._change_key: tuple | None = None
-        self._change_df: pd.DataFrame | None = None
+        # v2.12.1: satu slot → LRU weakref (bolak-balik antar state filter
+        # dulu selalu miss → change_vs_history dihitung ulang tiap toggle).
+        self._change_cache: "OrderedDict[tuple, tuple]" = OrderedDict()
         # v2.12.0: memo display (df + ✓/__FP) & memo fingerprint — objek
         # STABIL per objek df supaya cache fit DataTable tetap kena;
         # nilai ✓ disegarkan tiap pemakaian (state bisa berubah).
-        self._disp_src: pd.DataFrame | None = None
-        self._disp: pd.DataFrame | None = None
+        # v2.12.1: SATU SLOT → LRU-8 per objek df (weakref — pola cache fit
+        # DataTable). Diukur profil data asli: toggle slicer bolak-balik
+        # antar 2 state filter → memo satu slot SELALU miss → fingerprint
+        # md5 + salinan df + objek display BARU → kunci cache fit (id objek)
+        # tak pernah cocok lagi → jalur 'balik baseline' yang dulu ~30 ms
+        # (v2.9.0) membesar ~350 ms. LRU mengembalikan objek display PERSIS
+        # sama per state → cache fit kena seperti sebelum v2.12.0.
+        self._disp_cache: "OrderedDict[int, tuple]" = OrderedDict()
         self._fps_src: pd.DataFrame | None = None
         self._fps: pd.Series | None = None
         ctx.data_ready.connect(self._on_data_ready)
@@ -544,6 +554,12 @@ class AnomaliView(QWidget):
         ctx.followup_changed.connect(self._on_followup_changed)
 
     def _on_data_ready(self) -> None:
+        # v2.12.1: memo display/fingerprint/enrich berasal dataset LAMA —
+        # kosongkan (weakref objek tua mati sendiri, tapi salinan display
+        # yang dipegang kuat dilepas instan supaya memori tak menumpuk).
+        self._disp_cache.clear()
+        self._fps_src, self._fps = None, None
+        self._change_cache.clear()
         if self.isVisible():
             self.refresh()
         else:
@@ -636,15 +652,19 @@ class AnomaliView(QWidget):
         if baseline is not None and not df.empty:
             key = (id(df), self._ctx.data_version, self._ctx.history_version,
                    id(baseline))
-            if self._change_key != key:
+            cached = self._change_cache.get(key)
+            if cached is not None and cached[0]() is df:
+                self._change_cache.move_to_end(key)
+                df = cached[1]
+            else:
+                src = df  # weakref menunjuk SUMBER (df ter-reassign di bawah)
                 with busy_feedback(
                         self._ctx.set_status,
                         "Menghitung perubahan vs bulan lalu"):
                     df = change_vs_history(df, baseline, self._ctx.config)
-                self._change_key = key
-                self._change_df = df
-            else:
-                df = self._change_df
+                self._change_cache[key] = (weakref.ref(src), df)
+                while len(self._change_cache) > 4:
+                    self._change_cache.popitem(last=False)
         # Filter kategori perubahan (LOKAL view — bukan state): hanya
         # menyaring tampilan, KPI/label lain tidak terpengaruh.
         cat = self._cb_change.currentData() if self._cb_change.isEnabled() \
@@ -691,30 +711,54 @@ class AnomaliView(QWidget):
     # ------------------------------------------------------------
     def _fps_for(self, df: pd.DataFrame) -> pd.Series:
         """Sidik jari baris (memo per objek df — nilai tak pernah berubah
-        utk df yang sama; pola memo objek cache fit)."""
+        utk df yang sama; pola memo objek cache fit).
+
+        v2.12.1: bila memo dataset PENUH tersedia (dibangun PipelineWorker
+        di thread background — pola search_blob), sidik jari subset =
+        reindex O(len) (~2 ms) BUKAN md5 ulang (~40-100 ms per state).
+        Memo penuh TIDAK dipicu dari sini (bangun malas 25.901 baris di
+        thread UI = beku) — fallback md5 lokal bila belum ada."""
         if self._fps_src is not df or self._fps is None:
-            self._fps = fingerprint_series(df)
+            full = None
+            c = self._ctx
+            if (getattr(c, "_fp_series", None) is not None
+                    and c._fp_version == c.data_version
+                    and c._fp_series.index.is_unique
+                    and df.index.is_unique
+                    and df.index.isin(c._fp_series.index).all()):
+                full = c._fp_series
+            if full is not None:
+                self._fps = full.reindex(df.index)
+            else:
+                self._fps = fingerprint_series(df)
             self._fps_src = df
         return self._fps
 
     def _display_df(self, df: pd.DataFrame) -> pd.DataFrame:
         """Salinan df + kolom ✓ (bool) + __FP — OBJEK STABIL per objek df
-        (memo) supaya cache fit DataTable tetap kena antar-refresh;
-        nilai ✓ SELALU disegarkan dari state saat dipakai.
+        (LRU-8 + weakref, v2.12.1) supaya cache fit DataTable tetap kena
+        ANTAR-STATE (toggle slicer A→B→A: objek display A dipakai ulang,
+        bukan salinan baru tiap kali); nilai ✓ SELALU disegarkan dari
+        state saat dipakai.
 
         Kontrak 'konsumen hanya membaca' utk objek LRU anomali / enriched
         tetap utuh: mutasi centang hanya menyentuh salinan view ini."""
-        if self._disp_src is not df or self._disp is None:
-            fps = self._fps_for(df)
-            disp = df.copy()
-            disp[FP_COL] = fps
-            disp.insert(0, CHECK_COL, fps.isin(self._ctx.followup_set()))
-            self._disp_src, self._disp = df, disp
-        else:
-            # objek sama dipakai ulang — segarkan nilai centang saja
-            self._disp[CHECK_COL] = self._disp[FP_COL].isin(
+        key = id(df)
+        entry = self._disp_cache.get(key)
+        if entry is not None and entry[0]() is df and entry[1] is not None:
+            self._disp_cache.move_to_end(key)
+            disp = entry[1]
+            disp[CHECK_COL] = disp[FP_COL].isin(
                 self._ctx.followup_set())
-        return self._disp
+            return disp
+        fps = self._fps_for(df)
+        disp = df.copy()
+        disp[FP_COL] = fps
+        disp.insert(0, CHECK_COL, fps.isin(self._ctx.followup_set()))
+        self._disp_cache[key] = (weakref.ref(df), disp)
+        while len(self._disp_cache) > 8:
+            self._disp_cache.popitem(last=False)
+        return disp
 
     def _on_check_toggled(self, row: int, checked: bool) -> None:
         """Klik sel ✓ → state ctx (broadcast → badge tab + tab Follow Up)."""

@@ -157,6 +157,16 @@ class AppContext(QObject):
             self._search_blob_version = self.data_version
         else:
             self._search_blob = None
+        # v2.12.1 (perf): sidik jari follow-up dibangun PipelineWorker di
+        # thread background (pola search_blob) — di sini cuma diambil;
+        # bila tak ada (jalur test / set_dataset manual) → bangun malas
+        # di fingerprints() seperti sebelumnya.
+        fps = summary.get("followup_fps")
+        if isinstance(fps, pd.Series) and fps.index.equals(df.index):
+            self._fp_series = fps
+            self._fp_version = self.data_version
+        else:
+            self._fp_series = None
         self.reset_filters()  # juga meng-invalidasi memo filtered_df
         self.data_ready.emit()
         # v2.7.0 (V26-H2): siarkan reset filter SEKALI SETELAH data_ready —

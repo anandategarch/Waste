@@ -299,6 +299,17 @@ class PandasTableModel(QAbstractTableModel):
         # tabel habis di pemformatan string yang sama berulang-ulang).
         # Di-invalidasi set_dataframe & sort (baris berganti isi).
         self._texts: dict[tuple[int, int], str] = {}
+        # v2.12.1 (perf): snapshot numpy 2D (dtype object) dari _df —
+        # data()/_row_tint/_row_key membaca sel via arr[r, c] (~0,1 µs)
+        # BUKAN pandas iat (~24 µs/sel: _get_value → _ixs → boxing).
+        # Diukur profil data asli: pengukuran fit tabel Follow Up
+        # 797×41 memanggil data() 42.927× = 1,7 dtk habis di iat;
+        # snapshot dibangun sekali (~2-4 ms per set_dataframe/sort) dan
+        # disinkronkan saat nilai dimutasi in-place (notify_column_changed
+        # / setData ✓). Fallback iat bila snapshot gagal dibangun.
+        self._arr: np.ndarray | None = None
+        self._status_idx: int | None = None
+        self._rebuild_snapshot()
         # v2.12.0: konfigurasi follow-up (opt-in).
         self._check_col: str | None = None
         self._fp_col: str | None = None
@@ -306,6 +317,48 @@ class PandasTableModel(QAbstractTableModel):
         self._hl_red: set[tuple[str, str]] = set()
         self._hl_amber: set[tuple[str, str]] = set()
         self._hl_cols: set[str] = set()
+
+    def _rebuild_snapshot(self) -> None:
+        """Bangun ulang snapshot numpy dari _df (setelah set/reset/sort)."""
+        try:
+            self._arr = (self._df.to_numpy(dtype=object)
+                         if self._df is not None and self._df.shape[1] > 0
+                         else None)
+            self._cols = list(self._df.columns)
+        except Exception:  # noqa: BLE001 — df eksotis → fallback iat
+            self._arr = None
+            self._cols = list(self._df.columns) if self._df is not None else []
+
+    def _cell_value(self, row: int, col: int):
+        """Nilai mentah sel dari SNAPSHOT numpy (bulk path — v2.12.1).
+
+        Hanya untuk jalur pengukuran massal (text_at); data() Qt tetap
+        membaca pandas iat supaya mutasi df langsung tetap terlihat."""
+        if self._arr is not None and self._arr.ndim == 2:
+            try:
+                return self._arr[row, col]
+            except IndexError:
+                return None
+        try:
+            return self._df.iat[row, col]
+        except Exception:  # noqa: BLE001 — di luar bentuk
+            return None
+
+    def text_at(self, row: int, col: int) -> str:
+        """Teks DisplayRole satu sel — JALUR BULK pengukuran (v2.12.1).
+
+        Dipakai DataTable._auto_columns/_refit_rows: profil data asli
+        membuktikan 42.927 panggilan data() (797×41 + sampel lebar) = 1,7 dtk
+        habis di pandas iat per sel; snapshot numpy + cache _texts memotong
+        ~20×. Jalur Qt data() TIDAK diganti (paint hanya menyentuh sel
+        terlihat ~ratusan — iat di sana murah dan tetap hidup terhadap
+        mutasi langsung). Kolom centang → teks kosong (konsisten data())."""
+        if not (0 <= col < len(self._cols)) or not (0 <= row < len(self._df)):
+            return ""
+        if self._check_col is not None and self._cols[col] == self._check_col:
+            return ""
+        return self._cell_text(row, col, self._cols[col],
+                               self._cell_value(row, col))
 
     # ------------------------------------------------------------
     # API
@@ -315,6 +368,8 @@ class PandasTableModel(QAbstractTableModel):
         self._df = df if df is not None else pd.DataFrame()
         self._texts = {}
         self._fp_idx = None  # v2.12.0: posisi kolom kunci bisa bergeser
+        self._status_idx = None  # v2.12.1
+        self._rebuild_snapshot()
         self.endResetModel()
 
     @property
@@ -351,9 +406,22 @@ class PandasTableModel(QAbstractTableModel):
                          | {c for _k, c in self._hl_amber})
 
     def notify_column_changed(self, name: str) -> None:
-        """dataChanged SATU kolom penuh (nilai berubah in-place)."""
+        """dataChanged SATU kolom penuh (nilai berubah in-place).
+
+        v2.12.1: kolom di snapshot numpy disinkronkan dari df (view memutasi
+        ``m.dataframe[name] = ...`` lalu memanggil ini — tanpa sinkronisasi
+        snapshot memegang nilai LAMA) + teks sel kolom itu dibatalkan."""
         if name in self._df.columns and len(self._df) > 0:
             col = self._df.columns.get_loc(name)
+            if self._arr is not None and self._arr.shape == self._df.shape:
+                try:
+                    self._arr[:, col] = self._df[name].to_numpy()
+                except Exception:  # noqa: BLE001
+                    self._rebuild_snapshot()
+            elif self._arr is not None:
+                self._rebuild_snapshot()
+            self._texts = {k: v for k, v in self._texts.items()
+                           if k[1] != col}
             self.dataChanged.emit(self.index(0, col),
                                   self.index(len(self._df) - 1, col))
 
@@ -368,7 +436,10 @@ class PandasTableModel(QAbstractTableModel):
                 self._fp_idx = self._df.columns.get_loc(self._fp_col)
             except KeyError:
                 return None
-        return str(self._df.iat[row, self._fp_idx])
+        try:
+            return str(self._df.iat[row, self._fp_idx])
+        except Exception:  # noqa: BLE001
+            return None
 
     # ------------------------------------------------------------
     # Qt model contract
@@ -413,11 +484,15 @@ class PandasTableModel(QAbstractTableModel):
         return text
 
     def data(self, index: QModelIndex, role=Qt.DisplayRole):
-        if not index.isValid() or not (0 <= index.row() < len(self._df)):
+        if (not index.isValid() or not (0 <= index.row() < len(self._df))
+                or not (0 <= index.column() < len(self._df.columns))):
             return None
         row, col = index.row(), index.column()
         col_name = self._df.columns[col]
-        value = self._df.iat[row, col]
+        try:
+            value = self._df.iat[row, col]  # live-view (mutasi df terlihat)
+        except Exception:  # noqa: BLE001
+            return None
 
         # v2.12.0 — kolom centang: CheckState dari nilai bool; teks kosong
         # (bukan 'True'/'False'); tooltip menjelaskan aksi.
@@ -521,6 +596,11 @@ class PandasTableModel(QAbstractTableModel):
             self._df.iat[index.row(), index.column()] = bool(checked)
         except Exception:  # noqa: BLE001 — df aneh (readonly view dsb.)
             return False
+        if self._arr is not None and self._arr.shape == self._df.shape:
+            try:
+                self._arr[index.row(), index.column()] = bool(checked)
+            except IndexError:
+                pass
         self.dataChanged.emit(index, index)
         self.check_toggled.emit(index.row(), bool(checked))
         return True
@@ -528,7 +608,14 @@ class PandasTableModel(QAbstractTableModel):
     def _row_tint(self, row: int) -> QColor | None:
         """Tint baris sesuai ANOMALY STATUS (bila kolom ada)."""
         if "ANOMALY STATUS" in self._df.columns:
-            status = str(self._df.iat[row, self._df.columns.get_loc("ANOMALY STATUS")])
+            if (self._status_idx is None
+                    or self._status_idx >= len(self._df.columns)
+                    or self._df.columns[self._status_idx] != "ANOMALY STATUS"):
+                self._status_idx = self._df.columns.get_loc("ANOMALY STATUS")
+            try:
+                status = str(self._df.iat[row, self._status_idx])
+            except Exception:  # noqa: BLE001
+                return None
             tint = STATUS_COLORS.get(status, (None, None))[1]
             if tint:
                 return QColor(tint)
@@ -554,6 +641,7 @@ class PandasTableModel(QAbstractTableModel):
                 "_k", ascending=ascending, na_position="last"
             ).drop(columns="_k")
             self._texts = {}  # urutan baris berganti → cache teks basi
+            self._rebuild_snapshot()  # v2.12.1: urutan baris berganti
             self.endResetModel()
         except Exception:
             # V26-L3: sort gagal (dtype aneh dsb.) — jangan senyap total,

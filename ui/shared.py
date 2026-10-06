@@ -37,7 +37,7 @@ def bundle_res_dir() -> Path:
     return _bundle_dir()
 
 
-APP_VERSION = "2.12.0"
+APP_VERSION = "2.12.1"
 APP_TITLE = "Waste Anomaly Detection"
 
 
@@ -119,8 +119,26 @@ def _apply_filters(df: pd.DataFrame, filters: dict | None,
     search_blob (v2.9.0): hasil _build_search_blob(df) — semua filter
       baris-local (mask per baris) sehingga urutan search vs dropdown
       bebas; hasil identik dgn jalur per-kolom, hanya 10× lebih cepat.
+    v2.12.1 (perf): TANPA salinan awal df. Dulu `filtered = df.copy()`
+      dijalankan SEBELUM mask apa pun (25.901×53 = ~21 ms sia-sia di SETIAP
+      ganti filter, termasuk saat kembali ke state TANPA filter — jalur
+      'bersihkan/hapus filter' di laptop user ±2× lebih lambat). Kini:
+      mask bekerja langsung di df (tiap mask memang menghasilkan frame
+      baru) dan state kosong mengembalikan df ASLI (kontrak lama tetap:
+      pemanggil hanya MEMBACA hasil — mask/slice kolom tetap objek baru).
     """
-    filtered = df.copy()
+    # v2.12.1: fast path — tak ada kerja: kembalikan df apa adanya
+    # (konsumen hanya membaca; anomali_df/KPI/display semuanya read-only
+    # atau bekerja di salinannya sendiri).
+    search_active = bool((search or "").strip())
+    filters_active = any(
+        v is not None and not (isinstance(v, list) and not v)
+        for v in (filters or {}).values())
+    day_active = day_min is not None and day_max is not None
+    if not search_active and not filters_active and not day_active:
+        return df
+
+    filtered = df
     col_map = {
         "cabang": "NAMA RESTO", "item": "NAMA BARANG", "jenis": "JENIS",
         "keterangan": "KETERANGAN", "status": "ANOMALY STATUS",

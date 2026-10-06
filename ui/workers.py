@@ -22,6 +22,7 @@ from waste_anomaly.pipeline import run_pipeline
 from waste_anomaly.utils import load_config
 
 from .shared import _build_search_blob
+from waste_anomaly.followup import fingerprint_series
 
 
 def _extra_sheets(df: pd.DataFrame, key_akhir: int, log) -> dict:
@@ -99,6 +100,14 @@ class PipelineWorker(QThread):
             if summary.get("success") and summary.get("df") is not None:
                 self.progress.emit("Menyiapkan pencarian cepat ...", 99)
                 summary["search_blob"] = _build_search_blob(summary["df"])
+                # v2.12.1 (perf): sidik jari follow-up dataset penuh juga
+                # dibangun DI THREAD WORKER (~0,3 dtk data asli 25.901
+                # baris) — sebelumnya dibangun malas di thread UI saat
+                # pertama dibutuhkan (prune data_ready / buka tab Follow
+                # Up / centang pertama) = beku sesaat pasca-pipeline.
+                self.progress.emit("Menyiapkan data follow-up ...", 99)
+                summary["followup_fps"] = fingerprint_series(
+                    summary["df"])
         except Exception as e:  # noqa: BLE001 — semua error ke UI, bukan crash thread
             self.failed.emit(str(e), traceback.format_exc())
             return

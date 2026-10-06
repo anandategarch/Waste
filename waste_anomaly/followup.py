@@ -154,59 +154,69 @@ def suspicious_days(df: pd.DataFrame,
         amber: {(fp, kolom_hari)} — nilai ≥ 2× rata-rata hari AKTIF
                (fallback AVG), nilai > 0, bukan hari merah —
                lonjakan sekunder (amber).
+
+    v2.12.1 (perf): vektor numpy — dulu loop Python 797×31 dengan
+    ``.iloc`` per sel (~68 ms data asli, laptop user 2-4× lebih lambat,
+    dipanggil tiap render tab Follow Up); kini mask array + loop hanya
+    atas HITUNGAN hasil (merah per baris, amber per sel lolos —
+    semantik PERSIS: NaN/0/negatif dikecualikan, rday dari HARI
+    TERSANGKA → fallback HARI MAX, amber tak menimpa hari merah).
     """
     red: dict[str, int] = {}
     amber: set[tuple[str, str]] = set()
-    if len(df) == 0:
+    n = len(df)
+    if n == 0:
         return red, amber
     dcols = day_cols(df)
     if not dcols:
         return red, amber
+    fps_arr = (fps.to_numpy(dtype=object) if isinstance(fps, pd.Series)
+               else np.asarray(list(fps), dtype="object"))
     # hari tersangka per BARIS (pola pop-up detail _day_map): HARI
     # TERSANGKA (hanya baris kandidat anomali) → fallback HARI MAX
     # (hari nilai terbesar) — fallback level NILAI, bukan level kolom.
     ters = hmax = None
     if "HARI TERSANGKA" in df.columns:
-        ters = pd.to_numeric(df["HARI TERSANGKA"], errors="coerce")
+        ters = pd.to_numeric(
+            df["HARI TERSANGKA"], errors="coerce").to_numpy(dtype="float64")
     if "HARI MAX" in df.columns:
-        hmax = pd.to_numeric(df["HARI MAX"], errors="coerce")
+        hmax = pd.to_numeric(
+            df["HARI MAX"], errors="coerce").to_numpy(dtype="float64")
+    # rday per baris: 0 = tidak ada (dulu None); valid = 1..31.
+    rday = np.zeros(n, dtype="int64")
+    for series in (ters, hmax):
+        if series is None:
+            continue
+        ok = np.isfinite(series) & (series >= 1) & (series <= 31)
+        m = (rday == 0) & ok
+        if m.any():
+            rday[m] = series[m].astype("int64")
+    dcol_set = set(dcols)
+    for i in np.nonzero(rday > 0)[0]:
+        rd = int(rday[i])
+        if str(rd) in dcol_set:
+            red[str(fps_arr[i])] = rd
     # basis rata-rata: hari aktif lebih adil (hari kosong tak menarik
     # rata-rata turun) — fallback AVG bulanan.
     avg = None
     for src in ("AVG AKTIF", "AVG"):
         if src in df.columns:
-            avg = pd.to_numeric(df[src], errors="coerce")
+            avg = pd.to_numeric(df[src], errors="coerce").to_numpy(
+                dtype="float64")
             break
-    vals = df[dcols].apply(pd.to_numeric, errors="coerce")
-    for i in range(len(df)):
-        fp = str(fps.iloc[i])
-        rday: int | None = None
-        for series in (ters, hmax):
-            if series is None:
-                continue
-            try:
-                v = series.iloc[i]
-                if v == v and 1 <= float(v) <= 31:  # not NaN + rentang hari
-                    rday = int(v)
-                    break
-            except (TypeError, ValueError):
-                continue
-        if rday is not None and str(rday) in dcols:
-            red[fp] = rday
-        base = None
-        if avg is not None:
-            b = avg.iloc[i]
-            if b == b and b > 0:  # not NaN + positif (guard: base 0 → semua amber)
-                base = float(b)
-        if base is not None:
-            threshold = 2.0 * base
-            row_vals = vals.iloc[i]
-            for c in dcols:
-                v = row_vals[c]
-                if v == v and v > 0 and float(v) >= threshold:
-                    day = int(c)
-                    if day != rday:
-                        amber.add((fp, c))
+    if avg is not None:
+        vals = df[dcols].apply(pd.to_numeric, errors="coerce").to_numpy(
+            dtype="float64")
+        # base > 0 (guard: base 0 → semua amber); nilai > 0; NaN tak lolos.
+        base_ok = np.isfinite(avg) & (avg > 0)
+        mask = (np.isfinite(vals) & (vals > 0)
+                & (vals >= 2.0 * avg[:, None]) & base_ok[:, None])
+        # hari merah dikecualikan (rday 0 = tak ada hari merah → semua
+        # boleh, sama dgn `day != None` di implementasi lama).
+        day_nums = np.array([int(c) for c in dcols], dtype="int64")
+        mask &= day_nums[None, :] != rday[:, None]
+        for i, j in zip(*np.nonzero(mask)):
+            amber.add((str(fps_arr[i]), dcols[j]))
     return red, amber
 
 
