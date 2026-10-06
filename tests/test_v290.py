@@ -220,16 +220,18 @@ def _make_hari_view(df=None):
 class TestHariView:
 
     def test_mainwindow_5_tab_dengan_hari(self):
-        # v2.12.0: 4 → 5 tab (+ Follow Up di indeks 1 — Hari bergeser ke 2).
+        # v2.12.0: 4 → 5 tab (+ Follow Up di indeks 1 — Hari bergeser ke
+        # 2). v2.13.1: 5 → 6 (+ Scorecard Cabang di indeks 3).
         from ui.app import MainWindow
         _qapp()
         win = MainWindow()
-        assert win._tabs.count() == 5
+        assert win._tabs.count() == 6
         assert win._tabs.tabText(1).split(" (")[0] == "Follow Up"
         assert win._tabs.tabText(2) == "Hari Mencurigakan"
-        titles = [win._tabs.tabText(i).split(" (")[0] for i in range(5)]
+        titles = [win._tabs.tabText(i).split(" (")[0] for i in range(6)]
         assert titles == ["Anomali", "Follow Up", "Hari Mencurigakan",
-                          "Banding Periode", "Pipeline"]
+                          "Scorecard Cabang", "Banding Periode",
+                          "Pipeline"]
         win.close()
 
     def test_render_tabel_bukti_default(self):

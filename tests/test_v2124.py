@@ -120,11 +120,13 @@ class TestSidebarDihapus:
             win.close()
 
     def test_lima_tab_utuh(self):
+        # v2.13.1: 5 → 6 tab (+ Scorecard Cabang setelah Hari Mencurigakan)
         win = self._win()
         try:
             labels = [win._tabs.tabText(i) for i in range(win._tabs.count())]
             assert labels == ["Anomali", "Follow Up", "Hari Mencurigakan",
-                              "Banding Periode", "Pipeline"]
+                              "Scorecard Cabang", "Banding Periode",
+                              "Pipeline"]
         finally:
             win.close()
 

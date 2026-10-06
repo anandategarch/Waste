@@ -720,7 +720,7 @@ class TestV2120MainWindow:
                     assert win._tabs.tabText(idx) == "Follow Up"
                     # ikut urutan iterasi closeEvent (kontrak _views)
                     names = [n for n, _v in win._views]
-                    assert "Follow Up" in names and len(names) == 5
+                    assert "Follow Up" in names and len(names) == 6  # v2.13.1 +Scorecard
                 finally:
                     win.close()
             finally:

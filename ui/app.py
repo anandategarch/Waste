@@ -46,6 +46,7 @@ from .view_followup import FollowUpView
 from .view_hari import HariView
 from .view_periode import PeriodeView
 from .view_pipeline import PipelineView
+from .view_scorecard import ScorecardView
 from .workers import ExportWorker
 from waste_anomaly.followup import followup_path
 
@@ -194,6 +195,10 @@ class MainWindow(QMainWindow):
             ("Anomali", AnomaliView(self.ctx)),
             ("Follow Up", FollowUpView(self.ctx)),
             ("Hari Mencurigakan", HariView(self.ctx)),
+            # v2.13.1: tab Scorecard Cabang (urutan kunjungan audit +
+            # kartu pendukung: top kerugian, pola hari kalender, hari
+            # sistemik) — setelah Hari Mencurigakan, sebelum Banding.
+            ("Scorecard Cabang", ScorecardView(self.ctx)),
             ("Banding Periode", PeriodeView(self.ctx)),
             ("Pipeline", PipelineView(self.ctx)),
         ]

@@ -53,7 +53,8 @@ DATA_VIEWS = {
 # v2.9.0: 3 → 4 tab (+ Hari Mencurigakan); v2.12.0: 4 → 5 (+ Follow Up,
 # tepat setelah Anomali — alur buruan → tindak lanjut)
 VIEW_TAB_TITLES = [
-    "Anomali", "Follow Up", "Hari Mencurigakan", "Banding Periode", "Pipeline",
+    "Anomali", "Follow Up", "Hari Mencurigakan", "Scorecard Cabang",
+    "Banding Periode", "Pipeline",
 ]
 
 
@@ -163,22 +164,23 @@ class TestUiStructure:
         src = inspect.getsource(MainWindow._build_body)
         for title in VIEW_TAB_TITLES:
             assert f'("{title}"' in src, f"tab '{title}' tidak dibangun"
-        # 5 judul (v2.12.0), tidak ada duplikat
-        assert len(VIEW_TAB_TITLES) == len(set(VIEW_TAB_TITLES)) == 5
+        # 6 judul (v2.13.1 + Scorecard Cabang), tidak ada duplikat
+        assert len(VIEW_TAB_TITLES) == len(set(VIEW_TAB_TITLES)) == 6
 
     def test_window_dibangun_offscreen(self):
-        """MainWindow + 5 view ter-instantiate tanpa display (smoke).
+        """MainWindow + 6 view ter-instantiate tanpa display (smoke).
 
         Judul dibandingkan tanpa badge '(N)' — bila followup.json ada
         isinya (app pernah dijalankan di repo), tab Follow Up tampil
-        'Follow Up (N)' yang tetap sah."""
+        'Follow Up (N)' yang tetap sah. v2.13.1: + tab Scorecard Cabang
+        (setelah Hari Mencurigakan)."""
         import sys
         from PySide6.QtWidgets import QApplication
         app = QApplication.instance() or QApplication(sys.argv)
         from ui.app import MainWindow
         win = MainWindow()
-        assert win._tabs.count() == 5
-        for i in range(5):
+        assert win._tabs.count() == 6
+        for i in range(6):
             assert win._tabs.tabText(i).split(" (")[0] == VIEW_TAB_TITLES[i]
         win.close()
 

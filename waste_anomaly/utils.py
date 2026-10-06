@@ -116,6 +116,9 @@ _DEFAULT_CONFIG = {
         "STATUS_PRIORITAS": 8, "STATUS_POTENSI": 5, "STATUS_REVIEW": 3,
         "S2_SCORE2_MIN": 4, "S10_BOM_MIN": 0.10,
         "QUADRANT_THRESHOLD": 0.50,
+        # v2.13.0 — profil baris: jumlah hari aktif minimum agar PROFIL
+        # "Tiap Hari" (di bawahnya: "Kadang"; tepat 1: "Sekali Ini").
+        "PROFIL_DAILY_MIN": 20,
     },
     "non_handling_list": [
         "Alat/ Mesin", "Cancel Nota", "Eksternal", "Internal", "Over Stock",

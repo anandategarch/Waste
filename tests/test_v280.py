@@ -35,7 +35,8 @@ REMOVED_VIEW_FILES = [
 ]
 REMOVED_TAB_TITLES = ["Uang", "Peer", "Kualitas Data", "Jelajah", "Waktu"]
 EXPECTED_TAB_TITLES = ["Anomali", "Follow Up", "Hari Mencurigakan",
-                        "Banding Periode", "Pipeline"]  # v2.12.0: +Follow Up
+                        "Scorecard Cabang", "Banding Periode",
+                        "Pipeline"]  # v2.13.1: +Scorecard Cabang
 
 
 def _qapp():
@@ -93,12 +94,13 @@ class TestHapusLimaView:
                 f"waste_anomaly/{fname} masih ada — dead code pasca-hapus view")
 
     def test_tab_tepat_lima_dengan_judul_benar(self):
-        # v2.12.0: 4 → 5 tab (+ Follow Up, tepat setelah Anomali —
-        # alur buruan anomali → tindak lanjut). Judul dibandingkan tanpa
-        # badge '(N)' (badge muncul bila ada centangan tersimpan).
+        # v2.12.0: 4 → 5 tab (+ Follow Up, tepat setelah Anomali — alur
+        # buruan anomali → tindak lanjut). v2.13.1: 5 → 6 (+ Scorecard
+        # Cabang). Judul dibandingkan tanpa badge '(N)' (badge muncul bila
+        # ada centangan tersimpan).
         win = _make_window()
         try:
-            assert win._tabs.count() == 5
+            assert win._tabs.count() == 6
             for i in range(win._tabs.count()):
                 base = win._tabs.tabText(i).split(" (")[0]
                 assert base == EXPECTED_TAB_TITLES[i]

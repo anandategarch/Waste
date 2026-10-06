@@ -17,7 +17,7 @@ Penggunaan dasar (tanpa UI):
 Untuk UI (PySide6), jalankan:  python ui_app.py
 """
 
-__version__ = "2.12.5"
+__version__ = "2.13.1"
 __all__ = ["pipeline", "loader", "stages", "signals", "exporter", "utils",
            "temporal", "priority", "data_quality", "period_compare",
            "period_history"]
