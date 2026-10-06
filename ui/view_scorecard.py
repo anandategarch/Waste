@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from waste_anomaly.data_quality import run_checks
 from waste_anomaly.insights import (
     coverage_report,
     money_ranking,
@@ -204,6 +205,28 @@ class ScorecardView(QWidget):
         wl.addWidget(self._weekday_table, 1)
         sl.addWidget(wcard, 1)
 
+        dqcard = Card(side)
+        dql = QVBoxLayout(dqcard)
+        dql.setContentsMargins(12, 10, 12, 10)
+        dql.setSpacing(6)
+        dqt = WLabel("🧪 Kualitas Data — pemeriksaan otomatis", dqcard)
+        dqt.setObjectName("cardTitle")
+        dqt.setToolTip(
+            "Hasil pemeriksaan data quality (dulu hanya di export/Excel).\n"
+            "warning = patut dibersihkan (satuan kembar, kapitalisasi beda);\n"
+            "info = konteks normal (baris placeholder, Benford).")
+        dql.addWidget(dqt)
+        self._lbl_dq = WLabel("", dqcard)
+        self._lbl_dq.setObjectName("hint")
+        dql.addWidget(self._lbl_dq)
+        self._dq_table = DataTable(dqcard)
+        self._dq_table.setMinimumHeight(80)
+        self._dq_table.setup_header_filters(
+            {}, self._page_apply("dq"), self._page_state("dq"),
+            all_cols=True, skip=())
+        dql.addWidget(self._dq_table, 1)
+        sl.addWidget(dqcard, 1)
+
         scard = Card(side)
         scl = QVBoxLayout(scard)
         scl.setContentsMargins(12, 10, 12, 10)
@@ -244,6 +267,7 @@ class ScorecardView(QWidget):
         # funnel LOKAL per tabel tampilan (pola v2.12.4).
         self._lfilters: dict[str, dict[str, list]] = {
             "scorecard": {}, "money": {}, "weekday": {}, "sistemik": {},
+            "dq": {},
         }
 
         # Reaksi state — lazy (hitung hanya saat tab terlihat; data baru
@@ -301,9 +325,19 @@ class ScorecardView(QWidget):
                     if isinstance(self._ctx.summary, dict) else "")
                 wk = weekday_real(df, label, self._ctx.key_akhir)
                 sysd = systemic_days(df, self._ctx.key_akhir)
+                checks = run_checks(df, key_akhir=self._ctx.key_akhir)
+                dq = pd.DataFrame([
+                    {"SEVERITY": r.severity, "KODE": r.code,
+                     "TEMUAN": r.title, "JUMLAH": r.count,
+                     "PENJELASAN": r.detail}
+                    for r in checks
+                ]) if checks else pd.DataFrame(
+                    columns=["SEVERITY", "KODE", "TEMUAN", "JUMLAH",
+                             "PENJELASAN"])
                 self._memo = {
                     "scorecard": sc, "intensity": inten, "money": money,
                     "weekday": wk, "sistemik": sysd, "label": label,
+                    "dq": dq,
                 }
             self._memo_ver = ver
 
@@ -336,6 +370,18 @@ class ScorecardView(QWidget):
                 "0 hari sistemik bulan ini — semua lonjakan bersifat "
                 "lokal per cabang (itu sendiri informasi: tidak ada "
                 "kejadian bersama).")
+
+        dq = self._apply_local("dq", m.get("dq"))
+        self._dq_table.set_dataframe(dq)
+        if dq is None or dq.empty:
+            self._lbl_dq.setText("Semua pemeriksaan bersih.")
+        else:
+            n_warn = int((dq["SEVERITY"] == "warning").sum()) \
+                if "SEVERITY" in dq.columns else 0
+            self._lbl_dq.setText(
+                f"{len(dq)} temuan ({n_warn} warning) — hover judul "
+                "kolom utk istilah; klik 2× sel PENJELASAN utk baca "
+                "lengkap (tooltip).")
 
         # KPI
         inten = m["intensity"]
@@ -390,7 +436,8 @@ class ScorecardView(QWidget):
         src = self._memo.get(page)
         table = {"scorecard": self._table, "money": self._money_table,
                  "weekday": self._weekday_table,
-                 "sistemik": self._sistemik_table}[page]
+                 "sistemik": self._sistemik_table,
+                 "dq": self._dq_table}[page]
         if isinstance(src, pd.DataFrame) and not src.empty:
             table.set_dataframe(self._apply_local(page, src))
         self._ctx.set_status(

@@ -57,6 +57,8 @@ PROFIL_BARU_SUFFIX = " — Baru"
 
 # Default pola: sama kunci grup peer stage 6 (grup perbandingan konsisten).
 _PEER_KEYS = ("NAMA BARANG", "JENIS", "KETERANGAN", "SOURCE DATA")
+# Nama publik (dipakai insights.money_ranking — grup persentil peer sama).
+PEER_KEYS = _PEER_KEYS
 
 # Kolom output yang SELALU dibuat modul ini.
 PROFILE_COLS = [

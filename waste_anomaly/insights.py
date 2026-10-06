@@ -40,6 +40,8 @@ import calendar
 import numpy as np
 import pandas as pd
 
+from .profile import PEER_KEYS
+
 # Nama bulan Indonesia + varian → nomor bulan (konsisten dgn period_history).
 _BULAN = {
     "januari": 1, "jan": 1, "februari": 2, "feb": 2, "maret": 3, "mar": 3,
@@ -59,7 +61,7 @@ INTENSITY_COLS = [
 MONEY_COLS = [
     "NAMA RESTO", "NAMA BARANG", "JENIS", "KETERANGAN", "SATUAN",
     "TOTAL", "TIPIKAL CABANG LAIN", "KELEBIHAN", "RASIO",
-    "PROFIL", "ANOMALY STATUS",
+    "DI ATAS % CABANG", "PROFIL", "ANOMALY STATUS",
 ]
 COVERAGE_COLS = [
     "NAMA RESTO", "ITEM UMUM TAK INPUT", "CONTOH ITEM",
@@ -176,8 +178,11 @@ def money_ranking(df: pd.DataFrame, top_n: int = 100) -> pd.DataFrame:
 
     Kolom MONEY_COLS; RASIO = TOTAL ÷ tipikal (×, unit-free). Hanya baris
     dgn KELEBIHAN terisi (peer ≥ 3 + TOTAL > 0) DAN kelebihan > 0.
-    Sort KELEBIHAN desc; SATUAN tampil (campuran GR/PCS jujur — funnel
-    SATUAN bisa memilah)."""
+    DI ATAS % CABANG (⑨ riset R1) = persentil TOTAL baris ini di antara
+    peer AKTIF item sama (100 = paling boros, 0 = paling hemat — tahan
+    skew, unit-free; padanan robust z-score dgn istilah awam). Sort
+    KELEBIHAN desc; SATUAN tampil (campuran GR/PCS jujur — funnel SATUAN
+    bisa memilah)."""
     if not isinstance(df, pd.DataFrame) or df.empty:
         return _empty(MONEY_COLS)
     if "KELEBIHAN" not in df.columns:
@@ -190,6 +195,25 @@ def money_ranking(df: pd.DataFrame, top_n: int = 100) -> pd.DataFrame:
     total = pd.to_numeric(sub["TOTAL"], errors="coerce")
     tip = pd.to_numeric(sub["PEER MEDIAN (AKTIF)"], errors="coerce")
     rasio = (total / tip.where(tip > 0)).to_numpy()
+    # ⑨ persentil di antara peer AKTIF (grup sama dgn KELEBIHAN) —
+    # rank pct di subset aktif, di-map balik ke baris terpilih.
+    pctile = np.full(len(sub), np.nan)
+    if all(k in df.columns for k in PEER_KEYS):
+        total_all = _num(df, "TOTAL").fillna(0.0)
+        aktif = (total_all > 0).to_numpy()
+        keys = [df[k].astype(str) for k in PEER_KEYS]
+        work = pd.DataFrame({k.name: k.to_numpy() for k in keys})
+        work["_total"] = total_all.to_numpy()
+        wact = work[aktif]
+        grp = wact.groupby(list(work.columns[:-1]), sort=False,
+                           dropna=False)["_total"]
+        rank_pct = grp.rank(pct=True, method="average")
+        # posisi subset aktif → baris sub (indeks label asli)
+        pos_map = pd.Series(
+            rank_pct.to_numpy(),
+            index=np.flatnonzero(aktif)).reindex(
+            np.flatnonzero(mask.to_numpy()))
+        pctile = pos_map.to_numpy(dtype=float) * 100.0
     out = pd.DataFrame({
         "NAMA RESTO": sub["NAMA RESTO"].to_numpy() if "NAMA RESTO" in sub.columns else "",
         "NAMA BARANG": sub["NAMA BARANG"].to_numpy() if "NAMA BARANG" in sub.columns else "",
@@ -200,6 +224,7 @@ def money_ranking(df: pd.DataFrame, top_n: int = 100) -> pd.DataFrame:
         "TIPIKAL CABANG LAIN": tip.to_numpy(),
         "KELEBIHAN": kelebihan[mask].to_numpy(),
         "RASIO": rasio,
+        "DI ATAS % CABANG": pctile,
         "PROFIL": sub["PROFIL"].to_numpy() if "PROFIL" in sub.columns else "",
         "ANOMALY STATUS": (sub["ANOMALY STATUS"].to_numpy()
                            if "ANOMALY STATUS" in sub.columns else ""),

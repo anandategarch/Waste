@@ -477,6 +477,70 @@ def _check_zero_rows(df: pd.DataFrame, key_akhir) -> CheckResult | None:
 # MAIN ENTRY
 # ============================================================
 
+def _check_benford(df: pd.DataFrame, key_akhir) -> CheckResult | None:
+    """Benford — pola digit pertama nilai waste vs distribusi teoretis.
+
+    Alat forensik KASAR: deviasi ringan umum di data operasional
+    (terukur data asli: digit-1 +6,4 pp — lemah). Dibenderai sebagai
+    INFO bila deviasi terbesar ≥ 10 pp (bukan bukti apa pun — hanya
+    tanda bahwa nilai tidak sepenuhnya 'alami', mis. banyak angka
+    bulat input manual). Sampel < 500 nilai aktif → skip (tak bermakna).
+    """
+    import numpy as np
+
+    day_cols = [c for c in df.columns
+                if str(c).strip().isdigit() and 1 <= int(str(c)) <= 31]
+    if not day_cols or len(df) < 100:
+        return None
+    try:
+        if key_akhir is not None:
+            ka = int(key_akhir)
+            day_cols = [c for c in day_cols if int(str(c)) <= ka]
+        vals = df[day_cols].apply(pd.to_numeric, errors="coerce")
+        stacked = vals.to_numpy().ravel()
+        stacked = stacked[~pd.isna(stacked) & (stacked > 0)]
+        if len(stacked) < 500:
+            return None
+        # digit pertama dari representasi bulat (konvensi forensik:
+        # skala bebas — 0,5 → '5'; 12,3 → '1')
+        ints = np.abs(np.round(stacked * 1000)).astype(np.int64)
+        ints = ints[ints > 0]
+        text = pd.Series(ints.astype(str))
+        lead = text.str.lstrip("0").str[0]
+        lead = lead[lead.isin([str(d) for d in range(1, 10)])]
+        n = len(lead)
+        if n < 500:
+            return None
+        obs = lead.value_counts(normalize=True)
+        worst_d, worst_pp = 0, 0.0
+        for d in range(1, 10):
+            ben = np.log10(1 + 1.0 / d)
+            diff = abs(float(obs.get(str(d), 0.0)) - ben) * 100.0
+            if diff > worst_pp:
+                worst_d, worst_pp = d, diff
+        if worst_pp < 10.0:
+            return None  # deviasi ringan = normal, tidak perlu dibenderai
+        sample = [f"digit {d}: teramati {float(obs.get(str(d), 0)) * 100:.1f}% "
+                  f"vs wajar {np.log10(1 + 1 / d) * 100:.1f}%"
+                  for d in (worst_d, 1)]
+        return CheckResult(
+            code="DQ_BENFORD",
+            severity="info",
+            title="Digit pertama nilai menyimpang dari pola wajar (Benford)",
+            detail=(
+                f"Dari {n:,} nilai waste aktif, pola digit pertama "
+                f"menyimpang terbesar {worst_pp:.1f} pp pada digit "
+                f"{worst_d}. Alat forensik KASAR — deviasi BUKAN bukti "
+                "manipulasi (angka input manual/bulat juga menyimpang); "
+                "pakai sebagai pintu mengecek, bukan kesimpulan."
+            ),
+            count=n,
+            sample=tuple(sample),
+        )
+    except Exception:  # noqa: BLE001 — defensif sesuai kontrak modul
+        return None
+
+
 _ALL_CHECKS = (
     _check_negative,
     _check_nbsp_satuan,
@@ -485,6 +549,7 @@ _ALL_CHECKS = (
     _check_waste_no_bom,
     _check_split_source,
     _check_zero_rows,
+    _check_benford,
 )
 
 
