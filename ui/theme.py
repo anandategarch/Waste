@@ -24,15 +24,6 @@ STATUS_COLORS: dict[str, tuple[str, str]] = {
 SELECT_BG = "#ccfbf1"        # teal-100 — seleksi baris
 SELECT_FG = "#134e4a"
 
-# v2.11.0 — chip slicer aktif per-status memakai warna severity tabel
-# (chip STATUS tercentang merah/oranye/amber/hijau — konsisten palet).
-_SLICER_SEV_QSS = "".join(
-    f'QToolButton#slicerChip[sev="{name}"]:checked {{ '
-    f"background: {bg}; color: {fg}; border: 1px solid {fg}; "
-    f"font-weight: 600; }} "
-    for name, (fg, bg) in STATUS_COLORS.items()
-)
-
 
 QSS = f"""
 * {{
@@ -133,24 +124,6 @@ QProgressBar {{
     min-height: 18px;
 }}
 QProgressBar::chunk {{ background: {C_ACCENT}; border-radius: 5px; }}
-
-/* v2.11.0 — chip slicer (SlicerBar): datar, teks muted; tercentang =
-   teal (JENIS/KETERANGAN) atau warna severity (STATUS, via [sev]) */
-QToolButton#slicerChip {{
-    background: #ffffff;
-    color: {C_TEXT_MUTED};
-    border: 1px solid {C_BORDER};
-    border-radius: 6px;
-    padding: 3px 10px;
-}}
-QToolButton#slicerChip:hover {{ background: #f8fafc; border-color: #94a3b8; }}
-QToolButton#slicerChip:checked {{
-    background: {SELECT_BG};
-    color: {SELECT_FG};
-    border: 1px solid {C_ACCENT};
-    font-weight: 600;
-}}
-{_SLICER_SEV_QSS}
 
 QPlainTextEdit#log {{
     background: #0b1220;

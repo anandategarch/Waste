@@ -168,14 +168,17 @@ class TestCloseEvent:
 
 
 # ============================================================
-# FIX 4 (V26-H2) — sidebar sinkron setelah re-run
+# FIX 4 (V26-H2) — state filter direset oleh set_dataset
+# (v2.12.4: sidebar dihapus — kontrak turun ke level state: tanpa
+# widget yang bisa berbohong, reset TETAP harus jujur utk funnel)
 # ============================================================
 
 class TestSidebarDesync:
     def test_widget_reset_setelah_set_dataset(self):
-        """Re-run pipeline (set_dataset me-reset filter) → combo cabang
-        '(Semua)', kotak cari kosong, chip default — widget tidak lagi
-        menampilkan filter lama padahal state None."""
+        """Re-run pipeline (set_dataset me-reset filter) → state filter
+        kembali kosong (V26-H2 — dulu combo/search sidebar menampilkan
+        filter lama padahal state None; kini funnel header membaca state
+        langsung, kontraknya: set_dataset = reset total)."""
         _ensure_app()
         from ui.app import MainWindow
 
@@ -190,19 +193,16 @@ class TestSidebarDesync:
         win = MainWindow()
         try:
             win.ctx.set_dataset(df.copy(), {"key_akhir": 31, "total_rows": 3})
-            # Simulasi user: pilih cabang + ketik pencarian
-            win._cb_cabang.setCurrentText("R1")
-            win._ent_search.setText("exp")
-            win._apply_search_now()  # flush debounce 300ms
+            # Simulasi funnel kolom NAMA RESTO (drill-down path)
+            win.ctx.set_filter("cabang", "R1")
             assert win.ctx.active_filters.get("cabang") == "R1"
-            assert win.ctx.search == "exp"
             # Re-run pipeline → dataset baru (filter direset oleh state)
             win.ctx.set_dataset(df.copy(), {"key_akhir": 31, "total_rows": 3})
-            # Sidebar harus jujur kembali (V26-H2)
-            assert win._cb_cabang.currentText() == "(Semua)"
-            assert win._ent_search.text() == ""
-            assert win._lbl_chips.text() == "Tidak ada filter aktif."
+            # State harus jujur kembali kosong (V26-H2)
             assert win.ctx.active_filters.get("cabang") is None
+            assert not any(win.ctx.active_filters.values()), (
+                "set_dataset harus me-reset SEMUA filter (funnel tidak "
+                "menampilkan filter basi)")
         finally:
             win.close()
 

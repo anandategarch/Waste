@@ -872,15 +872,12 @@ class TestHariViewHistory:
         assert "NILAI BULAN LALU" in df.columns
         assert "RASIO VS BULAN LALU" in df.columns
         assert df.iloc[0]["NILAI BULAN LALU"] == 194.0
-        # hint menyebut pembanding aktif
-        assert "Pembanding aktif" in view._hint.text()
 
     def test_tanpa_pembanding_kolom_hilang(self):
         view, _ = self._view()
         view._refresh_table()
         df = view._table._model.dataframe
         assert "NILAI BULAN LALU" not in df.columns
-        assert "Pembanding aktif" not in view._hint.text()
 
     def test_set_history_merender_ulang_bila_terlihat(self, tmp_path):
         from waste_anomaly.period_history import load_history_file

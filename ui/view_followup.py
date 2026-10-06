@@ -28,6 +28,13 @@ v2.12.3:
   negatif otomatis merah; judul alias 'TOTAL BULAN LALU', kanonik tetap).
 - Funnel filter di header tabel = filter LOKAL tampilan (shortlist,
   ✓ dan ekspor tak tersentuh) + tombol sort di menu funnel.
+
+v2.12.4:
+- Funnel di SEMUA kolom (termasuk hari 1-31 — permintaan user
+  "harusnya semua kolom punya filter"); masih filter lokal tampilan.
+- Hint '💡 🔴 merah = hari tersangka...' DIHAPUS (permintaan user:
+  kalimat penjelas dihapus dari UI — keterangan warna pindah ke
+  tooltip judul kartu).
 """
 from __future__ import annotations
 
@@ -58,11 +65,10 @@ from .state import AppContext
 from .view_anomali import DetailDialog
 from .widgets import Card, DataTable, WLabel, busy_feedback
 
-# v2.12.3: kolom ber-funnel di header tab Follow Up — filter LOKAL
-# tampilan (BUKAN ctx: shortlist menetap by design — hanya menyaring
-# yang tampil; daftar ✓ & ekspor tak tersentuh).
-_HF_LOCAL = ("JENIS", "SOURCE DATA", "KETERANGAN", "NAMA BARANG",
-              "NAMA RESTO", "SATUAN")
+# v2.12.4: funnel di header = SEMUA kolom (termasuk hari 1–31) — filter
+# LOKAL tampilan (BUKAN ctx: shortlist menetap by design — hanya
+# menyaring yang tampil; daftar ✓ & ekspor tak tersentuh).
+_HF_SKIP = (CHECK_COL, FP_COL)
 
 
 class FollowUpView(QWidget):
@@ -93,10 +99,12 @@ class FollowUpView(QWidget):
             "halaman Cabang/Item: satu centang = baris ANOMALI resto/item "
             "itu masuk — baris Normal tidak ikut, jadi umumnya tepat 1 "
             "baris per item per resto).\nDaftar ini TIDAK terpengaruh "
-            "filter/slicer — baris yang sudah dikumpulkan menetap.\nKolom "
-            "TOTAL BULAN LALU + PERUBAHAN % muncul bila file pembanding "
-            "dimuat di tab Banding Periode.\nTertutup aplikasi pun aman: "
-            "daftar tersimpan otomatis (followup.json).")
+            "filter — baris yang sudah dikumpulkan menetap.\nHari "
+            "mencurigakan diberi warna: merah = hari tersangka (puncak); "
+            "amber = nilai ≥ 2× rata-rata hari aktif.\nKolom TOTAL "
+            "BULAN LALU + PERUBAHAN % muncul bila file pembanding dimuat "
+            "di tab Banding Periode.\nTertutup aplikasi pun aman: daftar "
+            "tersimpan otomatis (followup.json).")
         cl.addWidget(title)
 
         # Bar kontrol: info jumlah + total + tombol ekspor & kosongkan.
@@ -131,21 +139,15 @@ class FollowUpView(QWidget):
         self._table.model().set_row_key_column(FP_COL)
         self._table.model().check_toggled.connect(self._on_check_toggled)
         # v2.12.3: funnel filter LOKAL tampilan + opsi sort di header.
+        # v2.12.4: SEMUA kolom ber-funnel (skip ✓ + __FP).
         self._table.setup_header_filters(
-            {c: c for c in _HF_LOCAL},
-            self._on_header_filter, self._hfilters.get)
+            None, self._on_header_filter, self._hfilters.get,
+            all_cols=True, skip=_HF_SKIP)
         # Klik baris = pop-up detail (komponen sama dgn tab Anomali).
         self._table.selectionModel().currentRowChanged.connect(
             lambda *_: self._on_selection())
         cl.addWidget(self._table, 1)
 
-        hint = WLabel(
-            "💡 🔴 merah = hari tersangka (puncak) · 🟠 amber = ≥ 2× rata-rata hari aktif · "
-            "klik baris = detail · funnel di judul = filter tampilan (daftar tak berubah) · "
-            "lepas centang ✓ = keluarkan · sort klik judul",
-            card)
-        hint.setObjectName("hint")
-        cl.addWidget(hint)
         lay.addWidget(card, 1)
 
         # Pop-up detail — instance dipakai ulang (pola tab Anomali).
@@ -280,8 +282,8 @@ class FollowUpView(QWidget):
             if shown is not disp:
                 self._table.set_dataframe(shown, visible_cols=visible)
             self._table.setup_header_filters(
-                {c: c for c in _HF_LOCAL if c in disp.columns},
-                self._on_header_filter, self._hfilters.get)
+                None, self._on_header_filter, self._hfilters.get,
+                all_cols=True, skip=_HF_SKIP)
             n = len(shown)
             total = (pd.to_numeric(rows.get("TOTAL"), errors="coerce")
                      .fillna(0).sum() if "TOTAL" in rows.columns else 0)

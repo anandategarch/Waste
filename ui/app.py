@@ -1,14 +1,16 @@
 """app.py — MainWindow + main() (v2.6.0 rebuild PySide6).
 
 Struktur:
-- Toolbar: toggle sidebar filter (☰ Filter / Ctrl+Shift+F, v2.8.0) +
-  Export Excel + Bantuan
-- Sidebar kiri: filter (cari, cabang, status, keterangan, rentang hari,
-  chip aktif) + profil filter tersimpan — bisa disembunyikan/dimunculkan
-  (v2.8.0: tabel & chart memakai lebar penuh saat sidebar disembunyikan)
-- QTabWidget 4 view (v2.9.0: + Hari Mencurigakan): Anomali (default) ·
-  Hari Mencurigakan · Banding Periode · Pipeline — render lazy per-view (H2)
+- Toolbar: Export Excel + Bantuan
+- QTabWidget 5 view (v2.9.0: + Hari Mencurigakan): Anomali (default) ·
+  Follow Up · Hari Mencurigakan · Banding Periode · Pipeline — render
+  lazy per-view (H2)
 - Status bar: pesan status + hitungan baris/anomali permanen
+
+v2.12.4: sidebar filter kiri (v2.8.0) DIHAPUS — filter kini lewat
+funnel di judul kolom tabel (SEMUA kolom, v2.12.4) + tombol
+✕ Hapus Filter di tab Anomali & Hari. Tabel memakai lebar penuh
+jendela.
 """
 from __future__ import annotations
 
@@ -17,23 +19,15 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
-    QComboBox,
     QDialog,
-    QHBoxLayout,
-    QInputDialog,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QScrollArea,
-    QSpinBox,
-    QSplitter,
     QStatusBar,
     QTabWidget,
     QTextBrowser,
@@ -41,15 +35,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from waste_anomaly.filters import (
-    delete_profile,
-    list_profile_names,
-    restore_filters,
-    save_profile,
-    snapshot_filters,
-)
 from waste_anomaly.logging_setup import setup_logging
-from waste_anomaly.utils import load_config, norm_text
+from waste_anomaly.utils import load_config
 
 from .shared import APP_DIR, APP_TITLE, APP_VERSION, bundle_res_dir, fmt_id
 from .state import AppContext
@@ -59,15 +46,8 @@ from .view_followup import FollowUpView
 from .view_hari import HariView
 from .view_periode import PeriodeView
 from .view_pipeline import PipelineView
-from .widgets import Card, WLabel
 from .workers import ExportWorker
 from waste_anomaly.followup import followup_path
-
-# v2.11.0: chip slicer bisa memfilter beberapa nilai sekaligus (list) —
-# combo sidebar (single-select) menampilkan placeholder ini alih-alih
-# berbohong '(Semua)' padahal filter aktif. Memilih nilai lain dari combo
-# = override jadi single (perilaku lama utuh).
-_MULTI_TAG = "▪ beberapa dipilih"
 
 _HELP_HTML = """
 <h2>Panduan Singkat</h2>
@@ -90,16 +70,17 @@ _HELP_HTML = """
 <h3>Tab Follow Up (v2.12.0)</h3>
 <ul>
 <li><b>Centang baris mencurigakan</b> (kolom ✓ di tab Anomali) → baris terkumpul di tab <b>Follow Up</b> dalam format rekap: TOTAL · AVG · MAX · SOURCE DATA · JENIS · KETERANGAN · NAMA BARANG · NAMA RESTO · SATUAN · hari 1–31.</li>
-<li>Tombol <b>☑ Centang yang tampil</b> (tab Anomali): centang massal hasil filter/slicer saat ini; <b>lepas centang ✓</b> (di kedua tab) = keluarkan baris. Centang <b>✓ juga ada di tab Banding Periode</b> (halaman Cabang/Item/Baru): satu centang = semua baris anomali resto/item terkait masuk ke daftar Follow Up yang sama.</li>
+<li>Tombol <b>☑ Centang yang tampil</b> (tab Anomali): centang massal hasil filter saat ini; <b>lepas centang ✓</b> (di kedua tab) = keluarkan baris. Centang <b>✓ juga ada di tab Banding Periode</b> (halaman Cabang/Item/Baru): satu centang = semua baris anomali resto/item terkait masuk ke daftar Follow Up yang sama.</li>
 <li><b>Hari mencurigakan diberi warna</b>: 🔴 merah = hari tersangka (puncak) · 🟠 amber = ≥ 2× rata-rata hari aktif.</li>
 <li>Daftar <b>menetap terhadap filter</b> dan <b>tersimpan otomatis</b> (followup.json) — aman walau aplikasi ditutup; baris yang tak ada lagi di data baru otomatis dipangkas.</li>
 <li><b>💾 Ekspor Excel</b>: format rekap + kolom kosong PIC/KATEGORI/PENYEBAB utk diisi petugas (konvensi REKAP MENTAH) — hari mencurigakan ikut berwarna.</li>
 </ul>
-<h3>Filter (sidebar kiri)</h3>
+<h3>Filter (funnel di judul kolom tabel)</h3>
 <ul>
-<li>Cari, cabang, status, keterangan, rentang hari — berlaku di tab Anomali & Hari Mencurigakan.</li>
-<li>Profil filter bisa disimpan & dipulihkan.</li>
-<li>Sidebar bisa disembunyikan (☰ Filter / Ctrl+Shift+F) — tabel memakai lebar penuh.</li>
+<li>SEMUA kolom tabel punya ikon funnel di ujung kanan judulnya — klik = menu: <b>daftar nilai bercentang</b> (angka = jumlah baris), kotak cari, tombol <b>Urut Naik/Turun</b>, dan <b>☑ Pilih Semua</b> (lepas filter kolom itu).</li>
+<li>Funnel berwarna <b>merah</b> = kolom itu sedang terfilter. Berlaku di tab Anomali, Hari Mencurigakan, Follow Up (filter tampilan saja — daftar tak berubah), dan Banding Periode (per halaman).</li>
+<li>Di tab Anomali & Hari: kolom NAMA RESTO / NAMA BARANG / JENIS / KETERANGAN / STATUS berbagi state yang sama antar kedua tab (dan KPI ikut terfilter); kolom lain = filter tampilan tabel itu saja.</li>
+<li>Tombol <b>✕ Hapus Filter</b> (tab Anomali & Hari) = lepas SEMUA filter sekaligus.</li>
 </ul>
 <h3>Tab lain</h3>
 <ul>
@@ -122,8 +103,10 @@ pembanding memakai <b>NAMA BULAN</b> (bukan kata "Pembanding"); tabel banding
 menampilkan <b>JENIS</b> (SUSUT/TRIAL/WASTE) per baris cabang/item; tombol
 <b>⤢ Perbesar Tabel</b> & <b>⛶ Layar Penuh</b> kini juga ada di tab
 <b>Anomali</b>; daftar file banding <b>auto-ciut</b> setelah dimuat (tabel
-hasil langsung tinggi penuh); slicer & label dipadatkan supaya tabel
-anomali lebih tinggi.</li>
+hasil langsung tinggi penuh).</li>
+<li><b>v2.12.4</b> — sidebar filter kiri & slicer chip <b>dihapus</b>:
+semua filter lewat <b>funnel di judul kolom</b> (SEMUA kolom punya),
+tabel memakai lebar & tinggi penuh.</li>
 </ul>
 <h3>💡 Bingung istilah?</h3>
 <p><b>Hover (arahkan mouse & diamkan)</b> di: judul kolom tabel, label metrik pop-up,
@@ -137,7 +120,8 @@ baris; tabel tanpa cap baris.</p>
 
 
 class MainWindow(QMainWindow):
-    """Jendela utama: toolbar + sidebar filter (bisa di-hide) + 4 tab view + status bar."""
+    """Jendela utama: toolbar + 5 tab view + status bar (v2.12.4: tanpa
+    sidebar — filter via funnel judul kolom, tabel lebar penuh)."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -148,9 +132,6 @@ class MainWindow(QMainWindow):
                               followup_path=followup_path())
         self._export_worker: ExportWorker | None = None
         self._exporting = False
-        # v2.8.0: ukuran splitter tersimpan saat sidebar disembunyikan
-        # (dipulihkan saat sidebar dimunculkan kembali).
-        self._sidebar_sizes: list[int] = []
 
         # Ukuran awal: clamp ke layar (M15) + posisi tengah
         screen = self.screen().availableGeometry() if self.screen() else None
@@ -166,12 +147,6 @@ class MainWindow(QMainWindow):
         self._build_body()
         self._build_statusbar()
         self._wire_context()
-
-        # Ctrl+F → fokus kotak Cari
-        shortcut = QAction(self)
-        shortcut.setShortcut("Ctrl+F")
-        shortcut.triggered.connect(self._focus_search)
-        self.addAction(shortcut)
 
     # ------------------------------------------------------------
     # BANGUN UI
@@ -204,25 +179,11 @@ class MainWindow(QMainWindow):
         act_help.triggered.connect(self._show_help)
         bar.addAction(act_help)
 
-        # v2.8.0: toggle sidebar filter — disembunyikan → QTabWidget (tabel/
-        # chart) memakai lebar penuh jendela; dimunculkan → ukuran splitter
-        # tersimpan dipulihkan. Checkable supaya status terlihat jelas.
-        act_filter = QAction("☰ Filter", self)
-        act_filter.setCheckable(True)
-        act_filter.setChecked(True)
-        act_filter.setShortcut("Ctrl+Shift+F")
-        act_filter.setToolTip(
-            "Sembunyikan/tampilkan sidebar filter (Ctrl+Shift+F) — "
-            "saat disembunyikan, tabel & chart memakai lebar penuh.")
-        act_filter.toggled.connect(self._toggle_sidebar)
-        bar.addAction(act_filter)
-        self._act_filter = act_filter
-
     def _build_body(self) -> None:
-        split = QSplitter(Qt.Orientation.Horizontal, self)
-        self._split = split  # v2.8.0: referensi utk toggle sidebar
-        split.addWidget(self._build_sidebar())
-        self._tabs = QTabWidget(split)
+        # v2.12.4: sidebar filter kiri DIHAPUS (permintaan user — filter
+        # lewat funnel judul kolom) → QTabWidget langsung jadi central
+        # widget: tabel memakai lebar PENUH jendela tanpa splitter.
+        self._tabs = QTabWidget(self)
         # v2.8.0: 8 → 5 view (Uang/Peer/Kualitas Data dihapus); v2.8.1:
         # 5 → 3 view — Jelajah & Waktu dihapus total bersama modul chart/
         # dashboard (keputusan user). Cek data_quality TETAP jalan di
@@ -248,165 +209,7 @@ class MainWindow(QMainWindow):
         # normal; jendela sempit memakai tombol scroll.
         self._tabs.setElideMode(Qt.TextElideMode.ElideRight)
         self._tabs.setUsesScrollButtons(True)
-        split.setSizes([300, 1200])
-        # v2.6.1: sidebar menyusut PROPORSIONAL saat window kecil (dulu
-        # menahan ~300px & memiskinkan view → tabel kehilangan ruang; di
-        # window 1024 viewport tabel cuma 662px). Rasio 3:12 ≈ 300:1200.
-        split.setStretchFactor(0, 3)
-        split.setStretchFactor(1, 12)
-        self._sidebar.setMinimumWidth(230)
-        self._sidebar.setMaximumWidth(380)
-        self.setCentralWidget(split)
-
-    def _build_sidebar(self) -> QWidget:
-        self._sidebar = QScrollArea()
-        self._sidebar.setWidgetResizable(True)
-        host = QWidget()
-        lay = QVBoxLayout(host)
-        lay.setContentsMargins(8, 8, 8, 8)
-        lay.setSpacing(8)
-
-        # ===== Kartu FILTER =====
-        filt = Card(host)
-        fl = QVBoxLayout(filt)
-        fl.setContentsMargins(12, 10, 12, 10)
-        fl.setSpacing(8)
-        t = WLabel("🔍 Filter Drill-Down", filt)
-        t.setObjectName("cardTitle")
-        fl.addWidget(t)
-
-        fl.addWidget(WLabel("Cari (semua kolom):", filt))
-        self._ent_search = QLineEdit(filt)
-        self._ent_search.setPlaceholderText("ketik lalu tunggu 0,3 detik…")
-        self._ent_search.setClearButtonEnabled(True)
-        # v2.9.0: tooltip kontrol filter (permintaan user — semua istilah
-        # mudah dicerna).
-        self._ent_search.setToolTip(
-            "Cari bebas di SEMUA kolom: nama cabang, nama item, alasan…\n"
-            "Berlaku otomatis setelah Anda berhenti mengetik 0,3 detik.\n"
-            "Kosongkan (tombol ✕) untuk menghapus pencarian.")
-        self._search_timer = QTimer(self)
-        self._search_timer.setSingleShot(True)
-        self._search_timer.setInterval(300)
-        self._search_timer.timeout.connect(self._apply_search)
-        self._ent_search.textChanged.connect(
-            lambda _t: self._search_timer.start())
-        self._ent_search.returnPressed.connect(self._apply_search_now)
-        fl.addWidget(self._ent_search)
-
-        fl.addWidget(WLabel("Cabang:", filt))
-        self._cb_cabang = QComboBox(filt)
-        self._cb_cabang.setMaximumWidth(260)
-        self._cb_cabang.setToolTip(
-            "Pilih satu cabang (drill-down) — '(Semua)' = tanpa filter cabang.\n"
-            "Pilihan selalu dari data PENUH, tidak menyusut saat ada filter lain.")
-        self._cb_cabang.currentIndexChanged.connect(
-            lambda _i: self._on_combo("cabang", self._cb_cabang))
-        fl.addWidget(self._cb_cabang)
-
-        fl.addWidget(WLabel("Status anomali:", filt))
-        self._cb_status = QComboBox(filt)
-        self._cb_status.setToolTip(
-            "Prioritas Tinggi = skor ≥ 8 (paling layak diperiksa) ·\n"
-            "Potensi Anomali = skor 5–7 · Perlu Review = skor 3–4 ·\n"
-            "Normal = skor < 3 (kebanyakan baris).")
-        for s in ("(Semua)", "Prioritas Tinggi", "Potensi Anomali",
-                  "Perlu Review", "Normal"):
-            self._cb_status.addItem(s)
-        self._cb_status.currentIndexChanged.connect(
-            lambda _i: self._on_combo("status", self._cb_status))
-        fl.addWidget(self._cb_status)
-
-        fl.addWidget(WLabel("Keterangan (alasan):", filt))
-        self._cb_ket = QComboBox(filt)
-        self._cb_ket.setMaximumWidth(260)
-        self._cb_ket.setToolTip(
-            "Alasan pencatatan waste (kolom KETERANGAN):\n"
-            "mis. Alat/Mesin, Cancel Nota, Over Stock, Eksternal…")
-        self._cb_ket.currentIndexChanged.connect(
-            lambda _i: self._on_combo("keterangan", self._cb_ket))
-        fl.addWidget(self._cb_ket)
-
-        rng = QWidget(filt)
-        rl = QVBoxLayout(rng)
-        rl.setContentsMargins(0, 0, 0, 0)
-        rl.setSpacing(4)
-        self._chk_hari = QCheckBox("Rentang hari kejadian (HARI MAX)", rng)
-        self._chk_hari.setToolTip(
-            "Batasi anomali yang NILAI TERBESARNYA jatuh di rentang tanggal ini.\n"
-            "Contoh: 13–15 = hanya anomali yang puncaknya di tanggal 13, 14, atau 15.\n"
-            "Gunakan bersama tab Hari Mencurigakan untuk mengisolasi tanggal.")
-        self._chk_hari.toggled.connect(self._on_hari_toggled)
-        rl.addWidget(self._chk_hari)
-        spins = QWidget(rng)
-        sl = QHBoxLayout(spins)
-        sl.setContentsMargins(8, 0, 0, 0)
-        sl.setSpacing(6)
-        self._spin_dmin = QSpinBox(spins)
-        self._spin_dmax = QSpinBox(spins)
-        for s in (self._spin_dmin, self._spin_dmax):
-            s.setRange(1, 31)
-            s.setToolTip("Tanggal awal/akhir (1–31) rentang hari kejadian.")
-            s.valueChanged.connect(self._on_hari_changed)
-        sl.addWidget(self._spin_dmin)
-        sl.addWidget(WLabel("–", spins))
-        sl.addWidget(self._spin_dmax)
-        sl.addStretch(1)
-        rl.addWidget(spins)
-        fl.addWidget(rng)
-
-        self._btn_clear = QPushButton("✕ Hapus Semua Filter", filt)
-        self._btn_clear.setToolTip(
-            "Hapus semua filter, pencarian, dan rentang hari —\n"
-            "kembali ke tampilan anomali penuh.\n"
-            "(Saat proses, muncul indikator ⏳ + cursor sibuk — bukan hang.)")
-        self._btn_clear.clicked.connect(self._clear_filters)
-        fl.addWidget(self._btn_clear)
-
-        self._lbl_chips = WLabel("Tidak ada filter aktif.", filt)
-        self._lbl_chips.setObjectName("hint")
-        self._lbl_chips.setToolTip(
-            "Daftar filter yang sedang aktif (chip ringkas).")
-        fl.addWidget(self._lbl_chips)
-        lay.addWidget(filt)
-
-        # ===== Kartu PROFIL =====
-        prof = Card(host)
-        pl2 = QVBoxLayout(prof)
-        pl2.setContentsMargins(12, 10, 12, 10)
-        pl2.setSpacing(8)
-        t2 = WLabel("Profil Filter Tersimpan", prof)
-        t2.setObjectName("cardTitle")
-        t2.setToolTip(
-            "Profil = foto (snapshot) SEMUA filter yang sedang aktif —\n"
-            "disimpan ke file, bisa dipulihkan kapan saja.\n"
-            "Cocok utk kombinasi filter yang sering dipakai.")
-        pl2.addWidget(t2)
-        self._cb_profile = QComboBox(prof)
-        self._cb_profile.setMaximumWidth(260)
-        self._cb_profile.setToolTip("Pilih profil → filter dipulihkan seketika.")
-        self._cb_profile.currentIndexChanged.connect(self._on_profile_picked)
-        pl2.addWidget(self._cb_profile)
-        prow = QWidget(prof)
-        prl = QHBoxLayout(prow)
-        prl.setContentsMargins(0, 0, 0, 0)
-        prl.setSpacing(8)
-        b_save = QPushButton("Simpan", prow)
-        b_save.setToolTip("Simpan kombinasi filter aktif sebagai profil (beri nama).")
-        b_save.clicked.connect(self._save_profile)
-        prl.addWidget(b_save)
-        b_del = QPushButton("Hapus", prow)
-        b_del.setToolTip("Hapus profil terpilih dari daftar.")
-        b_del.clicked.connect(self._delete_profile)
-        prl.addWidget(b_del)
-        pl2.addWidget(prow)
-        pl2.addWidget(WLabel("Profil = snapshot semua filter aktif (filters.json).", prof))
-        lay.addWidget(prof)
-
-        lay.addStretch(1)
-        self._sidebar.setWidget(host)
-        self._refresh_profile_combo()
-        return self._sidebar
+        self.setCentralWidget(self._tabs)
 
     def _build_statusbar(self) -> None:
         sb = QStatusBar()
@@ -417,30 +220,6 @@ class MainWindow(QMainWindow):
         sb.addPermanentWidget(self._lbl_perm)
 
     # ------------------------------------------------------------
-    # SIDEBAR HIDE/UNHIDE (v2.8.0)
-    # ------------------------------------------------------------
-    def _toggle_sidebar(self, visible: bool) -> None:
-        """Sembunyikan/munculkan sidebar filter.
-
-        Saat disembunyikan: ukuran splitter disimpan dulu, lalu sidebar
-        di-hidden — QSplitter memberi seluruh lebar ke QTabWidget (tabel
-        & chart memakai lebar penuh; kolom JENIS yang tadinya responsif
-        disembunyikan di 1024px ikut tampil). Saat dimunculkan: ukuran
-        tersimpan dipulihkan (rasio 3:12 tetap berlaku bila belum tersimpan).
-        """
-        if visible:
-            self._sidebar.setHidden(False)
-            if any(self._sidebar_sizes):
-                self._split.setSizes(self._sidebar_sizes)
-            self.ctx.set_status("✓ Panel filter dimunculkan", "done")
-        else:
-            self._sidebar_sizes = self._split.sizes()
-            self._sidebar.setHidden(True)
-            self.ctx.set_status(
-                "✓ Panel filter disembunyikan — Ctrl+Shift+F utk memunculkan",
-                "done")
-
-    # ------------------------------------------------------------
     # KONTEKS → UI
     # ------------------------------------------------------------
     def _wire_context(self) -> None:
@@ -448,7 +227,8 @@ class MainWindow(QMainWindow):
         # log_line: subscriber sesungguhnya = panel log PipelineView
         # (view_pipeline.py: ctx.log_line.connect(self._append_log)).
         self.ctx.data_ready.connect(self._on_data_ready)
-        self.ctx.filters_changed.connect(self._sync_filter_widgets)
+        # v2.12.4: sidebar dihapus — tidak ada widget filter global yang
+        # perlu disinkronkan (funnel tabel membaca state saat melukis).
         # v2.12.0: daftar follow-up berubah → badge jumlah di judul tab.
         self.ctx.followup_changed.connect(self._on_followup_changed)
 
@@ -466,18 +246,8 @@ class MainWindow(QMainWindow):
         df = self.ctx.df
         if df is None:
             return
-        # Populate dropdown dari df PENUH (DD-M3 — pilihan tidak menyusut saat drill)
-        if "NAMA RESTO" in df.columns:
-            names = sorted(df["NAMA RESTO"].dropna().astype(str).unique())
-            self._fill_combo(self._cb_cabang, names)
-        if "KETERANGAN" in df.columns:
-            kets = sorted({norm_text(v) for v in df["KETERANGAN"].dropna().astype(str)})
-            self._fill_combo(self._cb_ket, kets)
-        # V26-H2: set_dataset sudah me-reset filter, tapi _fill_combo
-        # me-retain teks lama → combo/search/chip sidebar masih menampilkan
-        # filter LAMA padahal state None (widget berbohong). Sinkronkan ke
-        # state reset (blockSignals → tanpa loop sinyal).
-        self._sync_filter_widgets()
+        # v2.12.4: sidebar filter dihapus — tidak ada combo/search yang
+        # perlu diisi/disinkronkan; state filter direset oleh set_dataset.
         # Permanent status: baris + anomali + waktu run
         total = len(df)
         if "ANOMALY STATUS" in df.columns:
@@ -513,167 +283,6 @@ class MainWindow(QMainWindow):
         n = len(self.ctx.followup_keys)
         self._tabs.setTabText(idx, f"Follow Up ({fmt_id(n)})" if n
                                else "Follow Up")
-
-    def _fill_combo(self, combo: QComboBox, values: list[str]) -> None:
-        combo.blockSignals(True)
-        current = combo.currentText()
-        combo.clear()
-        combo.addItem("(Semua)")
-        combo.addItems(values)
-        if current:
-            idx = combo.findText(current)
-            combo.setCurrentIndex(max(0, idx))
-        combo.blockSignals(False)
-
-    # ------------------------------------------------------------
-    # FILTER WIDGETS → STATE
-    # ------------------------------------------------------------
-    def _apply_search(self) -> None:
-        self.ctx.set_search(self._ent_search.text())
-
-    def _apply_search_now(self) -> None:
-        self._search_timer.stop()
-        self.ctx.set_search(self._ent_search.text())
-
-    def _focus_search(self) -> None:
-        self._ent_search.setFocus()
-        self._ent_search.selectAll()
-
-    def _on_combo(self, key: str, combo: QComboBox) -> None:
-        val = combo.currentText()
-        if val == _MULTI_TAG:
-            return  # placeholder multi slicer — bukan pilihan user (no-op)
-        value = None if (not val or val == "(Semua)") else val
-        self.ctx.set_filter(key, value)
-
-    def _on_hari_toggled(self, on: bool) -> None:
-        if on:
-            self.ctx.set_day_range(self._spin_dmin.value(), self._spin_dmax.value())
-        else:
-            self.ctx.set_day_range(None, None)
-
-    def _on_hari_changed(self) -> None:
-        if self._chk_hari.isChecked():
-            lo, hi = self._spin_dmin.value(), self._spin_dmax.value()
-            if lo > hi:
-                lo = hi
-            self.ctx.set_day_range(lo, hi)
-
-    def _clear_filters(self) -> None:
-        self.ctx.reset_filters()
-        self.ctx.filters_changed.emit()
-        self._sync_filter_widgets()
-        self.ctx.set_status("✓ Semua filter dihapus", "done")
-
-    def _sync_filter_widgets(self) -> None:
-        """Sinkronkan widget filter dengan state (mis. setelah drill-down)."""
-        self._ent_search.blockSignals(True)
-        self._ent_search.setText(self.ctx.search)
-        self._ent_search.blockSignals(False)
-        self._combo_set(self._cb_cabang, self.ctx.active_filters.get("cabang"))
-        self._combo_set(self._cb_status, self.ctx.active_filters.get("status"))
-        self._combo_set(self._cb_ket, self.ctx.active_filters.get("keterangan"))
-        active = self.ctx.day_min is not None
-        self._chk_hari.blockSignals(True)
-        self._chk_hari.setChecked(active)
-        self._chk_hari.blockSignals(False)
-        if active:
-            self._spin_dmin.setValue(int(self.ctx.day_min or 1))
-            self._spin_dmax.setValue(int(self.ctx.day_max or 31))
-        self._lbl_chips.setText(self.ctx.filter_summary() or "Tidak ada filter aktif.")
-
-    def _combo_set(self, combo: QComboBox, value) -> None:
-        """Sinkronkan combo ke nilai state (v2.11.0: sadar list multi-slicer).
-
-        List non-kosong → placeholder _MULTI_TAG dipilih (dipasang sementara
-        di indeks 0, dibuang lagi saat nilai kembali single/None — supaya
-        tidak menumpuk)."""
-        combo.blockSignals(True)
-        idx_tag = combo.findText(_MULTI_TAG)
-        if idx_tag >= 0:
-            combo.removeItem(idx_tag)
-        if isinstance(value, list) and value:
-            combo.insertItem(0, _MULTI_TAG)
-            combo.setCurrentIndex(0)
-        elif value is None or (isinstance(value, list) and not value):
-            combo.setCurrentIndex(0)
-        else:
-            idx = combo.findText(str(value))
-            combo.setCurrentIndex(max(0, idx))
-        combo.blockSignals(False)
-
-    # ------------------------------------------------------------
-    # PROFIL
-    # ------------------------------------------------------------
-    def _refresh_profile_combo(self) -> None:
-        self._cb_profile.blockSignals(True)
-        self._cb_profile.clear()
-        self._cb_profile.addItem("(pilih profil)")
-        for name in list_profile_names():
-            self._cb_profile.addItem(name)
-        self._cb_profile.blockSignals(False)
-
-    def _on_profile_picked(self) -> None:
-        name = self._cb_profile.currentText()
-        if not name or name == "(pilih profil)":
-            return
-        from waste_anomaly.filters import get_profile
-        profile = get_profile(name)
-        if not profile:
-            QMessageBox.information(self, "Profil", f"Profil '{name}' tidak ditemukan.")
-            return
-        restored = restore_filters(profile)
-        self.ctx.search = restored.get("search", "")
-        for k in self.ctx.active_filters:
-            self.ctx.active_filters[k] = restored.get(k)
-        self.ctx.day_min = restored.get("day_min")
-        self.ctx.day_max = restored.get("day_max")
-        # Penulisan langsung melewati setter → invalidasi memo filter
-        # (v2.7.0) supaya filtered_df() tidak menyajikan cache basi.
-        self.ctx.invalidate_filter_cache()
-        self.ctx.filters_changed.emit()
-        self.ctx.set_status(f"✓ Profil '{name}' dipulihkan", "done")
-
-    def _save_profile(self) -> None:
-        name, ok = QInputDialog.getText(
-            self, "Simpan Profil", "Nama profil filter:")
-        if not ok or not name.strip():
-            return
-        name = name.strip()
-        existing = list_profile_names()
-        if name in existing:
-            ans = QMessageBox.question(
-                self, "Timpa profil?", f"Profil '{name}' sudah ada. Timpa?")
-            if ans != QMessageBox.StandardButton.Yes:
-                return
-        profile = snapshot_filters(
-            search=self.ctx.search,
-            cabang=self.ctx.active_filters.get("cabang"),
-            item=self.ctx.active_filters.get("item"),
-            jenis=self.ctx.active_filters.get("jenis") or [],
-            keterangan=self.ctx.active_filters.get("keterangan"),
-            status=self.ctx.active_filters.get("status"),
-            day_min=self.ctx.day_min, day_max=self.ctx.day_max,
-        )
-        if save_profile(name, profile):
-            self._refresh_profile_combo()
-            self.ctx.set_status(f"✓ Profil '{name}' disimpan", "done")
-        else:
-            QMessageBox.critical(self, "Error Profil",
-                                 f"Gagal simpan profil '{name}'.")
-
-    def _delete_profile(self) -> None:
-        name = self._cb_profile.currentText()
-        if not name or name == "(pilih profil)":
-            return
-        ans = QMessageBox.question(
-            self, "Hapus Profil", f"Hapus profil '{name}'?")
-        if ans != QMessageBox.StandardButton.Yes:
-            return
-        if delete_profile(name):
-            self._refresh_profile_combo()
-            self.ctx.set_status(f"✓ Profil '{name}' dihapus", "done")
-
     # ------------------------------------------------------------
     # TAB
     # ------------------------------------------------------------

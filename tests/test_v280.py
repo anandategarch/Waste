@@ -391,58 +391,57 @@ class TestKolomPctToBom:
         assert "0,67%" in texts, "MAX / BOM harus tampil '0,67%'"
 
 
-class TestSidebarHideUnhide:
-    def test_tombol_filter_checkable_di_toolbar(self):
+class TestSidebarDihapus:
+    """v2.12.4 — sidebar filter kiri + tombol ☰ Filter DIHAPUS (permintaan
+    user): tabel memakai lebar penuh jendela; filter lewat funnel judul
+    kolom + tombol ✕ Hapus Filter di tab Anomali/Hari."""
+
+    def test_tanpa_tombol_filter_di_toolbar(self):
         win = _make_window()
         try:
-            act = win._act_filter
-            assert act is not None, "aksi ☰ Filter tidak ada di toolbar"
-            assert act.isCheckable()
-            assert act.isChecked(), "default: sidebar terlihat (checked)"
-            assert act.shortcut().toString().endswith("F")
+            from PySide6.QtGui import QAction
+            acts = [a for a in win.findChildren(QAction)]
+            texts = [a.text() for a in acts if a.text()]
+            assert not any("☰" in t for t in texts), (
+                f"aksi ☰ Filter masih ada di toolbar: {texts}")
+            assert not hasattr(win, "_act_filter"), (
+                "atribut _act_filter masih ada (sidebar toggle belum dihapus)")
         finally:
             win.close()
 
-    def test_hide_unhide_ukuran_dipulihkan(self):
-        """Sembunyikan → sidebar hidden + QTabWidget melebar; munculkan →
-        sidebar kembali + ukuran splitter tersimpan dipulihkan."""
-        from PySide6.QtWidgets import QApplication, QWidget
+    def test_central_widget_tab_lebar_penuh(self):
+        """Tanpa splitter/sidebar: QTabWidget = central widget → tabel
+        memakai seluruh lebar jendela (dulu ±300px makan sidebar)."""
+        from PySide6.QtWidgets import QApplication, QTabWidget, QSplitter
         win = _make_window()
         try:
-            win.resize(1440, 900)
+            win.resize(1280, 800)
             win.show()
             QApplication.processEvents()
+            from PySide6.QtWidgets import QWidget
             QWidget.grab(win)  # paksa layout offscreen
             QApplication.processEvents()
-            tabs_w_visible = win._tabs.width()
-            assert not win._sidebar.isHidden()
-
-            win._toggle_sidebar(False)
-            QApplication.processEvents()
-            assert win._sidebar.isHidden(), "sidebar harus hidden"
-            QApplication.processEvents()
-            assert win._tabs.width() > tabs_w_visible, (
-                "QTabWidget tidak melebar setelah sidebar disembunyikan")
-
-            win._toggle_sidebar(True)
-            QApplication.processEvents()
-            assert not win._sidebar.isHidden(), "sidebar harus muncul lagi"
-            QApplication.processEvents()
-            assert win._tabs.width() < win._split.width() - 100, (
-                "sidebar kembali tapi area tab tidak menyusut — restore "
-                "ukuran splitter gagal")
+            assert isinstance(win.centralWidget(), QTabWidget), (
+                "central widget bukan QTabWidget — splitter masih ada?")
+            assert not win.findChildren(QSplitter), (
+                "QSplitter masih dipakai (sidebar belum dihapus)")
+            assert not hasattr(win, "_sidebar"), (
+                "atribut _sidebar masih ada")
+            assert win._tabs.width() >= win.width() - 12, (
+                f"area tab {win._tabs.width()}px < lebar jendela "
+                f"{win.width()}px — ada yang makan lebar")
         finally:
             win.close()
 
-    def test_toggle_dua_kali_idempoten(self):
+    def test_tanpa_widget_filter_sidebar(self):
+        """Kontrol filter sidebar (combo cabang/status/keterangan, kotak
+        cari, rentang hari, profil) tak ada lagi di jendela."""
         win = _make_window()
         try:
-            win._toggle_sidebar(False)
-            win._toggle_sidebar(True)
-            win._toggle_sidebar(False)
-            assert win._sidebar.isHidden()
-            win._toggle_sidebar(True)
-            assert not win._sidebar.isHidden()
+            for attr in ("_cb_cabang", "_cb_status", "_cb_ket",
+                         "_ent_search", "_chk_hari", "_cb_profile"):
+                assert not hasattr(win, attr), (
+                    f"widget sidebar {attr} masih ada")
         finally:
             win.close()
 
@@ -456,8 +455,16 @@ class TestDokumentasiJujur:
 
     def test_bantuan_menyebut_fitur_baru(self):
         from ui.app import _HELP_HTML
-        assert "Ctrl+Shift+F" in _HELP_HTML, (
-            "Bantuan harus menyebut shortcut sidebar hide/unhide")
+        assert "funnel" in _HELP_HTML.lower(), (
+            "Bantuan harus menjelaskan filter funnel judul kolom (v2.12.4)")
+        # changelog v2.12.4 BOLEH menyebut kata 'sidebar' ("dihapus") —
+        # yang dilarang: instruksi memakai fitur yang sudah tak ada.
+        assert "☰" not in _HELP_HTML, (
+            "Bantuan masih menyebut tombol ☰ Filter yang sudah dihapus")
+        assert "Ctrl+Shift+F" not in _HELP_HTML, (
+            "Bantuan masih menyebut shortcut sidebar yang sudah dihapus")
+        assert "Profil filter" not in _HELP_HTML, (
+            "Bantuan masih menyebut profil filter sidebar yang dihapus")
         assert "pop-up" in _HELP_HTML.lower(), (
             "Bantuan harus menyebut detail pop-up (perilaku v2.8.1)")
 

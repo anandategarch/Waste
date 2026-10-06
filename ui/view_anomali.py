@@ -47,7 +47,7 @@ from waste_anomaly.followup import CHECK_COL, FP_COL, fingerprint_series
 from .shared import fmt_id
 from .state import AppContext
 from .widgets import (
-    Card, DataTable, KpiStrip, SlicerBar, StatusChip, WLabel, busy_feedback,
+    Card, DataTable, KpiStrip, StatusChip, WLabel, busy_feedback,
     status_chip_for,
 )
 from waste_anomaly.signals import SIGNAL_PARTS
@@ -68,7 +68,11 @@ TABLE_COLS = [
 
 # v2.12.3: funnel filter di header tabel (permintaan user "daripada aku
 # harus pakai slicer"). Kolom → kunci filter ctx — STATE TETAP SATU di
-# ctx.active_filters → chip slicer sinkron otomatis dua arah.
+# ctx.active_filters.
+# v2.12.4: funnel di SEMUA kolom (permintaan user "harusnya semua kolom
+# punya filter"): 5 kolom mapping tetap GLOBAL (sinkron antar tab Anomali/
+# Hari + KPI ikut terfilter); kolom lain = filter LOKAL tampilan view ini
+# (mask isin per kolom — KPI/daftar Follow Up tak tersentuh).
 _HF_COLS = {
     "NAMA RESTO": "cabang", "NAMA BARANG": "item", "JENIS": "jenis",
     "KETERANGAN": "keterangan", "ANOMALY STATUS": "status",
@@ -483,16 +487,25 @@ class AnomaliView(QWidget):
         self._lbl_count.setObjectName("hint")
         cl.addWidget(self._lbl_count, 1)
         # v2.12.0 — aksi follow-up massal: centang SEMUA baris yang sedang
-        # tampil (setelah filter/slicer menyempitkan — mis. 43 SUSUT)
+        # tampil (setelah funnel kolom menyempitkan — mis. 43 SUSUT)
         # sekaligus ke daftar Follow Up.
         self._btn_fu_all = QPushButton("☑ Centang yang tampil", ctrl)
         self._btn_fu_all.setToolTip(
-            "Centang SEMUA baris anomali yang sedang tampil (hasil filter/"
-            "slicer saat ini) sekaligus ke daftar Follow Up.\n"
-            "Cocok dipakai setelah slicer menyempitkan daftar: saring → "
-            "centang massal → tinjau di tab Follow Up.")
+            "Centang SEMUA baris anomali yang sedang tampil (hasil filter "
+            "saat ini) sekaligus ke daftar Follow Up.\n"
+            "Cocok dipakai setelah funnel kolom menyempitkan daftar: "
+            "saring → centang massal → tinjau di tab Follow Up.")
         self._btn_fu_all.clicked.connect(self._on_check_all)
         cl.addWidget(self._btn_fu_all)
+        # v2.12.4 — pengganti tombol '✕ Hapus Semua Filter' sidebar (kini
+        # dihapus): lepas SEMUA filter (funnel global + lokal) sekaligus.
+        self._btn_clear = QPushButton("✕ Hapus Filter", ctrl)
+        self._btn_clear.setToolTip(
+            "Hapus SEMUA filter yang sedang aktif — funnel kolom (global "
+            "maupun tampilan) dan ambang skor — kembali ke tampilan "
+            "anomali penuh.")
+        self._btn_clear.clicked.connect(self._on_clear_filters)
+        cl.addWidget(self._btn_clear)
         lay.addWidget(ctrl)
         self._ctrl = ctrl  # v2.12.2: toggle ⤢ (KPI + bar kontrol)
 
@@ -519,8 +532,8 @@ class AnomaliView(QWidget):
         self._btn_expand = QPushButton("⤢ Perbesar Tabel", head)
         self._btn_expand.setToolTip(
             "Sembunyikan KPI & bar kontrol supaya tabel memakai seluruh\n"
-            "tinggi tampilan (slicer tetap terlihat — filter tetap aktif).\n"
-            "Klik lagi untuk mengembalikan.")
+            "tinggi tampilan (funnel header tetap hidup — filter tetap\n"
+            "aktif). Klik lagi untuk mengembalikan.")
         self._btn_expand.clicked.connect(self._on_expand)
         hcl.addWidget(self._btn_expand)
         self._btn_full = QPushButton("⛶ Layar Penuh", head)
@@ -531,11 +544,6 @@ class AnomaliView(QWidget):
         self._btn_full.clicked.connect(self._on_fullscreen)
         hcl.addWidget(self._btn_full)
         tcl.addWidget(head)
-        # v2.11.0: slicer multi-select (JENIS·KETERANGAN·STATUS) di atas
-        # tabel — state global ctx.active_filters (chip antar-tab sinkron
-        # otomatis). Banding Periode sengaja tanpa slicer (file ≠ baris).
-        self._slicer = SlicerBar(ctx, table_card)
-        tcl.addWidget(self._slicer)
         self._tcl = tcl  # v2.12.2: reparent ⛶ (pulihkan index layout tabel)
         self._table = DataTable(table_card)
         self._table.setMinimumHeight(200)
@@ -546,23 +554,15 @@ class AnomaliView(QWidget):
         self._table.model().set_row_key_column(FP_COL)
         self._table.model().check_toggled.connect(self._on_check_toggled)
         # v2.12.3: funnel filter + opsi sort di header tabel.
+        # v2.12.4: SEMUA kolom ber-funnel (skip kolom ✓ + identitas __FP);
+        # kolom mapping = state global ctx, lainnya = filter lokal view.
         self._table.setup_header_filters(
-            _HF_COLS, self._on_header_filter, self._hf_state)
+            _HF_COLS, self._on_header_filter, self._hf_state,
+            all_cols=True, skip=(CHECK_COL, FP_COL))
         self._table.selectionModel().currentRowChanged.connect(
             lambda *_: self._on_selection())
         self._table.double_clicked.connect(self._on_double)
         tcl.addWidget(self._table, 1)
-        # v2.8.1: hint baru — perilaku pop-up (dulu: 'pilih baris utk
-        # detail' ke panel inline, dihapus bersama splitter).
-        # v2.12.2: dipendekkan ~40% (hint panjang + bug heightForWidth
-        # lama mencuri 84px — kini tinggi label jujur, teks tetap ringkas).
-        hint = WLabel(
-            "💡 Klik baris = detail pop-up · klik 2× = fokus cabang+item · "
-            "sort klik judul / funnel di judul = filter nilai · "
-            "centang ✓ = kumpulkan ke tab Follow Up",
-            table_card)
-        hint.setObjectName("hint")
-        tcl.addWidget(hint)
         lay.addWidget(table_card, 1)
 
         # v2.12.2 — jendela layar penuh tabel (dibuat malas, dipakai ulang):
@@ -570,7 +570,7 @@ class AnomaliView(QWidget):
         # pop-up detail tetap 100% hidup (bukan salinan). Esc/Tutup →
         # dikembalikan ke kartu pada POSISI LAYOUT ASLI (index dicatat).
         self._fs_dlg: QDialog | None = None
-        self._fs_idx: int = 2
+        self._fs_idx: int = 1  # v2.12.4: head(0) + tabel(1) — slicer/hint dihapus
 
         # Pop-up detail (v2.8.1) — satu instance dipakai ulang.
         self._popup = DetailDialog(ctx, self)
@@ -600,6 +600,14 @@ class AnomaliView(QWidget):
         self._disp_cache: "OrderedDict[int, tuple]" = OrderedDict()
         self._fps_src: pd.DataFrame | None = None
         self._fps: pd.Series | None = None
+        # v2.12.4: funnel LOKAL kolom non-ctx (SEMUA kolom ber-funnel;
+        # kolom mapping tetap global). {kolom: nilai terpilih} — hanya
+        # menyaring TAMPILAN tabel ini (KPI + Follow Up tak tersentuh).
+        self._hfilters: dict[str, list] = {}
+        # v2.12.4: memo hasil mask per (objek display, state filter) —
+        # objek mask stabil per state → cache fit DataTable tetap kena
+        # (pola _disp_cache LRU; A→B→A memakai ulang objek A).
+        self._mask_cache: "OrderedDict[tuple, pd.DataFrame]" = OrderedDict()
         ctx.data_ready.connect(self._on_data_ready)
         ctx.filters_changed.connect(self._on_filters_changed)
         # v2.10.2: pembanding siap / pilihan combo berganti → kolom
@@ -617,6 +625,10 @@ class AnomaliView(QWidget):
         self._disp_cache.clear()
         self._fps_src, self._fps = None, None
         self._change_cache.clear()
+        # v2.12.4: dataset baru → nilai funnel lokal bisa jadi tak ada lagi
+        # di data baru — reset (state global sudah direset set_dataset).
+        self._hfilters.clear()
+        self._mask_cache.clear()
         if self.isVisible():
             self.refresh()
         else:
@@ -745,16 +757,20 @@ class AnomaliView(QWidget):
         # hanya membaca' utk objek LRU/enriched tetap utuh; objek display
         # di-memo per objek df → cache fit DataTable tetap kena).
         disp = self._display_df(df)
-        self._table.set_dataframe(disp, sort_desc="ANOMALY SCORE",
+        # v2.12.4: funnel LOKAL kolom non-ctx — mask isin di atas display
+        # (memo per state; ✓ disegarkan tiap pemakaian). 'Perubahan:' combo
+        # sudah di-apply di atas (df), funnel lokal di bawah (disp).
+        shown = self._mask_local(disp)
+        self._table.set_dataframe(shown, sort_desc="ANOMALY SCORE",
                                   narrow_hide=["JENIS", "KETERANGAN",
                                                "BULAN LALU", "PERUBAHAN"],
                                   visible_cols=[CHECK_COL] + cols)
         full = len(self._ctx.df) if self._ctx.df is not None else 0
-        if len(df) == 0:
+        if len(shown) == 0:
             self._lbl_count.setText("0 anomali lolos filter — longgarkan filter atau ambang skor.")
         else:
             self._lbl_count.setText(
-                f"{fmt_id(len(df))} anomali tampil (dari {fmt_id(full)} baris data)")
+                f"{fmt_id(len(shown))} anomali tampil (dari {fmt_id(full)} baris data)")
         self._refresh_kpi()
 
     def _refresh_kpi(self) -> None:
@@ -861,22 +877,79 @@ class AnomaliView(QWidget):
                 "done")
 
     def _on_header_filter(self, col: str, key: str, values) -> None:
-        """v2.12.3 — menu funnel header → state ctx (chip slicer sinkron
-        otomatis: satu sumber kebenaran active_filters)."""
-        self._ctx.set_filter(key, values)
+        """v2.12.3 — menu funnel header → state ctx (sinkron dgn chip
+        slicer — satu sumber kebenaran active_filters).
+        v2.12.4 — kolom NON-mapping (SEMUA kolom lain punya funnel kini):
+        filter LOKAL tampilan view ini (mask isin — state ctx tak
+        tersentuh, KPI & Follow Up tak berubah)."""
+        if col in _HF_COLS:
+            self._ctx.set_filter(key, values)  # global — antar-tab sinkron
+            return
+        if values:
+            self._hfilters[col] = list(values)
+        else:
+            self._hfilters.pop(col, None)
+        self._refresh_table()
 
     def _hf_state(self, col: str):
         """v2.12.3 — status funnel kolom utk MELUKIS (aktif = terisi).
-        List kosong = tanpa filter (semantik _apply_filters)."""
+        List kosong = tanpa filter (semantik _apply_filters).
+        v2.12.4 — kolom lokal: baca _hfilters view."""
         key = _HF_COLS.get(col)
-        if key is None:
+        if key is not None:
+            v = self._ctx.active_filters.get(key)
+            if isinstance(v, list):
+                return v or None
+            if isinstance(v, str) and v:
+                return [v]
             return None
-        v = self._ctx.active_filters.get(key)
-        if isinstance(v, list):
-            return v or None
-        if isinstance(v, str) and v:
-            return [v]
-        return None
+        v = self._hfilters.get(col)
+        return list(v) if v else None
+
+    def _mask_local(self, disp: pd.DataFrame) -> pd.DataFrame:
+        """v2.12.4 — mask isin per kolom funnel LOKAL di atas display df.
+
+        Memo LRU per (id objek display, tanda tangan filter) supaya objek
+        hasil STABIL per state → cache fit DataTable tetap kena (pola
+        _disp_cache). Kolom ✓ disegarkan tiap pemakaian (state follow-up
+        bisa berganti saat objek ini tak sedang jadi model)."""
+        if not self._hfilters:
+            return disp
+        sig = tuple(sorted((c, tuple(v)) for c, v in self._hfilters.items()))
+        key = (id(disp), sig)
+        out = self._mask_cache.get(key)
+        if out is None:
+            m = pd.Series(True, index=disp.index)
+            for col, vals in self._hfilters.items():
+                if col in disp.columns and vals:
+                    m &= disp[col].isin(vals)
+            # .copy() eksplisit — hasil slice dgn _is_copy terpasang;
+            # assignment kolom ✓ di bawah memicu SettingWithCopyWarning
+            # palsu (objek ini memang salinan baru milik memo).
+            out = disp[m].copy()
+            self._mask_cache[key] = out
+            while len(self._mask_cache) > 4:
+                self._mask_cache.popitem(last=False)
+        else:
+            self._mask_cache.move_to_end(key)
+        if CHECK_COL in out.columns and FP_COL in out.columns:
+            out[CHECK_COL] = out[FP_COL].isin(self._ctx.followup_set())
+        return out
+
+    def _on_clear_filters(self) -> None:
+        """v2.12.4 — tombol '✕ Hapus Filter': lepas SEMUA filter aktif
+        (funnel global ctx + funnel lokal view + ambang skor) — pengganti
+        tombol 'Hapus Semua Filter' sidebar yang dihapus."""
+        self._hfilters.clear()
+        had_global = bool(self._ctx.active_filters and any(
+            v for v in self._ctx.active_filters.values())) \
+            or self._ctx.day_min is not None or bool((self._ctx.search or "").strip())
+        if had_global:
+            self._ctx.reset_filters()   # score_min ikut 0 — spin disinkronkan render
+            self._ctx.filters_changed.emit()
+        else:
+            self._refresh_table()
+        self._ctx.set_status("✓ Semua filter dihapus", "done")
 
     def _on_selection(self) -> None:
         """Klik baris (atau navigasi keyboard) → pop-up detail (v2.8.1)."""
@@ -892,8 +965,7 @@ class AnomaliView(QWidget):
 
         isHidden() (bukan isVisible()) — toggle benar walau view induk
         sedang tak tampak (di-balik tab lain) — pola _on_expand PeriodeView.
-        Slicer TETAP terlihat: chip = kontrol filter utama (menyaring tabel
-        yang sedang diperbesar)."""
+        Funnel header tetap hidup: filter tetap aktif saat diperbesar."""
         collapsed = self._kpi.isHidden()
         show = collapsed
         self._kpi.setVisible(show)
@@ -923,12 +995,6 @@ class AnomaliView(QWidget):
             dlay = QVBoxLayout(dlg)
             dlay.setContentsMargins(10, 8, 10, 8)
             dlay.setSpacing(6)
-            fhint = WLabel(
-                "💡 Klik baris = detail pop-up · klik 2× = fokus cabang+item "
-                "· sort klik header · centang ✓ = Follow Up · Esc = kembali",
-                dlg)
-            fhint.setObjectName("hint")
-            dlay.addWidget(fhint)
             btn = QPushButton("⤡ Kembali ke Tab (Esc)", dlg)
             btn.clicked.connect(dlg.close)
             brow = QWidget(dlg)
@@ -942,10 +1008,10 @@ class AnomaliView(QWidget):
             dlg.rejected.connect(self._restore_table_from_fs)
             self._fs_dlg = dlg
         idx = self._tcl.indexOf(self._table)
-        self._fs_idx = idx if idx >= 0 else 2
+        self._fs_idx = idx if idx >= 0 else 1
         self._tcl.removeWidget(self._table)
-        # insert di ANTARA hint (0) dan baris tombol (terakhir)
-        self._fs_dlg.layout().insertWidget(1, self._table, 1)
+        # insert DI BAWAH baris tombol (hint dihapus v2.12.4)
+        self._fs_dlg.layout().insertWidget(0, self._table, 1)
         self._fs_dlg.showMaximized()
         self._fs_dlg.raise_()
         self._fs_dlg.activateWindow()

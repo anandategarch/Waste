@@ -21,6 +21,8 @@ kali lipat", "porsi dari total bulanan" — bukan jargon statistik.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
+
 import pandas as pd
 from PySide6.QtWidgets import (
     QComboBox,
@@ -34,8 +36,9 @@ from PySide6.QtWidgets import (
 from .shared import fmt_id
 from .state import AppContext
 from .view_anomali import DetailDialog, _HF_COLS
-from .widgets import Card, DataTable, KpiCard, SlicerBar, WLabel, busy_feedback
+from .widgets import Card, DataTable, KpiCard, WLabel, busy_feedback
 from waste_anomaly.period_history import day_evidence_vs_history
+from waste_anomaly.followup import FP_COL
 
 # Kolom tabel hari-mencurigakan (ramping — detail lengkap di pop-up).
 # v2.10.0: 3 kolom bukti vs bulan lalu HANYA muncul bila data pembanding
@@ -49,12 +52,9 @@ TABLE_COLS = [
     "ALASAN HARI",
 ]
 
-_HINT_BASE = (
-    "💡 Bukti hari = angka besar menumpuk di tanggal tertentu: jauh di atas "
-    "cabang lain di hari yang sama, atau ≥ 50% waste sebulan jatuh di satu "
-    "hari, atau pola 10× (salah ketik), atau waste cuma 1 hari. Kolom "
-    "ALASAN HARI merangkum buktinya — hover judul kolom untuk arti tiap istilah."
-)
+# v2.12.4: hint '💡 Bukti hari = ...' DIHAPUS (permintaan user: kalimat
+# penjelas panjang dihapus dari UI). Penjelasan istilah tetap tersedia di
+# tooltip judul kolom (COLUMN_TOOLTIPS) + Bantuan.
 
 
 class HariView(QWidget):
@@ -110,7 +110,7 @@ class HariView(QWidget):
         self._btn_expand = QPushButton("⤢ Perbesar Tabel", head)
         self._btn_expand.setToolTip(
             "Sembunyikan KPI, judul & bar kontrol supaya tabel memakai "
-            "seluruh tinggi tampilan (slicer tetap terlihat — filter "
+            "seluruh tinggi tampilan (funnel header tetap hidup — filter "
             "tetap aktif). Klik lagi untuk mengembalikan.")
         self._btn_expand.clicked.connect(self._on_expand)
         hcl.addWidget(self._btn_expand)
@@ -122,15 +122,9 @@ class HariView(QWidget):
         self._btn_full.clicked.connect(self._on_fullscreen)
         hcl.addWidget(self._btn_full)
         cl.addWidget(head)
-        hint = WLabel(_HINT_BASE, card)
-        hint.setObjectName("hint")
-        hint.setWordWrap(True)
-        cl.addWidget(hint)
-        # v2.10.0: diperbarui dinamis saat pembanding bulan lalu tersedia.
-        self._hint = hint
         self._head_row = head  # v2.12.3: toggle ⤢ (ciutkan judul+hint)
 
-        # Bar kontrol: combo tampilkan
+        # Bar kontrol: combo tampilkan + hapus filter
         ctrl = QWidget(card)
         ctl = QHBoxLayout(ctrl)
         ctl.setContentsMargins(8, 0, 8, 0)
@@ -147,36 +141,33 @@ class HariView(QWidget):
         self._cb_mode.currentIndexChanged.connect(
             lambda _i: self._on_mode_changed())
         ctl.addWidget(self._cb_mode)
+        # v2.12.4 — pengganti tombol '✕ Hapus Semua Filter' sidebar: lepas
+        # SEMUA filter (funnel global + lokal) sekaligus (pola AnomaliView).
+        self._btn_clear = QPushButton("✕ Hapus Filter", ctrl)
+        self._btn_clear.setToolTip(
+            "Hapus SEMUA filter yang sedang aktif — funnel kolom (global "
+            "maupun tampilan) — kembali ke tampilan penuh.")
+        self._btn_clear.clicked.connect(self._on_clear_filters)
+        ctl.addWidget(self._btn_clear)
         self._lbl_count = WLabel("", ctrl)
         self._lbl_count.setObjectName("hint")
         ctl.addWidget(self._lbl_count, 1)
         cl.addWidget(ctrl)
         self._ctrl = ctrl  # v2.12.3: toggle ⤢ (ciutkan bar kontrol)
 
-        # v2.11.0: slicer multi-select (JENIS·KETERANGAN·STATUS) di atas
-        # tabel — SATU state global dgn tab Anomali (dua instance SlicerBar,
-        # chip otomatis sinkron karena sama-sama membaca ctx.active_filters).
-        self._slicer = SlicerBar(ctx, card)
-        cl.addWidget(self._slicer)
-
         self._table = DataTable(card)
         self._table.setMinimumHeight(200)
         # v2.12.3: funnel filter + opsi sort di header tabel (satu state
-        # ctx dgn tab Anomali — chip slicer sinkron dua arah).
+        # ctx dgn tab Anomali). v2.12.4: SEMUA kolom ber-funnel — kolom
+        # mapping global, lainnya filter LOKAL (pola AnomaliView).
         self._table.setup_header_filters(
-            _HF_COLS, self._on_header_filter, self._hf_state)
+            _HF_COLS, self._on_header_filter, self._hf_state,
+            all_cols=True, skip=(FP_COL,))
         self._table.selectionModel().currentRowChanged.connect(
             lambda *_: self._on_selection())
         self._table.double_clicked.connect(self._on_double)
         cl.addWidget(self._table, 1)
         self._tcl = cl  # v2.12.3: reparent ⛶ (pulihkan index layout tabel)
-        table_hint = WLabel(
-            "💡 Klik baris = detail pop-up (12 sinyal + peta hari 1–31) · "
-            "klik 2× = fokus cabang+item · klik judul = sort · funnel di "
-            "judul = filter nilai",
-            card)
-        table_hint.setObjectName("hint")
-        cl.addWidget(table_hint)
         lay.addWidget(card, 1)
 
         # Pop-up detail — satu instance dipakai ulang (pola AnomaliView).
@@ -185,7 +176,7 @@ class HariView(QWidget):
         # WIDGET TABEL ASLI di-reparent sementara (pola AnomaliView v2.12.2)
         # → interaksi sort/pop-up/klik-2× tetap hidup; Esc → pulihkan posisi.
         self._fs_dlg: QDialog | None = None
-        self._fs_idx: int = 3
+        self._fs_idx: int = 2  # v2.12.4: head(0)+ctrl(1)+tabel(2) — slicer/hint dihapus
         # v2.9.0 (perf): memo irisan bukti-hari — kombinasi (df dasar, mode)
         # yang sama mengembalikan objek SAMA → cache fit LRU DataTable
         # (hit) + memo teks model tetap hidup. Strong ref ke df dasar = id
@@ -195,6 +186,10 @@ class HariView(QWidget):
         # history); objek SAMA dipakai ulang antar-refresh → cache fit
         # DataTable tetap kena (pola _bukti_cache).
         self._hist_cache: tuple[int, int, int, pd.DataFrame] | None = None
+        # v2.12.4: funnel LOKAL kolom non-ctx (SEMUA kolom ber-funnel) —
+        # pola AnomaliView: hanya menyaring TAMPILAN tabel ini.
+        self._hfilters: dict[str, list] = {}
+        self._mask_cache: "OrderedDict[tuple, pd.DataFrame]" = OrderedDict()
 
         # Reaksi state — pola lazy H2 (sama dengan AnomaliView).
         self._dirty = True
@@ -209,6 +204,10 @@ class HariView(QWidget):
     # STATE
     # ------------------------------------------------------------
     def _on_data_ready(self) -> None:
+        # v2.12.4: dataset baru → nilai funnel lokal bisa jadi tak ada —
+        # reset (pola AnomaliView).
+        self._hfilters.clear()
+        self._mask_cache.clear()
         if self.isVisible():
             self.refresh()
         else:
@@ -289,24 +288,19 @@ class HariView(QWidget):
         months = self._ctx.history_months_ok()
         if months:
             df_show = self._with_history(df_show)
-            labels = ", ".join(str(m.get("label")) for m in months[:3]) \
-                + (f" +{len(months) - 3} lainnya" if len(months) > 3 else "")
-            self._hint.setText(
-                _HINT_BASE + f" 📅 Pembanding aktif: {labels} — kolom NILAI "
-                "BULAN LALU = tanggal yang sama bulan sebelumnya (tambahkan "
-                "file bulan lalu di tab Banding Periode).")
-        else:
-            self._hint.setText(_HINT_BASE)
         cols = [c for c in TABLE_COLS if c in df_show.columns]
         # v2.12.3: JENIS keluar dari narrow_hide (permintaan user "tambahkan
         # kolom jenis" — dulu disembunyikan responsif di layar sempit
         # 1366px; kini selalu tampil — SUSUT/TRIAL/WASTE terlihat langsung).
+        # v2.12.4: funnel LOKAL kolom non-ctx — mask isin di atas df_show
+        # (memo per state — pola AnomaliView._mask_local).
+        shown = self._mask_local(df_show)
         self._table.set_dataframe(
-            df_show, sort_desc="RASIO VS CABANG LAIN",
+            shown, sort_desc="RASIO VS CABANG LAIN",
             narrow_hide=["KETERANGAN", "NILAI BULAN LALU",
                          "TIPIKAL BEBERAPA BULAN", "ALASAN HARI"],
             visible_cols=cols)
-        n_tampil = len(df_show)
+        n_tampil = len(shown)
         if n_tampil == 0:
             self._lbl_count.setText(
                 "0 anomali lolos filter — longgarkan filter / coba "
@@ -315,10 +309,10 @@ class HariView(QWidget):
             self._lbl_count.setText(
                 f"{fmt_id(n_tampil)} baris tampil • {fmt_id(n_bukti_all)} "
                 f"dari {fmt_id(len(df))} anomali punya bukti hari")
-        # Rasio terbesar utk KPI (dari df_show — konsisten dgn tabel)
+        # Rasio terbesar utk KPI (dari shown — konsisten dgn tabel)
         rasio = None
-        if "RASIO VS CABANG LAIN" in df_show.columns:
-            r = pd.to_numeric(df_show["RASIO VS CABANG LAIN"],
+        if "RASIO VS CABANG LAIN" in shown.columns:
+            r = pd.to_numeric(shown["RASIO VS CABANG LAIN"],
                               errors="coerce").max()
             if r == r:
                 rasio = float(r)
@@ -375,28 +369,75 @@ class HariView(QWidget):
 
     def _on_header_filter(self, col: str, key: str, values) -> None:
         """v2.12.3 — menu funnel header → state ctx (sinkron dgn tab
-        Anomali + chip slicer — satu sumber active_filters)."""
-        self._ctx.set_filter(key, values)
+        Anomali — satu sumber active_filters).
+        v2.12.4 — kolom NON-mapping: filter LOKAL tampilan view ini
+        (pola AnomaliView)."""
+        if col in _HF_COLS:
+            self._ctx.set_filter(key, values)  # global — antar-tab sinkron
+            return
+        if values:
+            self._hfilters[col] = list(values)
+        else:
+            self._hfilters.pop(col, None)
+        self._refresh_table()
 
     def _hf_state(self, col: str):
-        """v2.12.3 — status funnel kolom utk MELUKIS (aktif = terisi)."""
+        """v2.12.3 — status funnel kolom utk MELUKIS (aktif = terisi).
+        v2.12.4 — kolom lokal: baca _hfilters view."""
         key = _HF_COLS.get(col)
-        if key is None:
+        if key is not None:
+            v = self._ctx.active_filters.get(key)
+            if isinstance(v, list):
+                return v or None
+            if isinstance(v, str) and v:
+                return [v]
             return None
-        v = self._ctx.active_filters.get(key)
-        if isinstance(v, list):
-            return v or None
-        if isinstance(v, str) and v:
-            return [v]
-        return None
+        v = self._hfilters.get(col)
+        return list(v) if v else None
+
+    def _mask_local(self, df_show: pd.DataFrame) -> pd.DataFrame:
+        """v2.12.4 — mask isin per kolom funnel LOKAL (memo LRU per state,
+        pola AnomaliView._mask_local — objek stabil → cache fit kena)."""
+        if not self._hfilters:
+            return df_show
+        sig = tuple(sorted((c, tuple(v)) for c, v in self._hfilters.items()))
+        key = (id(df_show), sig)
+        out = self._mask_cache.get(key)
+        if out is None:
+            m = pd.Series(True, index=df_show.index)
+            for col, vals in self._hfilters.items():
+                if col in df_show.columns and vals:
+                    m &= df_show[col].isin(vals)
+            out = df_show[m]
+            self._mask_cache[key] = out
+            while len(self._mask_cache) > 4:
+                self._mask_cache.popitem(last=False)
+        else:
+            self._mask_cache.move_to_end(key)
+        return out
+
+    def _on_clear_filters(self) -> None:
+        """v2.12.4 — tombol '✕ Hapus Filter': lepas SEMUA filter aktif
+        (funnel global ctx + funnel lokal view) — pengganti tombol sidebar
+        yang dihapus (pola AnomaliView)."""
+        self._hfilters.clear()
+        had_global = bool(self._ctx.active_filters and any(
+            v for v in self._ctx.active_filters.values())) \
+            or self._ctx.day_min is not None or bool((self._ctx.search or "").strip())
+        if had_global:
+            self._ctx.reset_filters()
+            self._ctx.filters_changed.emit()
+        else:
+            self._refresh_table()
+        self._ctx.set_status("✓ Semua filter dihapus", "done")
 
     # ------------------------------------------------------------
     # v2.12.3 — MELEBARKAN TABEL (pola tab Anomali v2.12.2)
     # ------------------------------------------------------------
     def _on_expand(self) -> None:
-        """Ciutkan/kembalikan KPI + judul/hint + bar kontrol (pola
+        """Ciutkan/kembalikan KPI + judul + bar kontrol (pola
         AnomaliView._on_expand — isHidden() agar toggle benar walau view
-        induk di-balik tab lain). Slicer TETAP terlihat (kontrol filter)."""
+        induk di-balik tab lain). Funnel header tetap hidup."""
         collapsed = self._kpi_row.isHidden()
         show = collapsed
         self._kpi_row.setVisible(show)
@@ -423,12 +464,6 @@ class HariView(QWidget):
             dlay = QVBoxLayout(dlg)
             dlay.setContentsMargins(10, 8, 10, 8)
             dlay.setSpacing(6)
-            fhint = WLabel(
-                "💡 Klik baris = detail pop-up · klik 2× = fokus cabang+item "
-                "· sort klik header · Esc = kembali",
-                dlg)
-            fhint.setObjectName("hint")
-            dlay.addWidget(fhint)
             btn = QPushButton("⤡ Kembali ke Tab (Esc)", dlg)
             btn.clicked.connect(dlg.close)
             brow = QWidget(dlg)
@@ -442,10 +477,10 @@ class HariView(QWidget):
             dlg.rejected.connect(self._restore_table_from_fs)
             self._fs_dlg = dlg
         idx = self._tcl.indexOf(self._table)
-        self._fs_idx = idx if idx >= 0 else 3
+        self._fs_idx = idx if idx >= 0 else 2
         self._tcl.removeWidget(self._table)
-        # insert di ANTARA hint (0) dan baris tombol (terakhir)
-        self._fs_dlg.layout().insertWidget(1, self._table, 1)
+        # insert DI ATAS baris tombol (hint dihapus v2.12.4)
+        self._fs_dlg.layout().insertWidget(0, self._table, 1)
         self._fs_dlg.showMaximized()
         self._fs_dlg.raise_()
         self._fs_dlg.activateWindow()

@@ -3,8 +3,9 @@
 Cakupan (semua fitur sesi ini):
 [A] WLabel heightForWidth — bug sizeHint "persegi" (112px padahal 28px)
     dicuri dari tinggi tabel SEMUA tab; flag dipulihkan + layout hidup.
-[B] SlicerBar kompak — label INLINE dengan chip (gaya Excel): tinggi
-    baris dimensi ~1 baris (bukan 2), tabel anomali dapat ruang kembali.
+[B] (DIHAPUS v2.12.4) SlicerBar kompak — SlicerBar dihapus total di
+    v2.12.4 (permintaan user: filter = funnel judul kolom; tabel
+    anomali malah dapat ruang LEBIH besar: slicer 100px + hint hilang).
 [C] Minus merah GLOBAL — level model (PandasTableModel ForegroundRole):
     angka < 0 merah di semua tabel; 0/plus/teks/bool tidak.
 [D] remove_followup_many — bulk lepas ✓: satu broadcast, satu persist,
@@ -107,63 +108,6 @@ class TestWLabelHFW:
         app.processEvents()
         h_sempit = lb.height()
         assert h_sempit > h_lebar  # menyempit → baris bertambah → lebih tinggi
-
-
-# ============================================================
-# [B] SlicerBar kompak (label inline)
-# ============================================================
-
-class TestSlicerKompak:
-    def _bar(self):
-        from ui.state import AppContext
-        from ui.widgets import SlicerBar
-        app = _qapp()
-        ctx = AppContext({})
-        bar = SlicerBar(ctx)
-        bar.set_dim_values("jenis", ["WASTE", "SUSUT", "TRIAL"])
-        bar.set_dim_values("keterangan", ["Handling", "Cancel Nota"])
-        bar.set_dim_values("status", ["Prioritas Tinggi", "Normal"])
-        return bar
-
-    def _hosted(self):
-        """Bar di dalam VBox + stretch (konfigurasi persis kartu tabel
-        tab Anomali) — layout memberi tinggi = kebutuhan nyata.
-        Return (bar, host): host WAJIB dipegang (parent Python-only —
-        tanpa referensi, C++ object terhapus & bar yatim)."""
-        from PySide6.QtWidgets import QWidget, QVBoxLayout
-        app = _qapp()
-        bar = self._bar()
-        host = QWidget()
-        lay = QVBoxLayout(host)
-        lay.addWidget(bar)
-        lay.addStretch(1)
-        host.resize(800, 400)
-        host.show()
-        app.processEvents()
-        return bar, host
-
-    def test_label_sebaris_dengan_chip(self):
-        app = _qapp()
-        bar, _host = self._hosted()
-        from PySide6.QtWidgets import QLabel
-        row, _flow = bar._rows["jenis"]
-        chip = bar._chips["jenis"]["WASTE"]
-        labels = [c for c in row.findChildren(QLabel)]
-        assert labels, "label dimensi tak ketemu"
-        assert abs(labels[0].y() - chip.y()) <= 2, (
-            f"label y={labels[0].y()} vs chip y={chip.y()} — label masih "
-            "makan baris sendiri")
-
-    def test_tinggi_kompak(self):
-        """3 dimensi × 1 baris + baris aksi ≈ ≤115px (dulu 137-148px)."""
-        app = _qapp()
-        bar, _host = self._hosted()
-        assert bar.height() <= 115, f"slicer {bar.height()}px — masih boros"
-        for key in ("jenis", "keterangan", "status"):
-            row, _ = bar._rows[key]
-            assert row.height() <= 30, (
-                f"baris {key} {row.height()}px — label masih makan baris "
-                "sendiri?")
 
 
 # ============================================================

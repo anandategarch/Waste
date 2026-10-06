@@ -13,7 +13,7 @@ Cakupan (semua fitur sesi ini):
     (ciutkan KPI/judul/ctrl) & ⛶ (reparent + pulihkan index + guard).
 [D] FilterHeader — funnel per kolom + menu (sort naik/turun, daftar
     nilai bercentang, cari, debounce live-apply); integrasi AnomaliView
-    (ctx.set_filter → chip slicer sinkron) + Follow Up (filter LOKAL:
+    (ctx.set_filter → state global lintas-tab) + Follow Up (filter LOKAL:
     daftar & ekspor tak tersentuh).
 [E] Peta hari pop-up — tanggal kecil + nilai TEBAL terpisah (dulu
     '13:1245' membingungkan — user kira '13' bagian nilai).
@@ -534,9 +534,8 @@ class TestFilterHeaderAnomaliView:
         assert ctx.active_filters["keterangan"] == ["Handling"]
         # tabel ter-render ulang: hanya baris Handling (1 dari 2)
         assert view._table.model().rowCount() == 1
-        # chip slicer membaca state sama (satu sumber kebenaran)
-        assert set(view._slicer._effective("keterangan")) == {"Handling"}
-        # funnel aktif via _hf_state
+        # funnel aktif via _hf_state (v2.12.4: slicer dihapus — funnel
+        # = satu-satunya indikator filter kolom)
         assert view._hf_state("KETERANGAN") == ["Handling"]
 
     def test_state_dari_drilldown_string(self):

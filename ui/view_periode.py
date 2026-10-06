@@ -49,7 +49,7 @@ from waste_anomaly.period_history import (
     save_history_entries,
     typical_months,
 )
-from waste_anomaly.followup import CHECK_COL  # v2.12.2: ✓ di tabel banding
+from waste_anomaly.followup import CHECK_COL, FP_COL  # v2.12.2: ✓ di tabel banding
 
 from .shared import fmt_id
 from .state import AppContext
@@ -210,6 +210,15 @@ class PeriodeView(QWidget):
         self._fu_item_full: dict = {}
         self._fu_branch_full: dict = {}
         self._fu_ver: int = -1
+        # v2.12.4: funnel LOKAL per HALAMAN hasil banding (SEMUA kolom
+        # ber-funnel — permintaan user "semua kolom punya filter").
+        # {page: {kolom: nilai terpilih}} — menyaring TAMPILAN tabel
+        # halaman itu; bahan render penuh disimpan (_page_src) supaya
+        # ganti filter tak perlu compare ulang.
+        self._pfilters: dict[str, dict[str, list]] = {
+            k: {} for k, _ in _PAGES}
+        self._page_src: dict[str, object] = {}
+        self._pf_ver: int = -1
         # v2.12.2: muat otomatis saat buka aplikasi → boleh auto-ciut
         # kartu daftar file begitu sukses (kelola file manual = JANGAN
         # ciut sendiri — user sedang melihat daftarnya).
@@ -255,15 +264,13 @@ class PeriodeView(QWidget):
         cl.setSpacing(6)
         ttl = WLabel("🔀 Banding Periode — bulan berjalan vs bulan-bulan sebelumnya", card)
         ttl.setObjectName("cardTitle")
+        ttl.setToolTip(
+            "Tambahkan file rekap bulan lalu (1 file = 1 bulan, format REKAP "
+            "MENTAH — cukup kolom nama barang, resto, satuan & hari 1-31, "
+            "tanpa angka BOM). Nama bulan dibaca otomatis dari nama file; "
+            "klik 2× baris untuk mengoreksi. Semua file dimuat di latar "
+            "belakang — aplikasi tetap responsif.")
         cl.addWidget(ttl)
-        hint = WLabel(
-            "💡 Tambahkan file rekap bulan lalu (1 file = 1 bulan, format REKAP MENTAH "
-            "— cukup kolom nama barang, resto, satuan & hari 1-31, tanpa angka BOM). "
-            "Nama bulan dibaca otomatis dari nama file; klik 2× baris untuk mengoreksi. "
-            "Semua file dimuat di latar belakang — aplikasi tetap responsif.", card)
-        hint.setObjectName("hint")
-        hint.setWordWrap(True)
-        cl.addWidget(hint)
 
         row = QWidget(card)
         rl = QHBoxLayout(row)
@@ -296,7 +303,9 @@ class PeriodeView(QWidget):
         self._btn_add = QPushButton("＋ Tambah File…", btns)
         self._btn_add.setToolTip(
             "Pilih satu atau beberapa workbook bulan lalu "
-            "(bisa multi-pilih sekaligus).")
+            "(bisa multi-pilih sekaligus).\n"
+            "Format: REKAP MENTAH — cukup kolom nama barang, resto, "
+            "satuan & hari 1-31, tanpa angka BOM.")
         self._btn_add.clicked.connect(self._on_add)
         bl.addWidget(self._btn_add)
         self._btn_del = QPushButton("🗑 Hapus Pilihan", btns)
@@ -385,6 +394,14 @@ class PeriodeView(QWidget):
                 table.model().check_toggled.connect(
                     lambda row, checked, k=key: self._on_fu_check(
                         k, row, checked))
+            # v2.12.4: funnel LOKAL per halaman — SEMUA kolom ber-funnel
+            # (skip ✓ + kolom identitas __FP; state per halaman).
+            table.setup_header_filters(
+                None,
+                lambda col, _key, values, k=key: self._on_page_filter(
+                    k, col, values),
+                lambda col, k=key: self._pf_state(k, col),
+                all_cols=True, skip=(CHECK_COL, _FPS_COL, FP_COL))
             self._tables[key] = table
             page = QWidget()
             pl = QVBoxLayout(page)
@@ -393,13 +410,6 @@ class PeriodeView(QWidget):
             pl.addWidget(table, 1)
             self._tabs.addTab(page, title)
         cl.addWidget(self._tabs, 1)
-        hint = WLabel(
-            "💡 Klik 2× baris = pop-up rincian (Ringkasan/Cabang → resto → "
-            "item → per hari) · klik header = sort · centang ✓ di Cabang/"
-            "Item = kumpulkan baris anomali terkait ke tab Follow Up · "
-            "angka minus otomatis merah", card)
-        hint.setObjectName("hint")
-        cl.addWidget(hint)
         return card
 
     # ------------------------------------------------------------
@@ -943,20 +953,80 @@ class PeriodeView(QWidget):
         # tetap nama kanonik 'Pembanding' — kontrak test lama utuh).
         self._label_b_disp = self._col_header_b(b)
         aliases = {"Pembanding": self._label_b_disp}
+        # v2.12.4: dataset berganti → nilai funnel halaman bisa jadi tak ada
+        # lagi di data baru — reset state lokal (pola AnomaliView).
+        if self._pf_ver != self._ctx.data_version:
+            self._pf_ver = self._ctx.data_version
+            for pf in self._pfilters.values():
+                pf.clear()
         for key, df_key in _RESULT_KEYS.items():
             df = res.get(df_key)
             self._tables[key].model().set_header_map(aliases)
             if key in _FU_PAGES:
                 out, vis = self._fu_frame(df)
-                self._tables[key].set_dataframe(out, visible_cols=vis)
+                self._page_src[key] = (out, vis)
+                m_df, m_vis = self._page_mask(key)
+                self._tables[key].set_dataframe(m_df, visible_cols=m_vis)
             else:
-                self._tables[key].set_dataframe(
-                    df if isinstance(df, pd.DataFrame) else None)
+                self._page_src[key] = df if isinstance(df, pd.DataFrame) \
+                    else None
+                self._tables[key].set_dataframe(self._page_mask(key))
         ka_a = res.get("key_akhir_a")
         ka_b = res.get("key_akhir_b")
         self._lbl_compare.setText(
             f"✓ Bulan berjalan ({ka_a} hari) vs {res.get('label_b')} "
             f"({ka_b} hari) — 'Waste per Hari' menormalkan beda panjang bulan.")
+
+    # ------------------------------------------------------------
+    # v2.12.4 — FUNNEL LOKAL PER HALAMAN (SEMUA kolom ber-funnel)
+    # ------------------------------------------------------------
+    def _on_page_filter(self, page: str, col: str, values) -> None:
+        """Menu funnel header halaman → saring TAMPILAN halaman itu saja
+        (bahan _page_src tersimpan — tanpa compare ulang; ✓ / drill /
+        ekspor tak tersentuh)."""
+        pf = self._pfilters.setdefault(page, {})
+        if values:
+            pf[col] = list(values)
+        else:
+            pf.pop(col, None)
+        src = self._page_src.get(page)
+        if src is None:
+            return
+        if page in _FU_PAGES:
+            m_df, m_vis = self._page_mask(page)
+            if isinstance(m_df, pd.DataFrame):
+                self._tables[page].set_dataframe(m_df, visible_cols=m_vis)
+        elif isinstance(src, pd.DataFrame):
+            self._tables[page].set_dataframe(self._page_mask(page))
+        self._ctx.set_status(
+            f"⧩ Filter tampilan ({len(pf)} kolom) diterapkan di halaman "
+            "ini — hasil banding tak berubah", "done")
+
+    def _pf_state(self, page: str, col: str):
+        """Status funnel kolom utk MELUKIS (aktif = terisi merah)."""
+        v = self._pfilters.get(page, {}).get(col)
+        return list(v) if v else None
+
+    def _page_mask(self, page: str):
+        """Bahan halaman + mask isin funnel lokal → SIAP set_dataframe.
+
+        FU page: bahan (df, vis) → kembalikan (masked, vis); halaman lain:
+        kembalikan df masked. Tabel banding ≤ ratusan baris — mask murah."""
+        src = self._page_src.get(page)
+        fu = page in _FU_PAGES
+        if fu and isinstance(src, tuple):
+            df, vis = src[0], src[1]
+        else:
+            df, vis = src, None
+        pf = self._pfilters.get(page) or {}
+        if not isinstance(df, pd.DataFrame) or not pf:
+            return (df, vis) if fu else df
+        m = pd.Series(True, index=df.index)
+        for col, vals in pf.items():
+            if col in df.columns and vals:
+                m &= df[col].isin(vals)
+        out = df[m]
+        return (out, vis) if fu else out
 
     # ------------------------------------------------------------
     # v2.12.2 — JUDUL KOLOM NAMA BULAN + ✓ FOLLOW-UP DI TABEL BANDING
@@ -1147,6 +1217,7 @@ class PeriodeView(QWidget):
     def _clear_tables(self, msg: str) -> None:
         for table in self._tables.values():
             table.set_dataframe(None)
+        self._page_src.clear()  # v2.12.4: bahan funnel halaman ikut kosong
         self._lbl_compare.setText(msg)
         self._has_result = False
         # v2.10.2: bahan drill ikut dikosongkan (pop-up tak membuka data basi).
