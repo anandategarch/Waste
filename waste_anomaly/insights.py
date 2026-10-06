@@ -40,6 +40,7 @@ import calendar
 import numpy as np
 import pandas as pd
 
+from .period_history import month_sort_key
 from .profile import PEER_KEYS
 
 # Nama bulan Indonesia + varian → nomor bulan (konsisten dgn period_history).
@@ -74,8 +75,10 @@ WEEKDAY_COLS = ["HARI", "TOTAL", "N HARI", "RATA PER HARI"]
 SCORECARD_COLS = [
     "RANK", "NAMA RESTO", "TOTAL WASTE", "INTENSITAS %", "KELEBIHAN",
     "ALASAN DOMINAN", "ITEM TIAP HARI", "ANOMALI", "HARI TERSANGKA",
-    "BARU", "PULIH", "STATUS INPUT",
+    "BARU", "PULIH", "STATUS INPUT", "TREN",
 ]
+# ⑧ tren multi-bulan: label kolom bebas (label bulan pembanding) + TREN.
+TREND_BASE_COLS = ["NAMA RESTO", "TREN"]
 
 # Label SATUAN jujur utk agregat BOM-tertimbang.
 _SATUAN_NOTE = ("campuran satuan — tiap baris dibandingkan dgn BOM "
@@ -460,6 +463,82 @@ def weekday_real(df: pd.DataFrame, label: str | None,
 
 
 # ============================================================
+# TREN MULTI-BULAN PER CABANG (⑧ — butuh ≥ 2 bulan pembanding)
+# ============================================================
+
+def branch_trend(df: pd.DataFrame, months: list[dict] | None,
+                 threshold: float = 0.10) -> pd.DataFrame:
+    """Total waste per cabang lintas bulan pembanding + bulan berjalan.
+
+    Kolom: NAMA RESTO + satu kolom per bulan (label pembanding, urut
+    waktu) + 'Bulan Ini' + TREN (vs pembanding TERBARU): '↗ Naik' /
+    '↘ Turun' / '→ Stabil' (batas ±threshold, default 10%), 'Baru'
+    (nol/tak ada bulan lalu), 'Pulih' (aktif bulan lalu → nol sekarang).
+    Butuh ≥ 2 bulan pembanding (series bermakna); kurang → frame kosong
+    (caller menampilkan pesan jujur). Sort 'Bulan Ini' desc.
+    """
+    ok = [m for m in (months or [])
+          if m and not m.get("error") and m.get("agg") is not None
+          and not m["agg"].empty]
+    if len(ok) < 2 or not isinstance(df, pd.DataFrame) or df.empty \
+            or "NAMA RESTO" not in df.columns or "TOTAL" not in df.columns:
+        return pd.DataFrame(columns=TREND_BASE_COLS)
+    ok.sort(key=lambda m: month_sort_key(m.get("label")))
+    cols = ["NAMA RESTO"]
+    data: dict[str, dict[str, float]] = {}
+    for m in ok:
+        label = str(m.get("label") or "Pembanding")
+        agg = m["agg"]
+        tot = pd.to_numeric(agg["TOTAL"], errors="coerce").fillna(0.0) \
+            if "TOTAL" in agg.columns else None
+        sub = agg[["NAMA RESTO"]].copy()
+        sub["_v"] = tot.to_numpy() if tot is not None else 0.0
+        sums = sub.groupby(sub["NAMA RESTO"].astype(str).str.strip())[
+            "_v"].sum()
+        label_u = label if label not in cols else label + " (2)"
+        cols.append(label_u)
+        for r, v in sums.items():
+            data.setdefault(r, {})[label_u] = float(v)
+    # bulan berjalan
+    resto = df["NAMA RESTO"].astype(str).str.strip()
+    total = pd.to_numeric(df["TOTAL"], errors="coerce").fillna(0.0)
+    cur = pd.DataFrame({"r": resto.to_numpy(), "v": total.to_numpy()})
+    cur_sums = cur.groupby("r")["v"].sum()
+    cols.append("Bulan Ini")
+    for r, v in cur_sums.items():
+        data.setdefault(r, {})["Bulan Ini"] = float(v)
+    last_label = cols[-2]  # pembanding terbaru
+    rows = []
+    all_restos = set(data.keys()) | set(cur_sums.index)
+    for r in sorted(all_restos):
+        row = {"NAMA RESTO": r}
+        for c in cols[1:]:
+            row[c] = data.get(r, {}).get(c, 0.0)
+        last = row.get(last_label, 0.0)
+        nowv = row.get("Bulan Ini", 0.0)
+        if last <= 0 and nowv > 0:
+            trend = "Baru"
+        elif nowv <= 0 and last > 0:
+            trend = "Pulih"
+        elif last > 0:
+            pct = (nowv - last) / last
+            if pct > threshold:
+                trend = "↗ Naik"
+            elif pct < -threshold:
+                trend = "↘ Turun"
+            else:
+                trend = "→ Stabil"
+        else:
+            trend = "—"
+        row["TREN"] = trend
+        rows.append(row)
+    out = pd.DataFrame(rows, columns=cols + ["TREN"])
+    out = out.sort_values("Bulan Ini", ascending=False,
+                          kind="stable").reset_index(drop=True)
+    return out
+
+
+# ============================================================
 # SCORECARD KOMPOSIT PER CABANG
 # ============================================================
 
@@ -579,6 +658,43 @@ def scorecard(
     cov_map = {str(r["NAMA RESTO"]): str(r["STATUS INPUT"])
                for _, r in cov.iterrows()} if not cov.empty else {}
 
+    # ⑧ v2.13.3: TREN per cabang vs pembanding TERBARU (butuh ≥ 1 bulan)
+    trend_map: dict[str, str] = {}
+    if has_months:
+        cur_tot = work.groupby("NAMA RESTO")["TOTAL"].sum()
+        last_m = max(
+            (m for m in (months or [])
+             if m and not m.get("error") and m.get("agg") is not None
+             and not m["agg"].empty),
+            key=lambda m: month_sort_key(m.get("label")))
+        agg = last_m["agg"]
+        lt = pd.to_numeric(agg["TOTAL"], errors="coerce") \
+            if "TOTAL" in agg.columns else None
+        lsub = agg[["NAMA RESTO"]].copy()
+        lsub["_v"] = lt.fillna(0.0).to_numpy() if lt is not None else 0.0
+        last_tot = lsub.groupby(
+            lsub["NAMA RESTO"].astype(str).str.strip())["_v"].sum()
+        th = 0.10
+        try:
+            th = abs(float((config or {}).get("thresholds", {}).get(
+                "TH_TREND", 0.10)))
+        except (TypeError, ValueError):
+            th = 0.10
+        for r in restos:
+            nowv = float(cur_tot.get(r, 0.0))
+            last = float(last_tot.get(r, 0.0))
+            if last <= 0 and nowv > 0:
+                trend_map[r] = "Baru"
+            elif nowv <= 0 and last > 0:
+                trend_map[r] = "Pulih"
+            elif last > 0:
+                pct = (nowv - last) / last
+                trend_map[r] = ("↗ Naik" if pct > th
+                                else "↘ Turun" if pct < -th
+                                else "→ Stabil")
+            else:
+                trend_map[r] = "—"
+
     rows = []
     for r in restos:
         total_waste = float(
@@ -593,6 +709,7 @@ def scorecard(
             "BARU": int(baru.get(r, 0)),
             "PULIH": int(pulih.get(r, 0)),
             "STATUS INPUT": cov_map.get(r, "—"),
+            "TREN": trend_map.get(r, "—"),
         })
     out = pd.DataFrame(rows, columns=SCORECARD_COLS)
     if base is not None:

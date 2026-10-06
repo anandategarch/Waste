@@ -39,9 +39,9 @@ v2.12.4:
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QMessageBox,
@@ -56,6 +56,7 @@ from waste_anomaly.followup import (
     FP_COL,
     day_cols,
     export_followup_xlsx,
+    import_followup_workbook,
     suspicious_days,
 )
 from waste_anomaly.period_history import change_vs_history
@@ -124,6 +125,17 @@ class FollowUpView(QWidget):
         self._btn_export.clicked.connect(self._on_export)
         self._btn_export.setEnabled(False)
         rl.addWidget(self._btn_export)
+        # v2.13.3 (⑯): re-import sheet hasil TL terisi → status Selesai.
+        self._btn_import = QPushButton("📥 Impor Hasil TL", ctrl)
+        self._btn_import.setToolTip(
+            "Baca kembali file ekspor yang SUDAH DIISI petugas\n"
+            "(kolom PIC / KATEGORI / PENYEBAB di sheet 'FOLLOW UP') →\n"
+            "baris yang cocok diberi status 'Selesai' + PIC-nya tampil.\n"
+            "Kecocokan = nilai baris (kolom kunci + hari 1-31) — aman\n"
+            "walau sheet di-sort/di-filter di Excel. Tersimpan di\n"
+            "followup_resolved.json.")
+        self._btn_import.clicked.connect(self._on_import)
+        rl.addWidget(self._btn_import)
         self._btn_clear = QPushButton("✕ Kosongkan", ctrl)
         self._btn_clear.setToolTip("Hapus SEMUA baris dari daftar follow-up\n"
                                    "(centangan di tab Anomali ikut lepas).")
@@ -246,6 +258,21 @@ class FollowUpView(QWidget):
                     ["TOTAL", "BULAN LALU", "PERUBAHAN %"]
                     + [c for c in base_cols
                        if c not in ("TOTAL", "BULAN LALU", "PERUBAHAN %")])
+            # v2.13.3 (⑯): status tindak lanjut hasil re-import — kolom
+            # pertama supaya terlihat tanpa scroll horizontal.
+            resolved = self._ctx.followup_resolved
+            if resolved:
+                fp_vals = disp[FP_COL].astype(str) if FP_COL in disp.columns \
+                    else pd.Series([""] * len(disp), index=disp.index)
+                disp = disp.copy()
+                disp["STATUS TL"] = [
+                    "Selesai" if fp in resolved else "—"
+                    for fp in fp_vals]
+                disp["PIC"] = [
+                    str(resolved.get(fp, {}).get("PIC", "") or "—")
+                    if fp in resolved else "—"
+                    for fp in fp_vals]
+                base_cols = ["STATUS TL", "PIC"] + base_cols
             ordered = base_cols + day_cols(disp)
             rest = [c for c in disp.columns
                     if c not in ordered and c != FP_COL]
@@ -288,8 +315,16 @@ class FollowUpView(QWidget):
             total = (pd.to_numeric(rows.get("TOTAL"), errors="coerce")
                      .fillna(0).sum() if "TOTAL" in rows.columns else 0)
             label_b = str(baseline.get("label") or "") if baseline else ""
+            # v2.13.3: hitungan penyelesaian tindak lanjut (⑯)
+            n_done = sum(
+                1 for fp in rows[FP_COL].astype(str)
+                if fp in self._ctx.followup_resolved) \
+                if FP_COL in rows.columns else 0
+            done_part = (f" · selesai {fmt_id(n_done)}/{fmt_id(n)}"
+                         if self._ctx.followup_resolved else "")
             self._lbl_info.setText(
                 f"{fmt_id(n)} baris · TOTAL gabungan {fmt_id(total)}"
+                + done_part
                 + (f" · pembanding: {label_b}" if label_b else ""))
             self._btn_export.setEnabled(True)
             self._btn_clear.setEnabled(True)
@@ -372,7 +407,7 @@ class FollowUpView(QWidget):
             return
         from PySide6.QtWidgets import QFileDialog
         suggested = (f"Waste_FollowUp_"
-                     f"{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
+                     f"{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")  # noqa: DTZ005
         path, _ = QFileDialog.getSaveFileName(
             self, "Ekspor Daftar Follow Up", suggested,
             "Excel files (*.xlsx);;All files (*.*)")
@@ -392,3 +427,47 @@ class FollowUpView(QWidget):
             self._ctx.log(f"!!! Export follow-up gagal: {e}")
             self._ctx.set_status(f"⚠ Export follow-up gagal: {e}", "error")
             QMessageBox.critical(self, "Export Gagal", str(e))
+
+    def _on_import(self) -> None:
+        """⑯ v2.13.3: baca file ekspor yang sudah diisi petugas →
+        baris cocok diberi status 'Selesai' (persist + refresh in-place)."""
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Pilih File Hasil Tindak Lanjut (sheet FOLLOW UP terisi)",
+            str(Path.home() / "Documents"),
+            "Excel files (*.xlsx *.xlsm);;All files (*.*)")
+        if not path:
+            return
+        with busy_feedback(self._ctx.set_status,
+                           "Membaca hasil tindak lanjut"):
+            res = import_followup_workbook(path, self._ctx.config)
+        if res.get("error"):
+            self._ctx.set_status(f"⚠ Impor TL gagal: {res['error']}",
+                                 "error")
+            QMessageBox.critical(self, "Impor Hasil TL",
+                                 str(res["error"]))
+            return
+        resolved = res.get("resolved") or {}
+        n_rows = int(res.get("n_rows", 0))
+        n_filled = int(res.get("n_filled", 0))
+        # berapa yang cocok dgn daftar saat ini (info jujur — baris di
+        # file yang TIDAK ada di daftar tetap disimpan (data berguna bila
+        # barisnya dicentang lagi nanti), tapi dilaporkan terpisah).
+        in_list = sum(1 for fp in resolved
+                      if fp in self._ctx.followup_set())
+        changed = self._ctx.apply_followup_resolved(resolved)
+        self._ctx.log(
+            f"=== Impor Hasil TL ← {res.get('file')} — {n_filled} baris "
+            f"terisi, {in_list} cocok dgn daftar, {changed} status baru ===")
+        msg = (f"File: {res.get('file')}\n"
+               f"{fmt_id(n_rows)} baris dibaca · {fmt_id(n_filled)} baris "
+               f"terisi petugas.\n"
+               f"{fmt_id(in_list)} cocok dengan daftar follow-up saat ini · "
+               f"{fmt_id(changed)} status diperbarui.")
+        if in_list < n_filled:
+            msg += ("\n\nCatatan: baris terisi yang belum ada di daftar "
+                    "sekarang tetap disimpan — statusnya aktif otomatis "
+                    "bila barisnya dicentang lagi.")
+        self._ctx.set_status(
+            f"✓ Impor hasil TL: {n_filled} terisi, {in_list} cocok", "done")
+        QMessageBox.information(self, "Impor Hasil TL", msg)

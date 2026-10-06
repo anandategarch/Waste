@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
@@ -23,12 +24,11 @@ from PySide6.QtWidgets import (
     QTextBrowser,
     QVBoxLayout,
     QWidget,
-    QLabel,
 )
 
 from .shared import APP_DIR, fmt_id
 from .state import AppContext
-from .widgets import Card, WLabel
+from .widgets import Card, WLabel, busy_feedback
 from .workers import PipelineWorker
 
 _SUMMARY_LABELS = {
@@ -184,6 +184,17 @@ class PipelineView(QWidget):
         b_reset = QPushButton("Reset Default", btns)
         b_reset.clicked.connect(self._reset_config)
         bl.addWidget(b_reset)
+        # v2.13.3 (⑮): pratinjau distribusi status dengan nilai form
+        # SEKARANG — tanpa simpan (jawab "kalau aku ubah X, berapa
+        # perubahannya?" sebelum commit).
+        b_preview = QPushButton("👀 Pratinjau Ambang", btns)
+        b_preview.setToolTip(
+            "Hitung ulang 12 sinyal + status MEMAKAI NILAI FORM saat ini\n"
+            "(belum disimpan) pada dataset terakhir — tampilkan jumlah\n"
+            "baris per status SEBELUM → SESUDAH. Berjalan sekali per klik\n"
+            "(sibuk ± 1 dtk di data besar) — bukan live per ketikan.")
+        b_preview.clicked.connect(self._preview_thresholds)
+        bl.addWidget(b_preview)
         bl.addStretch(1)
         inner_lay = QVBoxLayout(inner)
         inner_lay.setContentsMargins(0, 0, 0, 0)
@@ -393,3 +404,67 @@ class PipelineView(QWidget):
             if key in defaults:
                 ent.setText(str(defaults[key]))
         self._ctx.set_status("Form threshold dikembalikan ke default (belum disimpan)", "running")
+
+    def _preview_thresholds(self) -> None:
+        """⑮ v2.13.3: pratinjau distribusi ANOMALY STATUS memakai nilai
+        form saat ini (validasi seperti _save_config — tanpa menulis).
+
+        compute_signals murni vektor (± 0,3-0,5 dtk data asli 25,9 ribu
+        baris; laptop user 2-4× — sekali per klik, busy feedback).
+        """
+        df = self._ctx.df
+        if df is None or df.empty:
+            QMessageBox.information(
+                self, "Pratinjau Ambang",
+                "Belum ada dataset — jalankan pipeline dulu.")
+            return
+        params: dict = {}
+        for key, ent in self._config_vars.items():
+            text = ent.text().strip()
+            try:
+                val = float(text)
+                val = int(val) if val == int(val) else val
+            except ValueError:
+                QMessageBox.critical(
+                    self, "Config Error",
+                    f"Nilai untuk {key} tidak valid: {text}")
+                return
+            if val <= 0:
+                QMessageBox.critical(
+                    self, "Config Error",
+                    f"Nilai {key} harus > 0 (dapat: {text})")
+                return
+            params[key] = val
+        from waste_anomaly.signals import compute_signals
+        with busy_feedback(self._ctx.set_status,
+                           "Menghitung pratinjau ambang"):
+            out = compute_signals(df, self._ctx.key_akhir,
+                                  self._ctx.config, params=params)
+        order = ["Prioritas Tinggi", "Potensi Anomali",
+                 "Perlu Review", "Normal"]
+        def _counts(series):
+            vc = series.value_counts()
+            return {s: int(vc.get(s, 0)) for s in order}
+        before = _counts(df["ANOMALY STATUS"]) \
+            if "ANOMALY STATUS" in df.columns else {s: 0 for s in order}
+        after = _counts(out["ANOMALY STATUS"])
+        lines = []
+        for s in order:
+            d = after[s] - before[s]
+            sign = f"+{d}" if d > 0 else str(d)
+            arrow = "→" if d == 0 else ("↑" if d > 0 else "↓")
+            lines.append(f"{s:<18} {before[s]:>7,}  →  {after[s]:>7,}  "
+                         f"({sign}) {arrow}")
+        n_anom_a = sum(after[s] for s in order[:3])
+        n_anom_b = sum(before[s] for s in order[:3])
+        self._ctx.log("=== Pratinjau ambang (BELUM disimpan) ===\n"
+                      + "\n".join(lines))
+        self._ctx.set_status("👀 Pratinjau ambang selesai (lihat dialog)",
+                             "done")
+        QMessageBox.information(
+            self, "Pratinjau Ambang (belum disimpan)",
+            "Distribusi status dengan nilai form SAAT INI:\n\n"
+            + "\n".join(lines)
+            + f"\n\nAnomali total: {n_anom_b:,} → {n_anom_a:,}\n"
+            "Simpan config.json bila hasilnya sesuai (berlaku mulai run "
+            "berikutnya).")

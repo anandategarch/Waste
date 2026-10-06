@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from waste_anomaly.data_quality import run_checks
 from waste_anomaly.insights import (
+    branch_trend,
     coverage_report,
     money_ranking,
     resto_intensity,
@@ -252,6 +253,34 @@ class ScorecardView(QWidget):
         lay.addWidget(row2, 2)
         self._row2 = row2
 
+        # v2.13.3 (⑧): kartu tren multi-bulan (butuh ≥ 2 pembanding —
+        # tanpa itu pesan jujur; ⤢ menyembunyikan kartu ini juga).
+        tcard = Card(self)
+        tl2 = QVBoxLayout(tcard)
+        tl2.setContentsMargins(12, 10, 12, 10)
+        tl2.setSpacing(6)
+        tt = WLabel("📈 Tren Bulanan per Cabang — butuh ≥ 2 bulan pembanding",
+                    tcard)
+        tt.setObjectName("cardTitle")
+        tt.setToolTip(
+            "Total waste per cabang tiap bulan pembanding + bulan "
+            "berjalan + TREN (vs pembanding terbaru):\n"
+            "↗ Naik / ↘ Turun (batas ±10%), → Stabil, Baru, Pulih.\n"
+            "Menambah file bulan lalu di tab Banding Periode otomatis "
+            "mengisi kartu ini.")
+        tl2.addWidget(tt)
+        self._lbl_trend = WLabel("", tcard)
+        self._lbl_trend.setObjectName("hint")
+        tl2.addWidget(self._lbl_trend)
+        self._trend_table = DataTable(tcard)
+        self._trend_table.setMinimumHeight(90)
+        self._trend_table.setup_header_filters(
+            {}, self._page_apply("trend"), self._page_state("trend"),
+            all_cols=True, skip=())
+        tl2.addWidget(self._trend_table, 1)
+        lay.addWidget(tcard, 2)
+        self._row3 = tcard
+
         # Pop-up rincian cabang — satu instance dipakai ulang.
         self._drill: QDialog | None = None
         # Jendela layar penuh tabel utama (reparent, pola view_hari).
@@ -267,7 +296,7 @@ class ScorecardView(QWidget):
         # funnel LOKAL per tabel tampilan (pola v2.12.4).
         self._lfilters: dict[str, dict[str, list]] = {
             "scorecard": {}, "money": {}, "weekday": {}, "sistemik": {},
-            "dq": {},
+            "dq": {}, "trend": {},
         }
 
         # Reaksi state — lazy (hitung hanya saat tab terlihat; data baru
@@ -334,10 +363,11 @@ class ScorecardView(QWidget):
                 ]) if checks else pd.DataFrame(
                     columns=["SEVERITY", "KODE", "TEMUAN", "JUMLAH",
                              "PENJELASAN"])
+                trend = branch_trend(df, months)
                 self._memo = {
                     "scorecard": sc, "intensity": inten, "money": money,
                     "weekday": wk, "sistemik": sysd, "label": label,
-                    "dq": dq,
+                    "dq": dq, "trend": trend,
                 }
             self._memo_ver = ver
 
@@ -382,6 +412,19 @@ class ScorecardView(QWidget):
                 f"{len(dq)} temuan ({n_warn} warning) — hover judul "
                 "kolom utk istilah; klik 2× sel PENJELASAN utk baca "
                 "lengkap (tooltip).")
+
+        # v2.13.3 (⑧): kartu tren multi-bulan (≥ 2 pembanding).
+        trend = self._apply_local("trend", m.get("trend"))
+        self._trend_table.set_dataframe(trend)
+        if trend is None or trend.empty:
+            self._lbl_trend.setText(
+                "Belum cukup bulan pembanding — tambahkan ≥ 2 file bulan "
+                "lalu di tab Banding Periode (kartu terisi otomatis). "
+                "Kolom TREN tabel utama sudah aktif dengan 1 bulan.")
+        else:
+            self._lbl_trend.setText(
+                f"{len(trend)} cabang · urut 'Bulan Ini' terbesar — "
+                "bandingkan per bulan (klik judul = sort).")
 
         # KPI
         inten = m["intensity"]
@@ -437,7 +480,8 @@ class ScorecardView(QWidget):
         table = {"scorecard": self._table, "money": self._money_table,
                  "weekday": self._weekday_table,
                  "sistemik": self._sistemik_table,
-                 "dq": self._dq_table}[page]
+                 "dq": self._dq_table,
+                 "trend": self._trend_table}[page]
         if isinstance(src, pd.DataFrame) and not src.empty:
             table.set_dataframe(self._apply_local(page, src))
         self._ctx.set_status(
@@ -544,6 +588,7 @@ class ScorecardView(QWidget):
         show = collapsed
         self._kpi_row.setVisible(show)
         self._row2.setVisible(show)
+        self._row3.setVisible(show)
         self._btn_expand.setText(
             "⤢ Perbesar Tabel" if show else "⤡ Tampilkan KPI & Kartu")
         self._ctx.set_status(

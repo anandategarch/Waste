@@ -286,6 +286,112 @@ def save_followup_keys(keys: list[str],
 
 
 # ============================================================
+# HASIL TINDAK LANJUT (re-import sheet terisi) — v2.13.3 ⑯
+# ============================================================
+
+def resolved_path() -> Path:
+    """Jalur followup_resolved.json (samping followup.json)."""
+    return followup_path().with_name("followup_resolved.json")
+
+
+def load_resolved(path: Path | str | None = None) -> dict:
+    """Muat status tindak lanjut {fp: {PIC, KATEGORI, PENYEBAB..., ts}}.
+
+    File absen → {}. File korup → backup .bad + {} (pola load_followup_keys).
+    """
+    p = Path(path) if path else resolved_path()
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        rows = data.get("rows", {})
+        return rows if isinstance(rows, dict) else {}
+    except Exception:  # noqa: BLE001 — korup dibackup, bukan crash
+        _LOG.warning("followup_resolved.json korup → backup .bad")
+        _backup_corrupt_file(p)
+        return {}
+
+
+def save_resolved(resolved: dict,
+                  path: Path | str | None = None) -> bool:
+    """Simpan status tindak lanjut (atomic — pola save_followup_keys)."""
+    p = Path(path) if path else resolved_path()
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"version": 1, "rows": dict(resolved)},
+                      f, ensure_ascii=False, indent=0)
+        tmp.replace(p)
+        return True
+    except Exception:  # noqa: BLE001 — gagal simpan ≠ crash app
+        _LOG.warning("gagal simpan followup_resolved.json")
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        return False
+
+
+def import_followup_workbook(path: str | os.PathLike,
+                             config: dict | None = None) -> dict:
+    """Baca workbook HASIL tindak lanjut (sheet 'FOLLOW UP' format ekspor)
+    → dict {"error": pesan} ATAU {"resolved": {fp: info}, "n_rows": int,
+    "n_filled": int, "file": nama}.
+
+    Baris dianggap TERISI bila minimal satu kolom serah-terima (PIC /
+    KATEGORI / PENYEBAB TERJADINYA WASTE) non-kosong. Kecocokan baris =
+    sidik jari nilai (fingerprint_series: 6 kolom kunci + nilai hari
+    non-nol — kolom hari int/float Excel dinormalisasi ke string nama).
+    Kolom '✓' hasil ekspor diabaikan. Defensif: gagal baca → "error"
+    (tidak pernah raise).
+    """
+    p = Path(path)
+    base = {"file": p.name}
+    try:
+        if not p.exists():
+            return {**base, "error": f"File tidak ditemukan: {p.name}"}
+        df = pd.read_excel(p, sheet_name="FOLLOW UP")
+        if df is None or df.empty:
+            return {**base, "error": "Sheet 'FOLLOW UP' kosong / tidak ada "
+                                     "di file ini (pakai file hasil ekspor "
+                                     "tab Follow Up)."}
+        # normalisasi nama kolom (int 1..31 → '1'..'31'; strip teks)
+        df = df.rename(columns={c: str(c).strip() for c in df.columns})
+        missing = [c for c in KEY_COLS if c not in df.columns]
+        if missing:
+            return {**base, "error": f"Kolom kunci hilang: {missing} — pakai "
+                                     "file hasil ekspor tab Follow Up "
+                                     "(jangan ubah kolomnya)."}
+        # buang kolom centang ekspor (tak ikut sidik jari)
+        df = df.drop(columns=[c for c in (CHECK_COL,) if c in df.columns])
+        fps = fingerprint_series(df)
+        resolved: dict = {}
+        n_filled = 0
+        from datetime import datetime as _dt
+        ts = _dt.now().isoformat(timespec="seconds")  # noqa: DTZ005 — konvensi timestamp naif (pola state.py)
+        for i in range(len(df)):
+            fp = str(fps.iloc[i])
+            if not fp or fp == "nan":
+                continue
+            info = {}
+            for col in HANDOVER_COLS:
+                if col in df.columns:
+                    v = df.iat[i, df.columns.get_loc(col)]
+                    text = "" if pd.isna(v) else str(v).strip()
+                    if text:
+                        info[col] = text
+            if not info:
+                continue
+            n_filled += 1
+            resolved[fp] = {**info, "ts": ts, "file": p.name}
+        return {**base, "resolved": resolved, "n_rows": len(df),
+                "n_filled": n_filled}
+    except Exception as e:  # noqa: BLE001 — defensif (sheet salah dsb.)
+        return {**base, "error": f"{type(e).__name__}: {e}"}
+
+
+# ============================================================
 # EXPORT EXCEL
 # ============================================================
 
