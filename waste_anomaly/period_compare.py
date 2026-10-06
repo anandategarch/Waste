@@ -208,7 +208,10 @@ def compare_periods(
     if ja.empty and jb.empty:
         per_jenis = empty_jenis
     else:
-        merged = ja.merge(jb, on="JENIS", how="outer").fillna(0.0)
+        merged = ja.merge(jb, on="JENIS", how="outer")
+        # v2.13.4: coerce numerik dulu — FutureWarning downcasting fillna.
+        for _c in ("TOTAL_x", "TOTAL_y"):
+            merged[_c] = pd.to_numeric(merged[_c], errors="coerce").fillna(0.0)
         merged = merged.rename(columns={"TOTAL_x": "Total A", "TOTAL_y": "Total B"})
         merged["Delta"] = merged["Total B"] - merged["Total A"]
         merged["Delta %"] = [
@@ -224,7 +227,10 @@ def compare_periods(
     else:
         ga = ta.groupby("NAMA RESTO", as_index=False)["TOTAL"].sum()
         gb = tb.groupby("NAMA RESTO", as_index=False)["TOTAL"].sum()
-        m = ga.merge(gb, on="NAMA RESTO", how="outer").fillna(0.0)
+        m = ga.merge(gb, on="NAMA RESTO", how="outer")
+        # v2.13.4: coerce numerik dulu — FutureWarning downcasting fillna.
+        for _c in ("TOTAL_x", "TOTAL_y"):
+            m[_c] = pd.to_numeric(m[_c], errors="coerce").fillna(0.0)
         m = m.rename(columns={"TOTAL_x": "Total A", "TOTAL_y": "Total B"})
         m["Delta"] = m["Total B"] - m["Total A"]
         m["Delta %"] = [_delta_pct(b, a) for a, b in zip(m["Total A"], m["Total B"])]
@@ -243,7 +249,9 @@ def compare_periods(
         m = ta.merge(tb, on=key, how="outer", suffixes=(" A", " B"))
         # Kolom hasil merge: TOTAL A / TOTAL B (suffix dari kolom TOTAL)
         m = m.rename(columns={"TOTAL A": "Total A", "TOTAL B": "Total B"})
-        m[["Total A", "Total B"]] = m[["Total A", "Total B"]].fillna(0.0)
+        # v2.13.4: coerce numerik dulu — FutureWarning downcasting fillna.
+        for _c in ("Total A", "Total B"):
+            m[_c] = pd.to_numeric(m[_c], errors="coerce").fillna(0.0)
         m["Delta"] = m["Total B"] - m["Total A"]
         m["Delta %"] = [_delta_pct(b, a) for a, b in zip(m["Total A"], m["Total B"])]
         m = m.reindex(
@@ -253,7 +261,9 @@ def compare_periods(
         # Baru = hanya di B (Total A 0 & Total B > 0); Hilang = sebaliknya.
         full = ta.merge(tb, on=key, how="outer", suffixes=(" A", " B"))
         full = full.rename(columns={"TOTAL A": "Total A", "TOTAL B": "Total B"})
-        full[["Total A", "Total B"]] = full[["Total A", "Total B"]].fillna(0.0)
+        # v2.13.4: coerce numerik dulu — FutureWarning downcasting fillna.
+        for _c in ("Total A", "Total B"):
+            full[_c] = pd.to_numeric(full[_c], errors="coerce").fillna(0.0)
         new_items = full[full["Total A"] <= 0][key + ["Total B"]].sort_values(
             "Total B", ascending=False
         ).head(top_n).reset_index(drop=True)[NEW_ITEM_COLS]

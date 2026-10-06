@@ -441,6 +441,16 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
           "Perubahan %": (r[3] if len(r) > 3
                           else _pct(float(r[1]), float(r[2])))}
          for r in rows], columns=SUMMARY_COLS)
+    # v2.13.4 (fix "hari 30 error"): kolom float64 mengubah None→NaN,
+    # lalu fmt_delta_pct menampilkan NaN sebagai 'BARU' — baris 'Hari
+    # Data' (mis. 30 vs 31 hari) tampak seperti error "bulan 30 hari".
+    # Bangun ulang kolom sebagai OBJECT supaya None TETAP None →
+    # fmt_delta_pct(None) = '' (kosong, sesuai desain awal). NaN asli
+    # dari _pct(base=0) tetap NaN → 'BARU' (benar: tanpa riwayat).
+    # Kontrak isna(None)=True → test lama (pd.isna) tetap hijau.
+    summary["Perubahan %"] = pd.Series(
+        [(r[3] if len(r) > 3 else _pct(float(r[1]), float(r[2])))
+         for r in rows], dtype=object)
 
     # ---- per JENIS ----
     ja = a.get("jenis_totals")
@@ -453,7 +463,10 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
         jb = jb if jb is not None and not jb.empty else pd.DataFrame(
             columns=JENIS_TOTALS_COLS)
         m = ja.merge(jb, on="JENIS", how="outer")
-        m = m.fillna({"TOTAL_x": 0.0, "TOTAL_y": 0.0})
+        # v2.13.4: coerce numerik dulu (pola compare_level) — fillna pada
+        # kolom object memicu FutureWarning downcasting pandas 3.x.
+        for _c in ("TOTAL_x", "TOTAL_y"):
+            m[_c] = pd.to_numeric(m[_c], errors="coerce").fillna(0.0)
         m = m.rename(columns={"TOTAL_x": "Bulan Ini",
                               "TOTAL_y": "Pembanding"})
         m["Selisih"] = m["Bulan Ini"] - m["Pembanding"]
@@ -515,7 +528,11 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
             gb = tb.groupby("NAMA RESTO", as_index=False)["TOTAL"].sum()
             on = "NAMA RESTO"
         mb = ga.merge(gb, on=on, how="outer")
-        mb = mb.fillna({"TOTAL_x": 0.0, "TOTAL_y": 0.0}).rename(
+        # v2.13.4: coerce numerik dulu (pola compare_level) — FutureWarning
+        # downcasting fillna pada kolom object tidak muncul lagi.
+        for _c in ("TOTAL_x", "TOTAL_y"):
+            mb[_c] = pd.to_numeric(mb[_c], errors="coerce").fillna(0.0)
+        mb = mb.rename(
             columns={"TOTAL_x": "Bulan Ini", "TOTAL_y": "Pembanding"})
         mb["Selisih"] = mb["Bulan Ini"] - mb["Pembanding"]
         mb["Perubahan %"] = [_pct(c, base) for c, base
@@ -525,8 +542,11 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
         branch = mb.reset_index(drop=True)[branch_cols]
 
         m = ta.merge(tb, on=key, how="outer")
-        m = m.fillna({"TOTAL_x": 0.0, "TOTAL_y": 0.0}).rename(
-            columns={"TOTAL_x": "Bulan Ini", "TOTAL_y": "Pembanding"})
+        # v2.13.4: coerce numerik dulu (pola compare_level).
+        for _c in ("TOTAL_x", "TOTAL_y"):
+            m[_c] = pd.to_numeric(m[_c], errors="coerce").fillna(0.0)
+        m = m.rename(columns={"TOTAL_x": "Bulan Ini",
+                              "TOTAL_y": "Pembanding"})
         m["Selisih"] = m["Bulan Ini"] - m["Pembanding"]
         m["Perubahan %"] = [_pct(c, base) for c, base
                             in zip(m["Bulan Ini"], m["Pembanding"])]
@@ -535,7 +555,10 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
         items = m.reset_index(drop=True)[item_cols]
         # Baru = hanya di bulan INI (tidak ada bulan lalu); hilang = sebaliknya.
         full = ta.merge(tb, on=key, how="outer")
-        full = full.fillna({"TOTAL_x": 0.0, "TOTAL_y": 0.0}).rename(
+        # v2.13.4: coerce numerik dulu (pola compare_level).
+        for _c in ("TOTAL_x", "TOTAL_y"):
+            full[_c] = pd.to_numeric(full[_c], errors="coerce").fillna(0.0)
+        full = full.rename(
             columns={"TOTAL_x": "Bulan Ini", "TOTAL_y": "Pembanding"})
         new_items = full[full["Pembanding"] <= 0][
             key + ["Bulan Ini"]].sort_values(
