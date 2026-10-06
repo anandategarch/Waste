@@ -24,11 +24,19 @@ STATUS_COLORS: dict[str, tuple[str, str]] = {
 SELECT_BG = "#ccfbf1"        # teal-100 — seleksi baris
 SELECT_FG = "#134e4a"
 
+# v2.12.5 — sumber tunggal font UI (dipakai QSS *{} + pengukuran judul
+# kolom di DataTable._auto_columns): widget.font() TIDAK mewarisi font
+# QSS (Windows: default 9pt vs QSS 13px → lantai header kurang ukur
+# ~8% → "nama header terpotong" oleh funnel).
+UI_FONT_FAMILY = '"Segoe UI", "Tahoma", "DejaVu Sans", sans-serif'
+UI_FONT_PX = 13
+UI_HEADER_WEIGHT = 600
+
 
 QSS = f"""
 * {{
-    font-family: "Segoe UI", "Tahoma", "DejaVu Sans", sans-serif;
-    font-size: 13px;
+    font-family: {UI_FONT_FAMILY};
+    font-size: {UI_FONT_PX}px;
 }}
 QMainWindow {{ background: {C_BG}; }}
 QFrame#card {{
@@ -101,7 +109,7 @@ QHeaderView::section {{
     border-right: 1px solid {C_BORDER};
     border-bottom: 1px solid {C_BORDER};
     padding: 6px 8px;
-    font-weight: 600;
+    font-weight: {UI_HEADER_WEIGHT};
 }}
 QTableView::item {{ padding: 3px 8px; }}
 

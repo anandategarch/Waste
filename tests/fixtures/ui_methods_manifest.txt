@@ -23,6 +23,7 @@ view_periode.py::fmt_run_label
 view_pipeline.py::PipelineView
 widgets.py::_HeaderFilterMenu
 widgets.py::_paint_funnel
+widgets.py::_header_font
 widgets.py::busy_feedback
 widgets.py::Card
 widgets.py::DataTable

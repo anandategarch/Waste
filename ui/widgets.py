@@ -22,7 +22,7 @@ from contextlib import contextmanager
 
 import pandas as pd
 from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPolygonF
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -44,7 +44,12 @@ from PySide6.QtWidgets import (
 
 from .models import PandasTableModel
 from .shared import fmt_id
-from .theme import STATUS_COLORS
+from .theme import (
+    C_BORDER,
+    STATUS_COLORS,
+    UI_FONT_FAMILY,
+    UI_FONT_PX,
+)
 
 
 # ============================================================
@@ -67,17 +72,43 @@ _HF_ACTIVE = "#dc2626"   # funnel terisi merah = kolom sedang terfilter
 _HF_IDLE = "#94a3b8"     # funnel garis tipis = tanpa filter
 _HF_BG = "#f8fafc"       # background QSS QHeaderView::section (backing)
 _HF_MAX_ITEMS = 400      # batas item daftar (kolom ribuan nilai → cari)
+# v2.12.5: LEBBAR ZONA FUNNEL di ujung kanan section. Judul kolom
+# dilukis Qt DI DALAM rect yang disempitkan sebesar zona ini (teks
+# ter-ELIDE sebelum funnel — tidak pernah terpotong/tertutup ikon;
+# v2.12.3-4 melukis teks di rect PENUH lalu menutup ekornya dgn
+# backing → judul tampak terpotong di kolom lantai-lebar).
+_HF_STRIP = 22
+# v2.12.5: jeda lindungan setelah menu funnel tertutup — klik ganda
+# "artefak" (klik penutup menu di-replay Qt ke baris tabel sebagai
+# tekan#1, klik ke-2 user menjadi tekan#2 pada posisi sama → Qt
+# menyintesis klik-ganda → pop-up drill detail terbuka sendiri)
+# ditelan supaya tidak muncul saat/ setelah apply filter. Rentang =
+# interval dobel-klik OS + margin (user tak mungkin mengarjakan
+# klik-ganda sah sesegera itu setelah menutup menu).
+_HF_HIDE_GUARD_S = 0.6
+
+
+def _header_font() -> QFont:
+    """Font judul kolom SEBAGAIMANA DILUKIS QSS — family chain + 13px +
+    weight 600 (theme: UI_FONT_*). Dipakai _auto_columns utk lantai
+    lebar jujur: ``self.font()`` TIDAK mewarisi font QSS (di Windows
+    default 9pt vs QSS 13px → pengukuran kurang ~8% → ekor judul
+    terpotong funnel; terbukti piksel: "ANOMALY SCORE" 111 vs 124)."""
+    fam = [p.strip().strip('"') for p in UI_FONT_FAMILY.split(",")]
+    f = QFont()
+    f.setFamilies(fam)
+    f.setPixelSize(UI_FONT_PX)
+    f.setWeight(QFont.Weight.DemiBold)
+    return f
 
 
 def _paint_funnel(painter: QPainter, rect: QRect, active: bool) -> None:
-    """Ikon funnel kecil di ujung kanan judul section (backing menutup
-    area itu supaya tak bertabrakan dgn panah sort Qt)."""
+    """Ikon funnel kecil DI DALAM zona strip kanan section (v2.12.5:
+    tanpa backing — zona strip sudah dikosongkan dari teks oleh
+    paintSection, jadi tidak ada lagi yang perlu ditutup)."""
     painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    bg = QRect(int(rect.right()) - 32, int(rect.top()) + 2, 20,
-               int(rect.height()) - 4)
-    painter.fillRect(bg, QColor(_HF_BG))
-    cx = float(rect.right()) - 22.0
+    cx = float(rect.right()) - 12.0
     cy = float(rect.center().y())
     pts = QPolygonF([
         QPointF(cx - 5.0, cy - 4.0), QPointF(cx + 5.0, cy - 4.0),
@@ -282,12 +313,21 @@ class FilterHeader(QHeaderView):
 
     # ------------------------------------------------------------
     def paintSection(self, painter, rect, logical):
-        super().paintSection(painter, rect, logical)
+        """v2.12.5 — judul TIDAK PERNAH tertutup funnel.
+
+        Kolom ber-funnel: Qt melukis judul (+ panah sort) di DALAM rect
+        yang disempitkan ``_HF_STRIP`` px dari kanan → teks ter-elide
+        sebelum strip, lalu strip dilukis manual: bg QSS #f8fafc + ikon
+        funnel + border kanan/bawah (replica QSS) — visual satu section
+        utuh. Kolom tanpa funnel: super() murni (perilaku bawaan).
+        (v2.12.3-4: super() dgn rect PENUH lalu backing menutup
+        [right-32, right-12] → ekor judul bold tertutup = "nama header
+        terpotong" + panah sort ikut tertutup.)"""
         t = self._table()
-        if t is None:
-            return
         name = self._col_name(logical)
-        if not t._hf_has(name):
+        funnel = t is not None and t._hf_has(name)
+        if not funnel:
+            super().paintSection(painter, rect, logical)
             return
         state = None
         try:
@@ -295,6 +335,20 @@ class FilterHeader(QHeaderView):
                 state = t._hf_state(name)
         except Exception:  # noqa: BLE001 — state_fn view tak boleh crash paint
             state = None
+        r = QRect(rect)
+        r.adjust(0, 0, -_HF_STRIP, 0)
+        super().paintSection(painter, r, logical)
+        # strip kanan: bg + border (replica QSS section) + ikon
+        strip = QRect(r.right() + 1, rect.top(),
+                      rect.right() - r.right(), rect.height())
+        painter.save()
+        painter.fillRect(strip, QColor(_HF_BG))
+        painter.setPen(QColor(C_BORDER))
+        painter.drawLine(strip.right(), strip.top(),
+                         strip.right(), strip.bottom())
+        painter.drawLine(strip.left(), strip.bottom(),
+                         strip.right(), strip.bottom())
+        painter.restore()
         _paint_funnel(painter, rect, active=bool(state))
 
     def _hit_funnel(self, pos) -> int | None:
@@ -308,7 +362,8 @@ class FilterHeader(QHeaderView):
         x0 = self.sectionViewportPosition(logical)
         w = self.sectionSize(logical)
         fx = pos.x()
-        if w >= 60 and x0 + w - 34 <= fx <= x0 + w - 8:
+        # v2.12.5: zona = strip kanan (ikon berpusat di right-12).
+        if w >= 60 and x0 + w - _HF_STRIP - 2 <= fx <= x0 + w - 2:
             return logical
         return None
 
@@ -357,6 +412,12 @@ class FilterHeader(QHeaderView):
         menu = _HeaderFilterMenu(t, name, key, counts, state,
                                   t._hf_apply, self)
         self._menu = menu  # deterministik (test/automation) + jaga umur
+        # v2.12.5: menu tertutup → catat waktu + rect global menu di
+        # tabel — mouseDoubleClickEvent menelan klik-ganda artefak yang
+        # jatuh di bekas area menu (klik ke-2 user di posisi tombol
+        # yang sama, kini baris tabel) supaya pop-up detail tidak
+        # terbuka sendiri pasca apply/sort/tutup menu.
+        menu.aboutToHide.connect(t._note_hf_menu_hidden)
         pos = self.mapToGlobal(QPoint(
             int(self.sectionViewportPosition(logical)),
             int(self.height())))
@@ -452,6 +513,9 @@ class DataTable(QTableView):
         self._hf_skip: set[str] = set()  # v2.12.4: kolom tanpa funnel
         self._hf_apply = None
         self._hf_state = None
+        # v2.12.5: (waktu, rect-global menu funnel terakhir tertutup)
+        # — sumber guard klik-ganda artefak (lihat mouseDoubleClickEvent)
+        self._hf_hide: tuple[float, QRect | None] = (-1e9, None)
         self.setSortingEnabled(True)
         self.setAlternatingRowColors(True)
         self.setWordWrap(True)  # teks panjang wrap — baris tumbuh, tidak terpotong
@@ -585,6 +649,44 @@ class DataTable(QTableView):
         rec = self._model.record(index.row())
         if rec is not None:
             self.double_clicked.emit(rec)
+
+    # ------------------------------------------------------------
+    # v2.12.5 — klik ganda artefak pasca menu funnel ditelan
+    # ------------------------------------------------------------
+    def _note_hf_menu_hidden(self) -> None:
+        """Menu funnel barusan tertutup (aboutToHide) — catat waktu +
+        area global menu (rect masih tersedia saat sinyal ini)."""
+        hdr = self.horizontalHeader()
+        m = getattr(hdr, "_menu", None)
+        rect = None
+        if m is not None:
+            try:
+                rect = QRect(m.frameGeometry())  # salinan (global)
+            except Exception:  # noqa: BLE001 — geometry basi tak fatal
+                rect = None
+        self._hf_hide = (time.monotonic(), rect)
+
+    def mouseDoubleClickEvent(self, e) -> None:
+        """Telan klik-ganda "hantu" pasca menu funnel tertutup.
+
+        Mekanisme keluhan user ("apply filter → pop-up drill detail
+        muncul sendiri") — terbukti empiris: (1) menu funnel menutupi
+        baris tabel; klik penutup menu yang jatuh di luar menu
+        DI-REPLAY Qt ke baris tabel sebagai tekan#1; (2) klik ke-2
+        user (pilih baris / kebiasaan dobel-klik tombol menu) pada
+        posisi sama = tekan#2 → Qt menyintesis klik-ganda →
+        doubleClicked → pop-up detail terbuka tanpa niat user.
+        (Qt hanya memancarkan doubleClicked bila tekan#1 mengenai
+        baris yang sama — itulah kenapa pasangan tekan ini efektif
+        memicunya.) Solusi: dalam selang <interval-dobel-klik + margin
+        setelah menu funnel tertutup, klik-ganda pada tabel ini
+        DIABAIKAN (klik tunggal pilih-baris tetap hidup). Klik ganda
+        sah sesudah selang itu tidak terganggu."""
+        ts, _rect = self._hf_hide
+        if time.monotonic() - ts < _HF_HIDE_GUARD_S:
+            e.accept()
+            return
+        super().mouseDoubleClickEvent(e)
 
     def setup_header_filters(self, cols: "dict[str, str] | None",
                              apply_fn=None, state_fn=None,
@@ -783,6 +885,12 @@ class DataTable(QTableView):
         fm = self.fontMetrics()
         names = [str(model.headerData(c, Qt.Horizontal))
                  for c in range(n_cols)]
+        # v2.12.5: JUDUL dilukis QSS dgn font-weight 600 — fontMetrics
+        # widget (weight 400) mengukur 8-12% LEBIH PENDEK dari yang
+        # dilukis (bukti piksel: "ANOMALY SCORE" adv 111 vs terlukis
+        # 124 → lantai kurang → ekor judul tertutup funnel = "nama
+        # header terpotong"). Ukur judul dgn font QSS yang benar.
+        hfm = QFontMetrics(_header_font())
         # v2.7.0 (V26-C1): kolom di luar visible_cols disembunyikan permanen
         # dan DIKECUALIKAN dari semua perhitungan lebar (lantai/penyekalaan
         # hanya menghitung kolom yang benar-benar tampak).
@@ -798,12 +906,15 @@ class DataTable(QTableView):
                 widths.append(0)  # placeholder — kolom hidden tak diukur
                 floors.append(0)
                 continue
-            hw = fm.horizontalAdvance(names[c]) + 26
-            # v2.12.3: kolom ber-funnel butuh ±20px ekstra (ikon) supaya
-            # judul tak terpotong oleh funnel — lantai & lebar naik.
+            hw = hfm.horizontalAdvance(names[c]) + 26
+            # v2.12.3: kolom ber-funnel butuh zona strip kanan supaya
+            # judul + panah sort ter-elide SEBELUM ikon (v2.12.5: strip
+            # kini direservasi struktural oleh paintSection — teks tak
+            # pernah dilukis di bawahnya; v2.12.3-4 backing menutup
+            # ekornya = terpotong).
             # v2.12.4: berlaku juga mode all_cols (SEMUA kolom ber-funnel).
             if self._hf_has(names[c]):
-                hw += 20
+                hw += _HF_STRIP
             floors.append(min(max(min_w, hw), cap))
             w = hw
             for r in range(n_rows):
