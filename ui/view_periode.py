@@ -49,6 +49,7 @@ from waste_anomaly.period_history import (
     save_history_entries,
     typical_months,
 )
+from waste_anomaly.followup import CHECK_COL  # v2.12.2: ✓ di tabel banding
 
 from .shared import fmt_id
 from .state import AppContext
@@ -78,6 +79,15 @@ _RESULT_KEYS = {
 
 # Penanda userData combo: pilihan tipikal gabungan vs index bulan.
 _TYPICAL_KEY = "__tipikal__"
+
+# v2.12.2 — halaman hasil banding yang PUNYA centang ✓ follow-up:
+# baris cabang / item punya identitas (resto[+barang]) yang bisa dipetakan
+# ke baris anomali bulan berjalan. Ringkasan & Per Jenis = level metrik
+# (tak ada identitas baris); Item Hilang = sengaja TANPA ✓ (barisnya tak
+# ada di bulan berjalan — tak ada baris anomali utk dikumpulkan).
+_FU_PAGES = ("branch", "items", "new_items")
+# Kolom identitas tersembunyi di df tampilan (list sidik jari per baris).
+_FPS_COL = "__FPS"
 
 
 class BandTableDialog(QDialog):
@@ -126,8 +136,12 @@ class BandTableDialog(QDialog):
                    df: pd.DataFrame | None, level: str | None = None,
                    payload: dict | None = None, root: bool = False,
                    sort_desc: str | None = None,
-                   maximized: bool = False) -> None:
-        """Tampilkan satu level tabel (root=True = mulai rantai baru)."""
+                   maximized: bool = False,
+                   header_map: dict | None = None) -> None:
+        """Tampilkan satu level tabel (root=True = mulai rantai baru).
+
+        header_map (v2.12.2): alias judul kolom tampilan (mis. 'Pembanding'
+        → nama bulan) — data tetap nama kanonik."""
         self._level = level
         self._payload = dict(payload or {})
         if root or not self._path:
@@ -135,6 +149,7 @@ class BandTableDialog(QDialog):
         self._path.append(str(title))
         self._lbl_title.setText(str(title))
         self._lbl_sub.setText(str(subtitle))
+        self._table.model().set_header_map(header_map)
         with busy_feedback(self._ctx.set_status,
                            "Menampilkan tabel banding"):
             self._table.set_dataframe(df, sort_desc=sort_desc)
@@ -181,6 +196,18 @@ class PeriodeView(QWidget):
         # disinkronkan di _refresh_result (satu tempat, tanpa render ganda:
         # _finalize hanya set_history; sinyal → _refresh_result → rebuild).
         self._combo_version: int = -1
+        # v2.12.2: judul kolom pengganti 'Pembanding' dari render terakhir
+        # (dipakai juga oleh pop-up drill & layar penuh).
+        self._label_b_disp = "Pembanding"
+        # v2.12.2: peta (jenis, resto[, barang]) → [sidik jari anomali]
+        # (memo per data_version — dgn metode _fu_maps).
+        self._fu_item: dict | None = None
+        self._fu_branch: dict | None = None
+        self._fu_ver: int = -1
+        # v2.12.2: muat otomatis saat buka aplikasi → boleh auto-ciut
+        # kartu daftar file begitu sukses (kelola file manual = JANGAN
+        # ciut sendiri — user sedang melihat daftarnya).
+        self._auto_load = True
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 8, 8, 8)
@@ -200,6 +227,9 @@ class PeriodeView(QWidget):
 
         ctx.data_ready.connect(self._on_data_ready)
         ctx.history_ready.connect(self._on_history_ready)
+        # v2.12.2: centangan ✓ berubah di mana pun (tab Anomali / banding /
+        # tombol massal) → segarkan kolom ✓ banding in-place.
+        ctx.followup_changed.connect(self._on_followup_changed)
 
         # Muat daftar tersimpan → auto-load background (user: "ya boleh
         # diingat"). Konstruktor berjalan saat app dibuka; worker QThread
@@ -341,6 +371,14 @@ class PeriodeView(QWidget):
             # rantai Total → resto → item → hari (semua tab punya rute).
             table.double_clicked.connect(
                 lambda rec, k=key: self._on_tab_double(k, rec))
+            # v2.12.2: kolom ✓ follow-up di halaman cabang/item/baru —
+            # komponen & mekanisme model SAMA dgn tab Anomali (flip bool
+            # in-place + sinyal, tanpa render ulang).
+            if key in _FU_PAGES:
+                table.model().set_check_column(CHECK_COL)
+                table.model().check_toggled.connect(
+                    lambda row, checked, k=key: self._on_fu_check(
+                        k, row, checked))
             self._tables[key] = table
             page = QWidget()
             pl = QVBoxLayout(page)
@@ -351,7 +389,9 @@ class PeriodeView(QWidget):
         cl.addWidget(self._tabs, 1)
         hint = WLabel(
             "💡 Klik 2× baris = pop-up rincian (Ringkasan/Cabang → resto → "
-            "item → per hari) · klik header = sort", card)
+            "item → per hari) · klik header = sort · centang ✓ di Cabang/"
+            "Item = kumpulkan baris anomali terkait ke tab Follow Up · "
+            "angka minus otomatis merah", card)
         hint.setObjectName("hint")
         cl.addWidget(hint)
         return card
@@ -392,6 +432,7 @@ class PeriodeView(QWidget):
     # DAFTAR FILE
     # ------------------------------------------------------------
     def _on_add(self) -> None:
+        self._auto_load = False  # v2.12.2: kelola file manual → jangan auto-ciut
         paths, _ = QFileDialog.getOpenFileNames(
             self, "Pilih Workbook Pembanding (bisa beberapa)",
             str(Path.home() / "Documents"),
@@ -428,6 +469,7 @@ class PeriodeView(QWidget):
         self._finalize()  # render ulang dgn sisa bulan (tanpa worker bila semua termuat)
 
     def _on_reload(self) -> None:
+        self._auto_load = False  # v2.12.2: kelola file manual → jangan auto-ciut
         if self._running:
             self._cancel()
             return
@@ -585,6 +627,16 @@ class PeriodeView(QWidget):
         else:
             self._ctx.set_status(
                 "⚠ Semua file pembanding gagal dimuat", "error")
+        # v2.12.2: auto-ciut kartu daftar file setelah MUAT OTOMATIK saat
+        # buka aplikasi sukses (≥1 bulan) — tabel hasil langsung makan
+        # tinggi penuh (dihitung: kartu file 299px + kartu hasil 298px →
+        # tabel cuma 72px ≈ 2 baris terlihat meski cuma 1 file). HANYA
+        # jalur muat-otomatis: tambah/muat-ulang manual tak menyentuh
+        # (user sedang mengelola daftar — tombol ⤢ tetap tersedia).
+        if ok and self._auto_load:
+            self._card_files.setVisible(False)
+            self._btn_expand.setText("⤡ Tampilkan Daftar File")
+        self._auto_load = False
         self._finalize()
 
     def _on_failed(self, err: str, tb: str) -> None:
@@ -651,7 +703,8 @@ class PeriodeView(QWidget):
                f"jendela penuh; klik 2× baris = rincian; Esc = kembali")
         self._full.show_table(title, sub, df, level="tab",
                               payload={"tab_key": key}, root=True,
-                              maximized=True)
+                              maximized=True,
+                              header_map={"Pembanding": self._label_b_disp})
 
     def _on_tab_double(self, key: str, rec: pd.Series) -> None:
         """Klik 2× baris tabel tab → buka rantai drill yang sesuai."""
@@ -676,8 +729,11 @@ class PeriodeView(QWidget):
                     f"🏬 Resto penyumbang {jenis} (per jenis)", jenis=jenis)
         elif key == "branch":
             resto = str(rec.get("NAMA RESTO") or "").strip()
+            # v2.12.2: baris cabang kini ber-JENIS → drill item langsung
+            # ter-filter jenis itu (banding fokus 'jenis apa yang naik').
+            jenis = str(rec.get("JENIS") or "").strip() or None
             if resto:
-                self._open_items(resto, jenis=None, root=True)
+                self._open_items(resto, jenis=jenis, root=True)
         elif key in ("items", "new_items", "gone_items"):
             resto = str(rec.get("NAMA RESTO") or "").strip()
             barang = str(rec.get("NAMA BARANG") or "").strip()
@@ -726,7 +782,8 @@ class PeriodeView(QWidget):
         sub = self._labels_sub(
             f"{note} • klik 2× resto = rincian itemnya")
         self._drill.show_table(title, sub, df, level="resto",
-                               payload={"jenis": jenis}, root=True)
+                               payload={"jenis": jenis}, root=True,
+                               header_map={"Pembanding": self._label_b_disp})
 
     def _open_items(self, resto: str, jenis: str | None,
                     root: bool = False) -> None:
@@ -742,7 +799,8 @@ class PeriodeView(QWidget):
             f"{note} • klik 2× item = rincian per hari")
         self._drill.show_table(f"📦 Item di {resto}", sub, df, level="item",
                                payload={"resto": resto, "jenis": jenis},
-                               root=root)
+                               root=root,
+                               header_map={"Pembanding": self._label_b_disp})
 
     def _open_day(self, resto: str, barang: str,
                   root: bool = False) -> None:
@@ -758,7 +816,7 @@ class PeriodeView(QWidget):
             "• baris = tanggal")
         self._drill.show_table(
             f"📅 Hari 1–{n} — {barang} @ {resto}", sub, df, level="day",
-            root=root)
+            root=root, header_map={"Pembanding": self._label_b_disp})
 
     # ------------------------------------------------------------
     # HASIL BANDING
@@ -871,15 +929,166 @@ class PeriodeView(QWidget):
         # combo) — pop-up yang masih terbuka menampilkan salinan konteks
         # LAMA; ditutup supaya tak menyesatkan.
         self._close_popups()
+        # v2.12.2: (1) judul kolom 'Pembanding' → NAMA BULAN pilihan
+        # (permintaan user — label sudah dihitung compare_quantity, kini
+        # dipakai di header kolom, bukan cuma subjudul); (2) halaman
+        # cabang/item/baru dapat kolom ✓ follow-up + kolom JENIS (sumber
+        # agg_jenis). Alias dipasang di headerData MODEL (data/sort/record
+        # tetap nama kanonik 'Pembanding' — kontrak test lama utuh).
+        self._label_b_disp = self._col_header_b(b)
+        aliases = {"Pembanding": self._label_b_disp}
         for key, df_key in _RESULT_KEYS.items():
             df = res.get(df_key)
-            self._tables[key].set_dataframe(
-                df if isinstance(df, pd.DataFrame) else None)
+            self._tables[key].model().set_header_map(aliases)
+            if key in _FU_PAGES:
+                out, vis = self._fu_frame(df)
+                self._tables[key].set_dataframe(out, visible_cols=vis)
+            else:
+                self._tables[key].set_dataframe(
+                    df if isinstance(df, pd.DataFrame) else None)
         ka_a = res.get("key_akhir_a")
         ka_b = res.get("key_akhir_b")
         self._lbl_compare.setText(
             f"✓ Bulan berjalan ({ka_a} hari) vs {res.get('label_b')} "
             f"({ka_b} hari) — 'Waste per Hari' menormalkan beda panjang bulan.")
+
+    # ------------------------------------------------------------
+    # v2.12.2 — JUDUL KOLOM NAMA BULAN + ✓ FOLLOW-UP DI TABEL BANDING
+    # ------------------------------------------------------------
+    def _col_header_b(self, b: dict | None) -> str:
+        """Judul kolom pengganti kata 'Pembanding' — NAMA BULAN pilihan
+        (mis. 'Juli 2026'); tipikal → 'Tipikal — median N bulan'."""
+        if not b:
+            return "Pembanding"
+        n = b.get("months_count")
+        if n:
+            return f"Tipikal — median {int(n)} bulan"
+        return str(b.get("label") or "Pembanding")
+
+    def _fu_maps(self):
+        """Peta baris banding → sidik jari baris anomali bulan berjalan.
+
+        item:   (jenis, resto, barang) → [fp, ...]  (halaman Item/Baru)
+        branch: (jenis, resto) → [fp, ...]           (halaman Cabang)
+        Memo per data_version — groupby 25.901 baris ≈ 0,1-0,2 dtk SEKALI
+        per dataset (pipeline nyata sudah bawa followup_fps dari worker →
+        fingerprints() = memo hit, tanpa md5 ulang). Normalisasi kunci =
+        konvensi _aggregate/_jenis_item_totals (strip + JENIS upper)."""
+        c = self._ctx
+        if c.df is None:
+            return None
+        if (self._fu_item is not None and self._fu_ver == c.data_version):
+            return self._fu_item, self._fu_branch
+        fps = c.fingerprints()
+        if fps is None:
+            return None
+        d = c.df
+        n = len(d)
+
+        def _col(name: str) -> "pd.Series":
+            if name in d.columns:
+                return d[name].astype(str).str.strip()
+            return pd.Series([""] * n, index=d.index, dtype="object")
+
+        jenis = _col("JENIS").str.upper()
+        base = pd.DataFrame({
+            "JENIS": jenis.to_numpy(),
+            "NAMA RESTO": _col("NAMA RESTO").to_numpy(),
+            "NAMA BARANG": _col("NAMA BARANG").to_numpy(),
+            "__FP": fps.astype(str).to_numpy(),
+        })
+        self._fu_item = base.groupby(
+            ["JENIS", "NAMA RESTO", "NAMA BARANG"],
+            sort=False)["__FP"].apply(list).to_dict()
+        self._fu_branch = base.groupby(
+            ["JENIS", "NAMA RESTO"], sort=False)["__FP"].apply(list).to_dict()
+        self._fu_ver = c.data_version
+        return self._fu_item, self._fu_branch
+
+    def _fu_frame(self, df):
+        """Salinan render + kolom ✓ + __FPS utk halaman centang (kolom
+        data tetap nama kanonik — alias judul dipasang terpisah di
+        headerData model).
+
+        Centang = SEMUA baris anomali (jenis, resto[, barang]) yang cocok
+        sudah masuk follow-up; lepas = keluarkan semuanya sekaligus
+        (remove_followup_many — satu broadcast, satu tulis disk)."""
+        if not isinstance(df, pd.DataFrame):
+            return None, None
+        if df.empty:
+            return df, None
+        maps = self._fu_maps()
+        item_map, branch_map = maps if maps else ({}, {})
+        fset = self._ctx.followup_set()
+        out = df.copy()
+        fps_col: list = []
+        checked: list = []
+        for rec in out.to_dict("records"):
+            jenis = str(rec.get("JENIS") or "").strip().upper()
+            resto = str(rec.get("NAMA RESTO") or "").strip()
+            if _FPS_COL in out.columns and _FPS_COL in rec:
+                fps = list(rec[_FPS_COL] or [])
+            elif "NAMA BARANG" in rec:
+                barang = str(rec.get("NAMA BARANG") or "").strip()
+                fps = item_map.get((jenis, resto, barang), [])
+            else:
+                fps = branch_map.get((jenis, resto), [])
+            fps_col.append(list(fps))
+            checked.append(bool(fps) and all(f in fset for f in fps))
+        out[_FPS_COL] = fps_col
+        out.insert(0, CHECK_COL, checked)
+        vis = [CHECK_COL] + [c for c in out.columns
+                              if c not in (CHECK_COL, _FPS_COL)]
+        return out, vis
+
+    def _on_fu_check(self, page: str, row: int, checked: bool) -> None:
+        """Klik ✓ baris banding → centang/lepas SEMUA baris anomali
+        terkait (resto[+barang], jenis) SEKALIGUS — satu broadcast."""
+        m = self._tables[page].model()
+        rec = m.record(row)
+        fps = rec.get(_FPS_COL) if rec is not None else None
+        if not fps:
+            # Baris tanpa pasangan anomali (mis. item di luar run saat ini)
+            # → kembalikan centangan visual (state tak berubah).
+            mdf = m.dataframe
+            if (mdf is not None and CHECK_COL in mdf.columns
+                    and 0 <= row < len(mdf)):
+                col = mdf.columns.get_loc(CHECK_COL)
+                mdf.iat[row, col] = False
+                idx = m.index(row, col)
+                m.dataChanged.emit(idx, idx)
+            self._ctx.set_status(
+                "Baris ini tidak punya pasangan anomali di bulan berjalan — "
+                "tidak bisa dimasukkan ke Follow Up.", "done")
+            return
+        if checked:
+            n = self._ctx.add_followup_many(fps)
+            total = len(self._ctx.followup_keys)
+            self._ctx.set_status(
+                f"✓ {fmt_id(n)} baris anomali masuk Follow Up — total "
+                f"{fmt_id(total)}", "done")
+        else:
+            n = self._ctx.remove_followup_many(fps)
+            total = len(self._ctx.followup_keys)
+            self._ctx.set_status(
+                f"✓ {fmt_id(n)} baris dikeluarkan dari Follow Up — total "
+                f"{fmt_id(total)}", "done")
+
+    def _on_followup_changed(self) -> None:
+        """✓ berubah di mana pun (tab Anomali / banding / massal) →
+        segarkan kolom ✓ banding IN-PLACE (dataChanged satu kolom —
+        pola AnomaliView._on_followup_changed; cache fit tak tersentuh)."""
+        fset = self._ctx.followup_set()
+        for page in _FU_PAGES:
+            m = self._tables[page].model()
+            mdf = m.dataframe
+            if (mdf is not None and len(mdf) > 0
+                    and CHECK_COL in mdf.columns
+                    and _FPS_COL in mdf.columns):
+                mdf[CHECK_COL] = [
+                    bool(fs) and all(f in fset for f in fs)
+                    for fs in mdf[_FPS_COL]]
+                m.notify_column_changed(CHECK_COL)
 
     def _clear_tables(self, msg: str) -> None:
         for table in self._tables.values():
@@ -898,5 +1107,6 @@ def fmt_run_label(summary: dict | None, key_akhir: int) -> str:
     label = "(run terakhir)"
     if summary:
         rows = summary.get("total_rows", 0)
-        label = f"{fmt_id(rows)} baris • key_akhir {key_akhir}"
+        # v2.12.2: 'key_akhir' = jargon internal — pakai istilah awam.
+        label = f"{fmt_id(rows)} baris • {key_akhir} hari data"
     return label

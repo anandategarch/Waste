@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QHeaderView,
+    QHBoxLayout,
     QLabel,
     QLayout,
     QLayoutItem,
@@ -79,14 +80,28 @@ class Card(QFrame):
 
 
 class WLabel(QLabel):
-    """QLabel dengan word-wrap aktif default — teks tidak pernah terpotong."""
+    """QLabel dengan word-wrap aktif default — teks tidak pernah terpotong.
+
+    v2.12.2 (bug): ``setSizePolicy`` eksplisit lama TIDAK sengaja
+    menghapus flag ``heightForWidth`` yang dipasang ``setWordWrap`` —
+    layout jadi tak tahu label bisa "menyusut mengikuti lebar" dan
+    memberinya sizeHint "persegi" (hint 2 baris = 28px diberi 112px).
+    Terukur di data asli: hint bawah tabel Anomali mencuri 84px — tabel
+    jatuh ke batas minimum 200px (6-7 baris terlihat) di laptop. Flag
+    dipulihkan → semua kartu di SEMUA tab mendapat tinggi label jujur
+    (diukur: tabel +11px pada 1366×700 sebelum fix slicer; semua tab
+    ikut untung — hint ada di setiap kartu).
+    """
 
     def __init__(self, text: str = "", parent: QWidget | None = None,
                  muted: bool = False) -> None:
         super().__init__(text, parent)
         self.setWordWrap(True)
         self.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        sp = QSizePolicy(QSizePolicy.Policy.Preferred,
+                         QSizePolicy.Policy.Minimum)
+        sp.setHeightForWidth(True)
+        self.setSizePolicy(sp)
         if muted:
             self.setObjectName("muted")
 
@@ -709,6 +724,9 @@ SLICER_DIMS: list[tuple[str, str]] = [
 # Urutan nilai tetap (bukan alfabetis) — WASTE dulu (subjek utama).
 _JENIS_ORDER = ["WASTE", "SUSUT", "TRIAL"]
 _STATUS_ORDER = ["Prioritas Tinggi", "Potensi Anomali", "Perlu Review", "Normal"]
+# v2.12.2: lebar tetap label dimensi slicer ("KETERANGAN:" terpanjang
+# ≈80px @13px) — 3 kolom chip sejajar; label inline dgn chip per dimensi.
+_SLICER_LABEL_W = 96
 # Debounce klik beruntun (ms) — pola search 300 ms (app.py), lebih cepat
 # karena chip = 1 klik saja (bukan mengetik). 3 klik cepat = 1 render.
 _SLICER_DEBOUNCE_MS = 150
@@ -823,17 +841,25 @@ class SlicerBar(QWidget):
         lay.setSpacing(4)
         self._rows: dict[str, tuple[QWidget, FlowLayout]] = {}
         for key, label in SLICER_DIMS:
+            # v2.12.2: label INLINE dengan chip (gaya Excel) — dulu label
+            # makan satu baris sendiri (38px per dimensi = label 16px +
+            # chip 22px; slicer total 147-148px, tabel Anomali rugi
+            # 36-45% viewport). Kini satu baris = ±24px per dimensi
+            # (slicer total ±94px). Label lebar tetap + rata kanan supaya
+            # kolom chip tiga dimensi sejajar rapi.
             row = QWidget(self)
-            hl = QVBoxLayout(row)
+            hl = QHBoxLayout(row)
             hl.setContentsMargins(0, 0, 0, 0)
-            hl.setSpacing(2)
+            hl.setSpacing(8)
             head = QLabel(f"{label}:", row)
             head.setObjectName("muted")
-            # child layout TANPA parent — row sudah punya QVBoxLayout
+            head.setFixedWidth(_SLICER_LABEL_W)
+            head.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            # child layout TANPA parent — row sudah punya QHBoxLayout
             # (QLayout(parent) akan bentrok: "already has a layout").
             flow = FlowLayout()
             hl.addWidget(head)
-            hl.addLayout(flow)
+            hl.addLayout(flow, 1)
             lay.addWidget(row)
             self._rows[key] = (row, flow)
 

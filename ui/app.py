@@ -90,7 +90,7 @@ _HELP_HTML = """
 <h3>Tab Follow Up (v2.12.0)</h3>
 <ul>
 <li><b>Centang baris mencurigakan</b> (kolom ✓ di tab Anomali) → baris terkumpul di tab <b>Follow Up</b> dalam format rekap: TOTAL · AVG · MAX · SOURCE DATA · JENIS · KETERANGAN · NAMA BARANG · NAMA RESTO · SATUAN · hari 1–31.</li>
-<li>Tombol <b>☑ Centang yang tampil</b> (tab Anomali): centang massal hasil filter/slicer saat ini; <b>lepas centang ✓</b> (di kedua tab) = keluarkan baris.</li>
+<li>Tombol <b>☑ Centang yang tampil</b> (tab Anomali): centang massal hasil filter/slicer saat ini; <b>lepas centang ✓</b> (di kedua tab) = keluarkan baris. Centang <b>✓ juga ada di tab Banding Periode</b> (halaman Cabang/Item/Baru): satu centang = semua baris anomali resto/item terkait masuk ke daftar Follow Up yang sama.</li>
 <li><b>Hari mencurigakan diberi warna</b>: 🔴 merah = hari tersangka (puncak) · 🟠 amber = ≥ 2× rata-rata hari aktif.</li>
 <li>Daftar <b>menetap terhadap filter</b> dan <b>tersimpan otomatis</b> (followup.json) — aman walau aplikasi ditutup; baris yang tak ada lagi di data baru otomatis dipangkas.</li>
 <li><b>💾 Ekspor Excel</b>: format rekap + kolom kosong PIC/KATEGORI/PENYEBAB utk diisi petugas (konvensi REKAP MENTAH) — hari mencurigakan ikut berwarna.</li>
@@ -117,6 +117,13 @@ hari berapa").</li>
 kolom <b>BULAN LALU</b>, <b>PERUBAHAN %</b> (+35,5% / BARU) & kategori
 <b>PERUBAHAN</b> (filter "Perubahan:") — memisahkan <b>lonjakan baru</b>
 (kandidat salah input) dari <b>waste kronis</b> (tinggi tiap bulan).</li>
+<li><b>v2.12.2</b> — <b>angka minus otomatis MERAH</b> di semua tabel; kolom
+pembanding memakai <b>NAMA BULAN</b> (bukan kata "Pembanding"); tabel banding
+menampilkan <b>JENIS</b> (SUSUT/TRIAL/WASTE) per baris cabang/item; tombol
+<b>⤢ Perbesar Tabel</b> & <b>⛶ Layar Penuh</b> kini juga ada di tab
+<b>Anomali</b>; daftar file banding <b>auto-ciut</b> setelah dimuat (tabel
+hasil langsung tinggi penuh); slicer & label dipadatkan supaya tabel
+anomali lebih tinggi.</li>
 </ul>
 <h3>💡 Bingung istilah?</h3>
 <p><b>Hover (arahkan mouse & diamkan)</b> di: judul kolom tabel, label metrik pop-up,

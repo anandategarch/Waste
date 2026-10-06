@@ -80,6 +80,15 @@ _HL_RED_BG = QColor("#fee2e2")
 _HL_RED_FG = QColor("#dc2626")
 _HL_AMBER_BG = QColor("#fef3c7")
 
+# v2.12.2 — angka MINUS merah GLOBAL (semua tabel: Anomali/Hari/Banding/
+# Follow Up/pop-up drill — permintaan user "jika minus kasih warna merah,
+# berlaku global"). Aturan level MODEL → satu tempat, semua view.
+# Cek murah (isinstance + banding < 0) di jalur ForegroundRole paint —
+# hanya sel TERLIHAT yang dipanggil → tak ada dampak perf (diukur jalur
+# klik v2.12.1 tetap 14-130 ms). String bertanda minus yang diformat
+# dari angka (mis. '-12,0%') otomatis ikut: sumber nilainya float < 0.
+_NEG_FG = QColor("#dc2626")
+
 # ============================================================
 # v2.9.0 — KAMUS ISTILAH (tooltip judul kolom, semua tabel & detail)
 # ============================================================
@@ -317,6 +326,10 @@ class PandasTableModel(QAbstractTableModel):
         self._hl_red: set[tuple[str, str]] = set()
         self._hl_amber: set[tuple[str, str]] = set()
         self._hl_cols: set[str] = set()
+        # v2.12.2: alias JUDUL kolom (tampilan) — data/sort/record tetap
+        # nama KANONIK (dipakai tab Banding: 'Pembanding' → nama bulan;
+        # kontrak test lama `dataframe['Pembanding']` tak tersentuh).
+        self._header_map: dict[str, str] = {}
 
     def _rebuild_snapshot(self) -> None:
         """Bangun ulang snapshot numpy dari _df (setelah set/reset/sort)."""
@@ -405,6 +418,15 @@ class PandasTableModel(QAbstractTableModel):
         self._hl_cols = ({c for _k, c in self._hl_red}
                          | {c for _k, c in self._hl_amber})
 
+    def set_header_map(self, mapping: dict[str, str] | None) -> None:
+        """Alias judul kolom TAMPILAN (v2.12.2 — permintaan user: kata
+        'Pembanding' diganti NAMA BULAN di tabel banding).
+
+        Hanya headerData(DisplayRole) yang memakai alias — data sel,
+        sort, record, dan ``dataframe`` tetap nama kanonik (kontrak
+        konsumen/test tak berubah). None/{} = matikan."""
+        self._header_map = dict(mapping or {})
+
     def notify_column_changed(self, name: str) -> None:
         """dataChanged SATU kolom penuh (nilai berubah in-place).
 
@@ -455,7 +477,9 @@ class PandasTableModel(QAbstractTableModel):
             if 0 <= section < len(self._df.columns):
                 name = str(self._df.columns[section])
                 if role == Qt.DisplayRole:
-                    return name
+                    # v2.12.2: alias tampilan (mis. 'Pembanding' → 'Juli
+                    # 2026') — data tetap kanonik.
+                    return self._header_map.get(name, name)
                 if role == Qt.ToolTipRole:
                     # v2.9.0: kamus istilah — hover judul kolom menjelaskan
                     # artinya Bahasa awam (permintaan user: tooltip SEMUA
@@ -532,11 +556,19 @@ class PandasTableModel(QAbstractTableModel):
                     if (fp, col_name) in self._hl_amber:
                         return _HL_AMBER_BG
             return self._row_tint(row)
-        if role == Qt.ForegroundRole and self._hl_cols \
-                and col_name in self._hl_cols:
-            fp = self._row_key(row)
-            if fp is not None and (fp, col_name) in self._hl_red:
-                return _HL_RED_FG
+        if role == Qt.ForegroundRole:
+            # Prioritas 1 — penanda hari mencurigakan (merah + tebal).
+            if self._hl_cols and col_name in self._hl_cols:
+                fp = self._row_key(row)
+                if fp is not None and (fp, col_name) in self._hl_red:
+                    return _HL_RED_FG
+            # v2.12.2 — prioritas 2: angka NEGATIF merah global (semua
+            # tabel): Selisih/Perubahan % negatif di tab Banding, BULAN
+            # LALU/PERUBAH turun di tab Anomali, dst. bool dikecualikan
+            # (kolom ✓ — False == 0 tapi bukan "minus").
+            if (isinstance(value, (int, float, np.integer, np.floating))
+                    and not isinstance(value, bool) and value < 0):
+                return _NEG_FG
             return None
         if role == Qt.FontRole:
             if col_name == "ANOMALY SCORE":

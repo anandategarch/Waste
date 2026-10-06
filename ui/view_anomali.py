@@ -474,6 +474,7 @@ class AnomaliView(QWidget):
         self._btn_fu_all.clicked.connect(self._on_check_all)
         cl.addWidget(self._btn_fu_all)
         lay.addWidget(ctrl)
+        self._ctrl = ctrl  # v2.12.2: toggle ⤢ (KPI + bar kontrol)
 
         # Kartu tabel — memenuhi SELURUH sisa tinggi view (v2.8.1: tanpa
         # splitter/panel inline; detail hadir sebagai pop-up saat baris
@@ -483,15 +484,39 @@ class AnomaliView(QWidget):
         tcl = QVBoxLayout(table_card)
         tcl.setContentsMargins(12, 10, 12, 10)
         tcl.setSpacing(6)
-        # v2.8.0: judul satu baris (dulu wrap 2-3 baris — makan ±100px).
-        title = WLabel("Tabel Anomali Ter-ranking", table_card)
+        # v2.8.0: judul satu baris (dulu wrap 2-3 baris — makan ±100px);
+        # v2.12.2: judul + tombol melebarkan tabel SATU baris (pola tombol
+        # kartu hasil tab Banding Periode — permintaan user "tabel anomali
+        # bisa diperbesar seperti di tab banding periode").
+        head = QWidget(table_card)
+        hcl = QHBoxLayout(head)
+        hcl.setContentsMargins(0, 0, 0, 0)
+        hcl.setSpacing(8)
+        title = WLabel("Tabel Anomali Ter-ranking", head)
         title.setObjectName("cardTitle")
-        tcl.addWidget(title)
+        hcl.addWidget(title)
+        hcl.addStretch(1)
+        self._btn_expand = QPushButton("⤢ Perbesar Tabel", head)
+        self._btn_expand.setToolTip(
+            "Sembunyikan KPI & bar kontrol supaya tabel memakai seluruh\n"
+            "tinggi tampilan (slicer tetap terlihat — filter tetap aktif).\n"
+            "Klik lagi untuk mengembalikan.")
+        self._btn_expand.clicked.connect(self._on_expand)
+        hcl.addWidget(self._btn_expand)
+        self._btn_full = QPushButton("⛶ Layar Penuh", head)
+        self._btn_full.setToolTip(
+            "Buka tabel ini di jendela LAYAR PENUH (tekan Esc atau Tutup\n"
+            "untuk kembali). Centang ✓ / sort / pop-up detail / klik 2×\n"
+            "tetap berfungsi penuh di jendela itu.")
+        self._btn_full.clicked.connect(self._on_fullscreen)
+        hcl.addWidget(self._btn_full)
+        tcl.addWidget(head)
         # v2.11.0: slicer multi-select (JENIS·KETERANGAN·STATUS) di atas
         # tabel — state global ctx.active_filters (chip antar-tab sinkron
         # otomatis). Banding Periode sengaja tanpa slicer (file ≠ baris).
         self._slicer = SlicerBar(ctx, table_card)
         tcl.addWidget(self._slicer)
+        self._tcl = tcl  # v2.12.2: reparent ⛶ (pulihkan index layout tabel)
         self._table = DataTable(table_card)
         self._table.setMinimumHeight(200)
         # v2.12.0 — kolom centang follow-up (✓) in-place: klik sel = flip
@@ -506,14 +531,22 @@ class AnomaliView(QWidget):
         tcl.addWidget(self._table, 1)
         # v2.8.1: hint baru — perilaku pop-up (dulu: 'pilih baris utk
         # detail' ke panel inline, dihapus bersama splitter).
+        # v2.12.2: dipendekkan ~40% (hint panjang + bug heightForWidth
+        # lama mencuri 84px — kini tinggi label jujur, teks tetap ringkas).
         hint = WLabel(
-            "💡 Klik baris = detail pop-up · klik 2× = fokus cabang+item · klik header = sort · "
-            "centang ✓ = kumpulkan baris ke tab Follow Up · "
-            "kolom BULAN LALU/PERUBAHAN muncul bila ada file pembanding (tab Banding Periode)",
+            "💡 Klik baris = detail pop-up · klik 2× = fokus cabang+item · "
+            "sort klik header · centang ✓ = kumpulkan ke tab Follow Up",
             table_card)
         hint.setObjectName("hint")
         tcl.addWidget(hint)
         lay.addWidget(table_card, 1)
+
+        # v2.12.2 — jendela layar penuh tabel (dibuat malas, dipakai ulang):
+        # WIDGET TABEL ASLI di-reparent sementara → interaksi ✓/sort/
+        # pop-up detail tetap 100% hidup (bukan salinan). Esc/Tutup →
+        # dikembalikan ke kartu pada POSISI LAYOUT ASLI (index dicatat).
+        self._fs_dlg: QDialog | None = None
+        self._fs_idx: int = 2
 
         # Pop-up detail (v2.8.1) — satu instance dipakai ulang.
         self._popup = DetailDialog(ctx, self)
@@ -808,6 +841,84 @@ class AnomaliView(QWidget):
         rec = self._table.selected_record()
         if rec is not None:
             self._popup.show_record(rec)
+
+    # ------------------------------------------------------------
+    # v2.12.2 — MELEBARKAN TABEL (pola tab Banding Periode)
+    # ------------------------------------------------------------
+    def _on_expand(self) -> None:
+        """Ciutkan/kembalikan KPI + bar kontrol (tabel makan tinggi penuh).
+
+        isHidden() (bukan isVisible()) — toggle benar walau view induk
+        sedang tak tampak (di-balik tab lain) — pola _on_expand PeriodeView.
+        Slicer TETAP terlihat: chip = kontrol filter utama (menyaring tabel
+        yang sedang diperbesar)."""
+        collapsed = self._kpi.isHidden()
+        show = collapsed
+        self._kpi.setVisible(show)
+        self._ctrl.setVisible(show)
+        self._btn_expand.setText(
+            "⤢ Perbesar Tabel" if show else "⤡ Tampilkan KPI & Filter")
+        self._ctx.set_status(
+            "⤡ KPI disembunyikan — tabel diperbesar" if not show
+            else "⤢ KPI & filter ditampilkan kembali", "done")
+
+    def _on_fullscreen(self) -> None:
+        """Pop-out TABEL ASLI ke jendela maximized (Esc = kembali).
+
+        Reparent widget tabel (bukan salinan render) → centang ✓, sort,
+        seleksi→pop-up detail, klik 2× drill — semua tetap hidup dan IKUT
+        TERBARUI saat filter berganti (model sama, sinyal sama). Posisi
+        layout asli dicatat utk dipulihkan utuh saat ditutup."""
+        if self._table.model().rowCount() == 0:
+            self._ctx.set_status(
+                "Belum ada data utk dibesarkan — jalankan pipeline dulu "
+                "(tab Pipeline)", "done")
+            return
+        if self._fs_dlg is None:
+            dlg = QDialog(self)
+            dlg.setWindowTitle(
+                "Tabel Anomali — Layar Penuh (Esc = kembali)")
+            dlay = QVBoxLayout(dlg)
+            dlay.setContentsMargins(10, 8, 10, 8)
+            dlay.setSpacing(6)
+            fhint = WLabel(
+                "💡 Klik baris = detail pop-up · klik 2× = fokus cabang+item "
+                "· sort klik header · centang ✓ = Follow Up · Esc = kembali",
+                dlg)
+            fhint.setObjectName("hint")
+            dlay.addWidget(fhint)
+            btn = QPushButton("⤡ Kembali ke Tab (Esc)", dlg)
+            btn.clicked.connect(dlg.close)
+            brow = QWidget(dlg)
+            brl = QHBoxLayout(brow)
+            brl.setContentsMargins(0, 0, 0, 0)
+            brl.addStretch(1)
+            brl.addWidget(btn)
+            dlay.addWidget(brow)
+            # rejected = Esc (default QDialog) DAN tombol Tutup X (close-
+            # Event default QDialog → reject) — satu jalur pemulihan.
+            dlg.rejected.connect(self._restore_table_from_fs)
+            self._fs_dlg = dlg
+        idx = self._tcl.indexOf(self._table)
+        self._fs_idx = idx if idx >= 0 else 2
+        self._tcl.removeWidget(self._table)
+        # insert di ANTARA hint (0) dan baris tombol (terakhir)
+        self._fs_dlg.layout().insertWidget(1, self._table, 1)
+        self._fs_dlg.showMaximized()
+        self._fs_dlg.raise_()
+        self._fs_dlg.activateWindow()
+        self._ctx.set_status("⛶ Tabel anomali dibuka layar penuh — Esc "
+                             "utk kembali", "done")
+
+    def _restore_table_from_fs(self) -> None:
+        """Kembalikan tabel ke kartu pada index layout asli (idempoten —
+        guard parent supaya pemanggilan ganda tak mengacak urutan)."""
+        if (self._fs_dlg is None
+                or self._table.parent() is not self._fs_dlg):
+            return
+        self._fs_dlg.layout().removeWidget(self._table)
+        self._tcl.insertWidget(self._fs_idx, self._table, 1)
+        self._ctx.set_status("⤡ Tabel kembali ke tab Anomali", "done")
 
     def _on_double(self, rec: pd.Series) -> None:
         """Klik 2×: fokus cabang+item sekaligus (drill-down P8).

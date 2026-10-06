@@ -400,6 +400,30 @@ class AppContext(QObject):
         self.followup_changed.emit()
         return len(added)
 
+    def remove_followup_many(self, fps) -> int:
+        """Lepas centang BANYAK baris sekaligus — SATU broadcast + SATU
+        persist (pola add_followup_many; v2.12.2: lepas ✓ di tabel Banding
+        Periode = keluarkan SEMUA baris anomali terkait sekaligus — tanpa
+        ini tiap baris menulis followup.json + broadcast N kali).
+
+        Return jumlah baris benar-benar dikeluarkan (0 = tak ada yang
+        cocok / daftar sudah bersih — no-op tanpa broadcast sia-sia)."""
+        drop: set = set()
+        for fp in fps:
+            s = str(fp)
+            if s and s != "nan":
+                drop.add(s)
+        if not drop:
+            return 0
+        keep = [k for k in self.followup_keys if k not in drop]
+        removed = len(self.followup_keys) - len(keep)
+        if removed == 0:
+            return 0
+        self.followup_keys = keep
+        self._persist_followup()
+        self.followup_changed.emit()
+        return removed
+
     def clear_followup(self) -> int:
         """Kosongkan seluruh daftar + broadcast. Return jumlah dihapus."""
         n = len(self.followup_keys)

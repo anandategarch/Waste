@@ -463,17 +463,58 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
             drop=True)[JENIS_COLS]
 
     # ---- cabang / item / baru / hilang ----
-    key = ["NAMA RESTO", "NAMA BARANG"]
-    empty_items = pd.DataFrame(columns=ITEM_COLS)
-    empty_new = pd.DataFrame(columns=NEW_ITEM_COLS)
-    empty_gone = pd.DataFrame(columns=GONE_ITEM_COLS)
+    # v2.12.2 — JENIS tampil di tabel mover (permintaan user: "tampilkan
+    # jenisnya — entah itu SUSUT/TRIAL/WASTE"). agg_jenis (TOTAL per
+    # RESTO×BARANG×JENIS) SUDAH dihitung loader file + aggregate_current +
+    # typical_months — dipakai bila tersedia di A/B; bulan TANPA agg_jenis
+    # (fixture test lama) jatuh ke perilaku lama PERSIS (tanpa kolom JENIS)
+    # → golden v2.10.0 tak tersentuh. Item yang sama tercatat di 2 jenis
+    # (mis. WASTE + TRIAL) kini jadi 2 baris terpisah — pemisahannya tak
+    # lagi tersembunyi di dalam gabungan.
+    use_jenis = any(
+        (m.get("agg_jenis") is not None
+         and not m.get("agg_jenis").empty
+         and "JENIS" in list(m.get("agg_jenis").columns))
+        for m in (a, b))
+
+    def _tot_jenis(m: dict) -> pd.DataFrame:
+        aj = m.get("agg_jenis")
+        if (aj is None or aj.empty
+                or "JENIS" not in list(aj.columns)
+                or "NAMA RESTO" not in list(aj.columns)):
+            return pd.DataFrame(columns=AGG_JENIS_COLS)
+        return aj[AGG_JENIS_COLS].copy()
+
+    if use_jenis:
+        ta = _tot_jenis(a)
+        tb = _tot_jenis(b)
+    else:
+        ta = _totals_by(a.get("agg"), ["NAMA RESTO", "NAMA BARANG"])
+        tb = _totals_by(b.get("agg"), ["NAMA RESTO", "NAMA BARANG"])
+    key = (["JENIS", "NAMA RESTO", "NAMA BARANG"] if use_jenis
+           else ["NAMA RESTO", "NAMA BARANG"])
+    branch_cols = (["JENIS"] if use_jenis else []) + BRANCH_COLS
+    item_cols = (["JENIS"] if use_jenis else []) + ITEM_COLS
+    new_cols = (["JENIS"] if use_jenis else []) + NEW_ITEM_COLS
+    gone_cols = (["JENIS"] if use_jenis else []) + GONE_ITEM_COLS
+    empty_items = pd.DataFrame(columns=item_cols)
+    empty_new = pd.DataFrame(columns=new_cols)
+    empty_gone = pd.DataFrame(columns=gone_cols)
     if ta.empty and tb.empty:
-        branch = pd.DataFrame(columns=BRANCH_COLS)
+        branch = pd.DataFrame(columns=branch_cols)
         items, new_items, gone_items = empty_items, empty_new, empty_gone
     else:
-        ga = ta.groupby("NAMA RESTO", as_index=False)["TOTAL"].sum()
-        gb = tb.groupby("NAMA RESTO", as_index=False)["TOTAL"].sum()
-        mb = ga.merge(gb, on="NAMA RESTO", how="outer")
+        if use_jenis:
+            ga = ta.groupby(["JENIS", "NAMA RESTO"], as_index=False,
+                            dropna=False)["TOTAL"].sum()
+            gb = tb.groupby(["JENIS", "NAMA RESTO"], as_index=False,
+                            dropna=False)["TOTAL"].sum()
+            on = ["JENIS", "NAMA RESTO"]
+        else:
+            ga = ta.groupby("NAMA RESTO", as_index=False)["TOTAL"].sum()
+            gb = tb.groupby("NAMA RESTO", as_index=False)["TOTAL"].sum()
+            on = "NAMA RESTO"
+        mb = ga.merge(gb, on=on, how="outer")
         mb = mb.fillna({"TOTAL_x": 0.0, "TOTAL_y": 0.0}).rename(
             columns={"TOTAL_x": "Bulan Ini", "TOTAL_y": "Pembanding"})
         mb["Selisih"] = mb["Bulan Ini"] - mb["Pembanding"]
@@ -481,7 +522,7 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
                              in zip(mb["Bulan Ini"], mb["Pembanding"])]
         mb = mb.reindex(mb["Selisih"].abs().sort_values(
             ascending=False).index).head(top_n)
-        branch = mb.reset_index(drop=True)[BRANCH_COLS]
+        branch = mb.reset_index(drop=True)[branch_cols]
 
         m = ta.merge(tb, on=key, how="outer")
         m = m.fillna({"TOTAL_x": 0.0, "TOTAL_y": 0.0}).rename(
@@ -491,7 +532,7 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
                             in zip(m["Bulan Ini"], m["Pembanding"])]
         m = m.reindex(m["Selisih"].abs().sort_values(
             ascending=False).index).head(top_n)
-        items = m.reset_index(drop=True)[ITEM_COLS]
+        items = m.reset_index(drop=True)[item_cols]
         # Baru = hanya di bulan INI (tidak ada bulan lalu); hilang = sebaliknya.
         full = ta.merge(tb, on=key, how="outer")
         full = full.fillna({"TOTAL_x": 0.0, "TOTAL_y": 0.0}).rename(
@@ -499,11 +540,11 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
         new_items = full[full["Pembanding"] <= 0][
             key + ["Bulan Ini"]].sort_values(
             "Bulan Ini", ascending=False).head(
-            top_n).reset_index(drop=True)[NEW_ITEM_COLS]
+            top_n).reset_index(drop=True)[new_cols]
         gone_items = full[full["Bulan Ini"] <= 0][
             key + ["Pembanding"]].sort_values(
             "Pembanding", ascending=False).head(
-            top_n).reset_index(drop=True)[GONE_ITEM_COLS]
+            top_n).reset_index(drop=True)[gone_cols]
 
     return {
         "label_a": label_a,

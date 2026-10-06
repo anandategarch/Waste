@@ -66,13 +66,17 @@ class FollowUpView(QWidget):
         cl = QVBoxLayout(card)
         cl.setContentsMargins(12, 10, 12, 10)
         cl.setSpacing(6)
-        title = WLabel("Daftar Follow Up — baris tercentang (✓) di tab Anomali", card)
+        title = WLabel("Daftar Follow Up — baris tercentang (✓) di tab "
+                       "Anomali & Banding Periode", card)
         title.setObjectName("cardTitle")
         title.setToolTip(
             "Kumpulan baris anomali yang Anda centang (kolom ✓) di tab "
-            "Anomali.\nDaftar ini TIDAK terpengaruh filter/slicer — baris "
-            "yang sudah dikumpulkan menetap.\nTertutup aplikasi pun aman: "
-            "daftar tersimpan otomatis (followup.json).")
+            "Anomali, ATAU baris tabel banding (tab Banding Periode — "
+            "halaman Cabang/Item: satu centang = semua baris anomali "
+            "resto/item itu masuk).\nDaftar ini TIDAK terpengaruh "
+            "filter/slicer — baris yang sudah dikumpulkan menetap.\n"
+            "Tertutup aplikasi pun aman: daftar tersimpan otomatis "
+            "(followup.json).")
         cl.addWidget(title)
 
         # Bar kontrol: info jumlah + total + tombol ekspor & kosongkan.
@@ -173,7 +177,8 @@ class FollowUpView(QWidget):
         if rows.empty:
             self._set_empty("Belum ada baris tercentang — buka tab Anomali, "
                             "centang kolom ✓ pada baris mencurigakan "
-                            "(atau tombol ☑ Centang yang tampil).")
+                            "(atau tombol ☑ Centang yang tampil / centang "
+                            "✓ di tab Banding Periode).")
             return
         with busy_feedback(self._ctx.set_status, "Menyusun daftar follow-up"):
             self._rows = rows
