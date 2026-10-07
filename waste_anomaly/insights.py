@@ -696,9 +696,12 @@ def scorecard(
                 trend_map[r] = "—"
 
     rows = []
+    # v2.13.7 (perf-audit B): O(n_resto × n_baris) — work.loc[mask].sum()
+    # per cabang (20 × 25.901 scan) → satu groupby. restos ⊆ work by
+    # konstruksi → .get(r, 0.0) identik sum() baris-kosong = 0.0.
+    tot_by_resto = work.groupby("NAMA RESTO")["TOTAL"].sum()
     for r in restos:
-        total_waste = float(
-            work.loc[work["NAMA RESTO"] == r, "TOTAL"].sum())
+        total_waste = float(tot_by_resto.get(r, 0.0))
         rows.append({
             "RANK": 0, "NAMA RESTO": r, "TOTAL WASTE": total_waste,
             "INTENSITAS %": np.nan, "KELEBIHAN": np.nan,

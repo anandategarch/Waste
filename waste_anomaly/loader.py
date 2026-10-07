@@ -34,6 +34,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 # Pilih engine Excel read: calamine (cepat) → fallback openpyxl (default pandas)
@@ -78,11 +79,28 @@ def _normalize_float_precision(df: pd.DataFrame) -> pd.DataFrame:
     skor anomali BERBEDA untuk data yang sama ( nilai dust 21.299999999999997
     ditulis ulang oleh openpyxl sebagai "21.3" → run kedua baca nilai bersih →
     sinyal S3/S5 flip di boundary ). Terkonfirmasi: 402 → 403 anomali.
+
+    v2.13.7 (perf-audit B): "%.15g" mencetak PERSIS nilai float yang seluruh
+    nilainya bilangan bulat < 10^15 (≤ 15 digit signifikan) → normalisasi
+    terbukti no-op → kolom DILEWATI tanpa kerja per-sel (.map lama = 771 ms
+    per workbook 54k×31 — kolom hari 1-31 didominasi bilangan bulat).
+    Kolom ber-desimal tetap dinormalisasi per-sel dengan _float15 —
+    semantik identik.
     """
     for col in df.columns:
         s = df[col]
-        if pd.api.types.is_float_dtype(s):
-            df[col] = s.map(_float15)
+        if not pd.api.types.is_float_dtype(s):
+            continue
+        arr = s.to_numpy()
+        finite = np.isfinite(arr)
+        if not finite.any():
+            continue  # semua NaN/inf — passthrough (map lama juga)
+        vals = arr[finite]
+        if (np.all(np.abs(vals) < 1e15)
+                and np.all(vals == np.trunc(vals))):
+            continue  # bulat ≤ 15 digit → "%.15g" identik → no-op terbukti
+        arr[finite] = np.array([_float15(v) for v in vals])
+        df[col] = arr
     return df
 
 

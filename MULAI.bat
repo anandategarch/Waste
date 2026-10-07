@@ -5,7 +5,7 @@ title Waste Anomaly Detection
 color 0A
 cls
 echo ============================================================
-echo   WASTE ANOMALY DETECTION - v2.13.6
+echo   WASTE ANOMALY DETECTION - v2.13.7
 echo ============================================================
 echo.
 echo  PySide6 anomaly workbench - 6 tab:

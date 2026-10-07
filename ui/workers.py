@@ -21,7 +21,6 @@ from waste_anomaly.period_history import load_history_file
 from waste_anomaly.pipeline import run_pipeline
 from waste_anomaly.utils import load_config
 
-from .shared import _build_search_blob
 from waste_anomaly.followup import fingerprint_series
 
 
@@ -94,13 +93,13 @@ class PipelineWorker(QThread):
                 progress_callback=lambda msg, pct: self.progress.emit(str(msg), float(pct)),
                 cancel_check=lambda: self._cancel,
             )
-            # v2.9.0 (perf): bangun blob pencarian DI THREAD WORKER —
-            # 1,2 dtk dikenakan di background, bukan UI thread (tanpa ini,
-            # pencarian pertama membeku 1,5 dtk di thread UI).
+            # v2.13.7 (perf-audit B): blob pencarian TIDAK lagi dibangun di
+            # worker — kotak cari dihapus dari UI sejak v2.12.4, hasilnya
+            # tak pernah terpakai di produksi (terbuang ±1,2 dtk per run
+            # di data asli 25.901 baris). State tetap menyediakan jalur
+            # pembangunan malas utk pengujian semantik filter (set_search).
             if summary.get("success") and summary.get("df") is not None:
-                self.progress.emit("Menyiapkan pencarian cepat ...", 99)
-                summary["search_blob"] = _build_search_blob(summary["df"])
-                # v2.12.1 (perf): sidik jari follow-up dataset penuh juga
+                # v2.12.1 (perf): sidik jari follow-up dataset penuh
                 # dibangun DI THREAD WORKER (~0,3 dtk data asli 25.901
                 # baris) — sebelumnya dibangun malas di thread UI saat
                 # pertama dibutuhkan (prune data_ready / buka tab Follow

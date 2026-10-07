@@ -179,11 +179,18 @@ def _day_cols_of(df: pd.DataFrame) -> list[str]:
     return [str(d) for d in range(1, 32) if str(d) in df.columns]
 
 
-def _aggregate(kept: pd.DataFrame, key_akhir: int) -> pd.DataFrame:
+def _aggregate(kept: pd.DataFrame, key_akhir: int,
+               num: pd.DataFrame | None = None) -> pd.DataFrame:
     """Agregat kuantiti per (NAMA RESTO × NAMA BARANG).
 
     Nilai hari dijumlah lintas baris keterangan; TOTAL = jumlah hari;
     HARI AKTIF = banyak hari > 0. Murni vektor (groupby + sum).
+
+    v2.13.7 (perf-audit B): ``num`` = kolom hari SUDAH coerce-numerik —
+    pemanggil (load_history_file / aggregate_current) menghitung SEKALI
+    lalu membagi ke 4 agregat (dulu to_numeric 31 kolom × 54k baris
+    dihitung 4× per file pembanding). None = hitung sendiri (kontrak
+    test lama tetap jalan).
     """
     day_cols = _day_cols_of(kept)
     empty = pd.DataFrame(columns=AGG_COLS + [str(d) for d in range(1, 32)])
@@ -192,7 +199,9 @@ def _aggregate(kept: pd.DataFrame, key_akhir: int) -> pd.DataFrame:
     if "NAMA RESTO" not in kept.columns:
         kept = kept.assign(**{"NAMA RESTO": ""})
 
-    num = kept[day_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    if num is None or list(num.columns) != day_cols:
+        num = kept[day_cols].apply(pd.to_numeric, errors="coerce")
+    num = num.fillna(0.0)
     tmp = pd.DataFrame({
         "NAMA RESTO": kept["NAMA RESTO"].astype(str).str.strip(),
         "NAMA BARANG": kept["NAMA BARANG"].astype(str).str.strip(),
@@ -208,15 +217,19 @@ def _aggregate(kept: pd.DataFrame, key_akhir: int) -> pd.DataFrame:
     return agg
 
 
-def _jenis_totals(kept: pd.DataFrame) -> pd.DataFrame:
-    """TOTAL kuantiti per JENIS (SUSUT/TRIAL/WASTE) — tabel 'Per JENIS'."""
+def _jenis_totals(kept: pd.DataFrame,
+                  num: pd.DataFrame | None = None) -> pd.DataFrame:
+    """TOTAL kuantiti per JENIS (SUSUT/TRIAL/WASTE) — tabel 'Per JENIS'.
+
+    v2.13.7: ``num`` pra-hitung (lihat _aggregate)."""
     empty = pd.DataFrame(columns=JENIS_TOTALS_COLS)
     if kept.empty or "JENIS" not in kept.columns:
         return empty
     day_cols = _day_cols_of(kept)
     if not day_cols:
         return empty
-    num = kept[day_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    if num is None or list(num.columns) != day_cols:
+        num = kept[day_cols].apply(pd.to_numeric, errors="coerce")
     tmp = pd.DataFrame({
         "JENIS": kept["JENIS"].astype(str).str.strip().str.upper(),
         "TOTAL": num.sum(axis=1).to_numpy(),
@@ -226,11 +239,13 @@ def _jenis_totals(kept: pd.DataFrame) -> pd.DataFrame:
 
 
 def _base_keys_totals(kept: pd.DataFrame,
-                      keys: list[str]) -> pd.DataFrame:
+                      keys: list[str],
+                      num: pd.DataFrame | None = None) -> pd.DataFrame:
     """TOTAL per `keys` + (JENIS[, KETERANGAN]) — vektor, string dinormalkan.
 
     Dipakai _jenis_item_totals (agg_jenis) & _detail_totals (agg_detail).
-    TOTAL dihitung ULANG dari kolom hari (semantik identik _aggregate)."""
+    TOTAL dihitung ULANG dari kolom hari (semantik identik _aggregate).
+    v2.13.7: ``num`` pra-hitung (lihat _aggregate)."""
     cols = list(keys)
     empty = pd.DataFrame(columns=cols + ["TOTAL"])
     if kept.empty:
@@ -241,7 +256,9 @@ def _base_keys_totals(kept: pd.DataFrame,
     for c in cols:
         if c not in kept.columns:
             return empty
-    num = kept[day_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    if num is None or list(num.columns) != day_cols:
+        num = kept[day_cols].apply(pd.to_numeric, errors="coerce")
+    num = num.fillna(0.0)
     tmp = {"TOTAL": num.sum(axis=1).to_numpy()}
     for c in cols:
         s = kept[c].astype(str).str.strip()
@@ -252,16 +269,19 @@ def _base_keys_totals(kept: pd.DataFrame,
         TOTAL=("TOTAL", "sum"))
 
 
-def _jenis_item_totals(kept: pd.DataFrame) -> pd.DataFrame:
+def _jenis_item_totals(kept: pd.DataFrame,
+                       num: pd.DataFrame | None = None) -> pd.DataFrame:
     """TOTAL per (RESTO × BARANG × JENIS) — drill tab Per Jenis (v2.10.2)."""
-    return _base_keys_totals(kept, ["NAMA RESTO", "NAMA BARANG", "JENIS"])
+    return _base_keys_totals(kept, ["NAMA RESTO", "NAMA BARANG", "JENIS"],
+                             num=num)
 
 
-def _detail_totals(kept: pd.DataFrame) -> pd.DataFrame:
+def _detail_totals(kept: pd.DataFrame,
+                   num: pd.DataFrame | None = None) -> pd.DataFrame:
     """TOTAL per (RESTO × BARANG × JENIS × KETERANGAN) — kunci cocok PERSIS
     baris tabel Anomali (kolom BULAN LALU / PERUBAHAN %, v2.10.2)."""
     return _base_keys_totals(
-        kept, ["NAMA RESTO", "NAMA BARANG", "JENIS", "KETERANGAN"])
+        kept, ["NAMA RESTO", "NAMA BARANG", "JENIS", "KETERANGAN"], num=num)
 
 
 def _month_dict(agg: pd.DataFrame, jenis: pd.DataFrame, label: str,
@@ -336,11 +356,15 @@ def load_history_file(path: str | os.PathLike,
             return base
         ka = auto_key_akhir(raw)
         kept = _filter_waste(raw)
-        agg = _aggregate(kept, ka)
-        d = _month_dict(agg, _jenis_totals(kept), base["label"] or p.stem,
+        # v2.13.7 (perf-audit B): coerce-numerik kolom hari SEKALI untuk
+        # 4 agregat (dulu dihitung 4× per file — 31 kolom × 54k baris).
+        num = kept[_day_cols_of(kept)].apply(pd.to_numeric, errors="coerce")
+        agg = _aggregate(kept, ka, num=num)
+        d = _month_dict(agg, _jenis_totals(kept, num=num),
+                        base["label"] or p.stem,
                         ka, len(kept), len(raw),
-                        agg_jenis=_jenis_item_totals(kept),
-                        agg_detail=_detail_totals(kept))
+                        agg_jenis=_jenis_item_totals(kept, num=num),
+                        agg_detail=_detail_totals(kept, num=num))
         d["path"] = str(path)  # persis input (lihat komentar base di atas)
         d["label_source"] = "auto"
         return d
@@ -366,10 +390,12 @@ def aggregate_current(df: pd.DataFrame | None, key_akhir: int,
     kept = _filter_waste(df)
     if kept.empty:
         kept = df
-    agg = _aggregate(kept, ka)
-    d = _month_dict(agg, _jenis_totals(kept), label, ka, len(kept), len(df),
-                    agg_jenis=_jenis_item_totals(kept),
-                    agg_detail=_detail_totals(kept))
+    # v2.13.7 (perf-audit B): coerce-numerik SEKALI utk 4 agregat.
+    num = kept[_day_cols_of(kept)].apply(pd.to_numeric, errors="coerce")
+    agg = _aggregate(kept, ka, num=num)
+    d = _month_dict(agg, _jenis_totals(kept, num=num), label, ka, len(kept),
+                    len(df), agg_jenis=_jenis_item_totals(kept, num=num),
+                    agg_detail=_detail_totals(kept, num=num))
     d["path"] = "(run saat ini)"
     return d
 

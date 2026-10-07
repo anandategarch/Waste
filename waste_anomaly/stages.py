@@ -197,51 +197,45 @@ def stage_02_stats(
             avg_aktif_arr = np.where(count_hari_arr > 0,
                                       np.nanmean(np.where(aktif_mask_np, filled, np.nan), axis=1),
                                       np.nan)
-    # MEDIAN AKTIF = median(aktif > 0) — null kalau tidak ada aktif
-    def _nanmedian_rowwise(arr, mask):
-        """Median per-row dari nilai where mask=True, NaN otherwise."""
-        result = np.empty(arr.shape[0])
-        for i in range(arr.shape[0]):
-            vals = arr[i][mask[i]]
-            result[i] = np.median(vals) if len(vals) > 0 else np.nan
-        return result
-    median_aktif_arr = _nanmedian_rowwise(filled, aktif_mask_np)
-
-    # SECOND MAX: dari aktif_list, nilai terbesar ke-2
-    # np.partition O(n) per row: part[k] menempatkan elemen ke-(k+1) terkecil
-    # di posisi k, elemen di kanannya >= part[k] → part[-2] = terbesar ke-2
-    # (duplikat dihitung, identik dengan sort desc lalu ambil [1]).
-    # v2.3.1: kode sekarang benar-benar memakai np.partition — sebelumnya
-    # komentarnya bilang partition tapi implementasinya np.sort penuh.
-    def _second_max_rowwise(arr, mask):
-        result = np.empty(arr.shape[0])
-        for i in range(arr.shape[0]):
-            vals = arr[i][mask[i]]
-            if len(vals) < 2:
-                result[i] = np.nan
-                continue
-            result[i] = np.partition(vals, len(vals) - 2)[-2]
-        return result
-    second_max_arr = _second_max_rowwise(filled, aktif_mask_np)
+    # MEDIAN AKTIF & SECOND MAX — v2.13.7 (perf-audit B): matrix numpy
+    # penuh menggantikan 2 loop per-baris (dulu median/second-max loop
+    # 25.901 baris). Identik: sort naik per baris dengan NaN di akhir,
+    # posisi median = (cnt-1)//2 & cnt//2 (np.median utk genap = rata
+    # dua tengah); second max = elemen ke-(cnt-2) (np.partition[-2]).
+    masked = np.where(aktif_mask_np, filled, np.nan)
+    srt = np.sort(masked, axis=1)  # NaN di akhir tiap baris
+    cnt = aktif_mask_np.sum(axis=1)
+    rows_idx = np.arange(len(filled))
+    with np.errstate(invalid="ignore"):
+        med_lo = srt[rows_idx, np.maximum((cnt - 1) // 2, 0)]
+        med_hi = srt[rows_idx, np.maximum(cnt // 2, 0)]
+        median_aktif_arr = np.where(
+            cnt > 0,
+            np.where((cnt % 2) == 0, (med_lo + med_hi) / 2, med_hi),
+            np.nan)
+        second_max_arr = np.where(
+            cnt >= 2,
+            srt[rows_idx, np.maximum(cnt - 2, 0)],
+            np.nan)
 
     # HARI MAX: NOMOR HARI (dari nama kolom) tempat MAX pertama muncul (kalau MAX > 0)
     # M2 (v2.3.1): dulu mengembalikan posisi dalam day_cols (idx+1) — hanya
     # kebetulan benar untuk kolom hari kontigu "1".."31"; untuk kolom hari
     # sparse (mis. hanya "1","5","30") hasilnya off. Sekarang nomor hari
     # diambil dari nama kolomnya, bukan posisi.
-    hari_max_arr = np.empty(len(out), dtype=object)
-    for i in range(len(out)):
-        if not np.isnan(max_arr[i]) and max_arr[i] > 0:
-            # Cari posisi pertama yang sama dengan max
-            row_vals = day_matrix.iloc[i].to_numpy()
-            mask_match = (row_vals == max_arr[i]) & nonnull_mask_np[i]
-            if mask_match.any():
-                idx = int(np.argmax(mask_match))
-                hari_max_arr[i] = int(float(day_cols[idx]))  # nomor hari dari nama kolom
-            else:
-                hari_max_arr[i] = None
-        else:
-            hari_max_arr[i] = None
+    # v2.13.7 (perf-audit B): day_matrix.iloc[i] PER BARIS (akses termahal
+    # pandas — 201 ms) → matriks numpy sekali + argmax vektor.
+    day_np = day_matrix.to_numpy(dtype=float)
+    day_col_nums = np.array([int(float(c)) for c in day_cols])
+    valid_max = max_arr > 0  # max_arr sudah tanpa NaN (baris 182 di atas)
+    match = (day_np == max_arr[:, None]) & nonnull_mask_np
+    has_match = match.any(axis=1)
+    first_idx = np.argmax(match, axis=1)  # 0 bila tak ada (dilindungi mask)
+    hm = valid_max & has_match
+    nums = day_col_nums[np.where(hm, first_idx, 0)]
+    hari_max_arr = np.array(
+        [int(n) if keep else None for n, keep in zip(nums.tolist(), hm)],
+        dtype=object)
 
     # LastDayValue: nilai hari ke-KeyAkhir
     key_akhir_text = str(clamp(int(key_akhir), 1, 31))
@@ -383,72 +377,96 @@ def stage_03_reason(
         np.where(src_nonempty, rt["SOURCE DATA"], None)
     )
 
-    # Groupby dengan agg — pakai lambda sederhana untuk join distinct values
-    def _join_distinct(series):
-        """Join distinct non-null values dengan ', ' (urutan kontribusi — lihat M3)."""
-        vals = [v for v in series if v is not None and (not isinstance(v, float) or not np.isnan(v))]
-        if not vals:
-            return ""
-        return ", ".join(list(dict.fromkeys(vals)))  # distinct preserve order
+    # v2.13.7 (perf-audit B): GABUNGAN tanpa lambda-Python per grup
+    # (dulu 12,6k panggilan _join_distinct) — nilai non-null di-dedup
+    # per (grup, nilai) lalu di-gabung groupby.agg(", ".join) level-C.
+    # Urutan nilai = urutan kemunculan di rt (kontribusi menurun) —
+    # IDENTIK dict.fromkeys preserve-order; grup tanpa nilai → NaN → ""
+    # (fillna di bawah, replika return "" _join_distinct lama).
+    def _gabungan_frame(col: str) -> pd.DataFrame:
+        d = (rt.loc[rt[col].notna().to_numpy(),
+                    group_keys_short + [col]]
+             .drop_duplicates(subset=group_keys_short + [col], keep="first"))
+        if d.empty:
+            return d
+        g = (d.groupby(group_keys_short, dropna=False, sort=True)[col]
+             .agg(", ".join).reset_index())
+        return g
 
-    # v2.3.1: fungsi _kontribusi_terbesar yang mati (tidak pernah dipanggil,
-    # logikanya duplikat loop di bawah) dihapus bersamaan dengan fix H1.
+    ket_g = _gabungan_frame("_ket_for_gabungan")
+    src_g = _gabungan_frame("_src_for_gabungan")
+    rs = rt[group_keys_short].drop_duplicates(subset=group_keys_short,
+                                               keep="first")
+    rs = rs.merge(ket_g, on=group_keys_short, how="left",
+                  validate="many_to_one")
+    rs = rs.merge(src_g, on=group_keys_short, how="left",
+                  validate="many_to_one")
+    rs = rs.rename(columns={"_ket_for_gabungan": "KETERANGAN GABUNGAN",
+                            "_src_for_gabungan": "SOURCE DATA GABUNGAN"})
+    rs["KETERANGAN GABUNGAN"] = rs["KETERANGAN GABUNGAN"].fillna("")
+    rs["SOURCE DATA GABUNGAN"] = rs["SOURCE DATA GABUNGAN"].fillna("")
 
-    # H2 (v2.3.1): placeholder agg "KONTRIBUSI_TERBESAR" (underscore) DIHAPUS —
-    # kolom all-null itu tidak pernah ketemu check drop nama-spasi lama dan
-    # bocor sampai output final. KONTRIBUSI TERBESAR dihitung terpisah di bawah.
-    # H3 (v2.3.1): nama output pakai SPASI ("KETERANGAN GABUNGAN" /
-    # "SOURCE DATA GABUNGAN") sesuai FINAL_COLUMN_ORDER & M code — sebelumnya
-    # underscore, jadi kolom mendarat di posisi "extra" di akhir output,
-    # bukan di posisi kanoniknya.
-    rs = (
-        rt.groupby(group_keys_short, dropna=False, as_index=False)
-        .agg(
-            **{
-                "KETERANGAN GABUNGAN": ("_ket_for_gabungan", _join_distinct),
-                "SOURCE DATA GABUNGAN": ("_src_for_gabungan", _join_distinct),
-            }
-        )
-    )
-
-    # Hitung KONTRIBUSI TERBESAR terpisah (hanya untuk WASTE groups).
-    # H1 (v2.3.1): M code dulu meng-aggregate BY KETERANGAN (sum TOTAL_REASON
-    # per KETERANGAN) baru mengambil yang terbesar — bukan mengambil baris
-    # tunggal teratas. pct = sum(keterangan top) / grand_total.
+    # KONTRIBUSI TERBESAR (hanya WASTE groups) — H1 (v2.3.1): aggregate
+    # BY KETERANGAN (sum TOTAL_REASON per KETERANGAN) baru ambil terbesar;
+    # pct = sum(keterangan top) / grand_total.
+    # v2.13.7 (perf-audit B): loop 2.500 grup × mask-python (±1,9 dtk
+    # data asli; 2.503× _getitem_bool_array di cProfile) → vektor penuh:
+    # satu groupby 4-kunci + stable-sort + drop_duplicates. Semantik
+    # idxmax dipertahankan: groupby mengurutkan (short, KETERANGAN)
+    # naik → sort STABLE desc nilai mempertahankan urutan KETERANGAN
+    # di antara tie → drop_duplicates keep='first' = nilai terbesar,
+    # tie → KETERANGAN terkecil — REPLIKA idxmax di index terurut.
     # (Sebelum fix: 1.605 dari 6.899 baris non-null beda vs output M.)
-    waste_groups = rt[is_waste].groupby(group_keys_short, dropna=False)
-    kontribusi_map = {}
-    for key, t in waste_groups:
-        f = t[t["TOTAL_REASON"].notna() & (t["TOTAL_REASON"] > 0)
-              & t["KETERANGAN"].notna() & (t["KETERANGAN"].astype(str).str.strip() != "")]
-        if f.empty:
-            continue
-        grand_total = f["TOTAL_REASON"].sum()
-        if grand_total == 0:
-            continue
-        # Aggregate by KETERANGAN dulu (H1), baru ambil yang terbesar
-        ket_totals = f.groupby("KETERANGAN")["TOTAL_REASON"].sum()
-        top_ket = ket_totals.idxmax()
-        top_sum = ket_totals.max()
-        pct_val = round(float(top_sum / grand_total) * 100, 0)
-        kontribusi_map[key] = f"{top_ket} {int(pct_val)}%"
-
-    # Assign ke kolom baru berdasarkan group key
-    def _lookup_kontribusi(row):
-        key = (row["NAMA RESTO"], row["NAMA BARANG"], row["JENIS"])
-        return kontribusi_map.get(key)
-    rs["KONTRIBUSI TERBESAR"] = rs.apply(_lookup_kontribusi, axis=1) if len(rs) > 0 else None
+    valid_mask = (is_waste & rt["TOTAL_REASON"].notna()
+                  & (rt["TOTAL_REASON"] > 0) & ket_nonempty)
+    fw = rt.loc[valid_mask.to_numpy(),
+                group_keys_short + ["KETERANGAN", "TOTAL_REASON"]]
+    if fw.empty:
+        rs["KONTRIBUSI TERBESAR"] = None
+    else:
+        ket_tot = (fw.groupby(group_keys_short + ["KETERANGAN"],
+                              dropna=False)["TOTAL_REASON"].sum()
+                   .reset_index())
+        ket_tot = ket_tot.sort_values("TOTAL_REASON", ascending=False,
+                                      kind="stable")
+        top = ket_tot.drop_duplicates(subset=group_keys_short, keep="first")
+        grand = (fw.groupby(group_keys_short, dropna=False)["TOTAL_REASON"]
+                 .sum().reset_index(name="_grand"))
+        top = top.merge(grand, on=group_keys_short, how="left",
+                        validate="many_to_one")
+        top = top[top["_grand"] != 0]  # replika guard grand_total == 0
+        if top.empty:
+            rs["KONTRIBUSI TERBESAR"] = None
+        else:
+            ratio = (top["TOTAL_REASON"].to_numpy(dtype=float)
+                     / top["_grand"].to_numpy(dtype=float))
+            pct = np.round(ratio * 100, 0)  # half-even, sama round() Python
+            top = top.assign(**{"KONTRIBUSI TERBESAR": [
+                f"{k} {int(p)}%"
+                for k, p in zip(top["KETERANGAN"].tolist(),
+                                pct.tolist())]})
+            rs = rs.merge(top[group_keys_short + ["KONTRIBUSI TERBESAR"]],
+                          on=group_keys_short, how="left",
+                          validate="many_to_one")
+            # NaN → None (replika dict.get None; kontrak pd.isna utuh)
+            rs["KONTRIBUSI TERBESAR"] = rs["KONTRIBUSI TERBESAR"].where(
+                rs["KONTRIBUSI TERBESAR"].notna(), None)
 
     # Cleanup helper cols
-    rt = rt.drop(columns=["_waste_valid", "_ket_for_gabungan", "_src_for_gabungan"], errors="ignore")
+    rt = rt.drop(columns=["_waste_valid", "_ket_for_gabungan",
+                          "_src_for_gabungan"], errors="ignore")
 
     # Merge back to df (left join) — defensive: drop kolom yang akan di-merge dulu
-    cols_to_merge = ["KETERANGAN GABUNGAN", "SOURCE DATA GABUNGAN", "KONTRIBUSI TERBESAR"]
-    df_clean = df.copy()
+    # (v2.13.7: df.copy() pra-merge dihapus — drop() & merge() sudah
+    # menghasilkan frame baru, salinan penuh 25,9rb×105 redundan)
+    cols_to_merge = ["KETERANGAN GABUNGAN", "SOURCE DATA GABUNGAN",
+                     "KONTRIBUSI TERBESAR"]
+    df_clean = df
     for c in cols_to_merge:
         if c in df_clean.columns:
             df_clean = df_clean.drop(columns=[c])
-    out = df_clean.merge(rs, on=group_keys_short, how="left", validate="many_to_one")
+    out = df_clean.merge(rs, on=group_keys_short, how="left",
+                         validate="many_to_one")
     # M5 (v2.3.1): lookup merge — rs unique per group key (hasil groupby)
     # → many_to_one. Row order kiri terjaga (left join).
     # Defensive: pastikan tidak ada duplicate columns
@@ -845,33 +863,6 @@ def stage_10_helper(
         "Kualitas": "KUALITAS",
     })
 
-    # Defensive helper: kalau ada duplicate columns, row.get() return Series.
-    # Paksa ambil scalar value (iloc[0]) supaya float() tidak error.
-    def _scalar(v):
-        if isinstance(v, pd.Series):
-            return v.iloc[0] if len(v) > 0 else None
-        return v
-
-    def _pct_bom(row):
-        # 1) % to BOM — INDEPENDEN dari KETERANGAN (sesuai M code)
-        # M11 (v2.3.1): kolom ini SENGAJA mixed dtype (float, "Cek", None) —
-        # replika output M ("Cek" = TOTAL/TOTAL BOM tidak diketahui, null =
-        # BOM 0). Sudah diverifikasi ui_app.py: kolom ini hanya di-display,
-        # tidak ada dependensi logika pada "Cek" → opsi minimal-risk: keep
-        # mixed dtype; pastikan nilai numerik disimpan sebagai float, bukan
-        # string.
-        total_value = _scalar(row.get("TOTAL"))
-        bom_value = _scalar(row.get("TOTAL BOM"))
-        if (total_value is None or bom_value is None
-                or (isinstance(bom_value, float) and np.isnan(bom_value))):
-            return "Cek"
-        try:
-            if float(bom_value) == 0:
-                return None  # try ... otherwise null di M code
-            return float(total_value) / float(bom_value)
-        except (ValueError, TypeError):
-            return None
-
     def _status_value(helper_value_num, max_value_num):
         # STATUS logic dari M code
         if helper_value_num is None:
@@ -880,62 +871,127 @@ def stage_10_helper(
             return "Sesuai"
         return "Tidak Sesuai"
 
-    def _helper_status(row):
-        # 2) HELPER & STATUS — bergantung KETERANGAN
-        ket = _scalar(row.get("KETERANGAN"))
-        if ket is None or (isinstance(ket, float) and np.isnan(ket)) or str(ket).strip() == "":
-            return None, None
-        col = cat_map.get(str(ket).strip())
-        if col is None or col not in df.columns:
-            return None, None
-        helper_value = _scalar(row.get(col))
-        # Coerce ke numerik (None stays None)
-        try:
-            if helper_value is None or (isinstance(helper_value, float) and np.isnan(helper_value)):
-                helper_value_num = None
-            else:
-                helper_value_num = float(helper_value)
-        except (ValueError, TypeError):
-            helper_value_num = None
-        max_value = _scalar(row.get("MAX"))
-        max_value_num = float(max_value) if max_value is not None and not (isinstance(max_value, float) and np.isnan(max_value)) else 0
-        return helper_value_num, _status_value(helper_value_num, max_value_num)
+    # v2.13.7 (perf-audit B): apply(axis=1) membangun Series PER BARIS
+    # (25.901 × ~3 kolom lookup = 207 ms) → transkripsi kolom-numpy.
+    # Logika per-baris DISALIN PERSIS cabang demi cabang (semantik
+    # None-vs-NaN, urutan pengecekan, try/except sama sekali tak berubah).
+    def _col_vals(name: str):
+        """Kolom sbg numpy 1D — nama duplikat → kolom pertama (replika
+        _scalar row.get lama); kolom absen → None (row.get → None)."""
+        if name not in df.columns:
+            return None
+        c = df[name]
+        if isinstance(c, pd.DataFrame):  # nama kolom duplikat
+            c = c.iloc[:, 0]
+        return c.to_numpy()
 
-    def _resolve_helper(row: pd.Series):
-        helper_value_num, status_value = _helper_status(row)
-        return helper_value_num, status_value, _pct_bom(row)
+    def _pct_bom_list() -> list:
+        # 1) % to BOM — INDEPENDEN dari KETERANGAN (sesuai M code)
+        # M11 (v2.3.1): kolom ini SENGAJA mixed dtype (float, "Cek", None)
+        # — replika output M ("Cek" = TOTAL/TOTAL BOM tidak diketahui,
+        # null = BOM 0).
+        tot = _col_vals("TOTAL")
+        bom = _col_vals("TOTAL BOM")
+        n = len(df)
+        out = [None] * n
+        for i in range(n):
+            t = None if tot is None else tot[i]
+            b = None if bom is None else bom[i]
+            if (t is None or b is None
+                    or (isinstance(b, float) and np.isnan(b))):
+                out[i] = "Cek"
+                continue
+            try:
+                if float(b) == 0:
+                    out[i] = None  # try ... otherwise null di M code
+                else:
+                    out[i] = float(t) / float(b)
+            except (ValueError, TypeError):
+                out[i] = None
+        return out
+
+    def _status_from_carried_list() -> list:
+        # HELPER carried tapi STATUS absen: derivasi STATUS dari HELPER
+        # terpreservasi + MAX saat ini (logika AddHelper M).
+        hel = _col_vals("HELPER")
+        mx = _col_vals("MAX")
+        n = len(df)
+        out = [None] * n
+        for i in range(n):
+            hv = None if hel is None else hel[i]
+            try:
+                hv_num = (None if hv is None
+                          or (isinstance(hv, float) and np.isnan(hv))
+                          else float(hv))
+            except (ValueError, TypeError):
+                hv_num = None
+            mv = None if mx is None else mx[i]
+            mv_num = (float(mv) if mv is not None
+                      and not (isinstance(mv, float) and np.isnan(mv)) else 0)
+            out[i] = _status_value(hv_num, mv_num)
+        return out
+
+    def _helper_status_lists() -> tuple[list, list]:
+        # 2) HELPER & STATUS — bergantung KETERANGAN (jalur rekap mentah:
+        # HELPER tidak dibawa dari input).
+        ket = _col_vals("KETERANGAN")
+        mx = _col_vals("MAX")
+        cat_cols: dict[str, np.ndarray | None] = {}
+        n = len(df)
+        helpers: list = [None] * n
+        statuses: list = [None] * n
+        for i in range(n):
+            k = None if ket is None else ket[i]
+            if (k is None or (isinstance(k, float) and np.isnan(k))
+                    or str(k).strip() == ""):
+                continue
+            col = cat_map.get(str(k).strip())
+            if col is None or col not in df.columns:
+                continue
+            if col not in cat_cols:
+                cat_cols[col] = _col_vals(col)
+            hv = cat_cols[col][i]
+            # Coerce ke numerik (None stays None)
+            try:
+                if hv is None or (isinstance(hv, float) and np.isnan(hv)):
+                    hv_num = None
+                else:
+                    hv_num = float(hv)
+            except (ValueError, TypeError):
+                hv_num = None
+            mv = None if mx is None else mx[i]
+            mv_num = (float(mv) if mv is not None
+                      and not (isinstance(mv, float) and np.isnan(mv)) else 0)
+            helpers[i] = hv_num
+            statuses[i] = _status_value(hv_num, mv_num)
+        return helpers, statuses
 
     # H4 (v2.3.1): HELPER dibawa dari input (Stage 1 sekarang keep HELPER/STATUS
     # — re-run pipeline di file output, DATABASE_SATUAN sering tidak ada).
     # Preserve HELPER & STATUS dari input; hanya % to BOM — derived murni dari
     # TOTAL/TOTAL BOM — yang selalu dihitung ulang. Behavior lama (hitung
     # fresh saat HELPER absen, mis. input rekap mentah) tetap terjaga di bawah.
-    df_clean = df.copy()
+    # (v2.13.7: df.copy() pra-drop dihapus — drop() sudah menghasilkan frame
+    # baru; assignment kolom jatuh ke salinan drop, bukan input df.)
+    df_clean = df
     if "HELPER" in df_clean.columns:
         df_clean = df_clean.drop(columns=["% to BOM"], errors="ignore")
         if "STATUS" not in df_clean.columns:
-            # HELPER carried tapi STATUS absen: derivasi STATUS dari HELPER
-            # terpreservasi + MAX saat ini (logika AddHelper M).
-            def _status_from_carried(row):
-                hv = _scalar(row.get("HELPER"))
-                try:
-                    hv_num = None if hv is None or (isinstance(hv, float) and np.isnan(hv)) else float(hv)
-                except (ValueError, TypeError):
-                    hv_num = None
-                mv = _scalar(row.get("MAX"))
-                mv_num = float(mv) if mv is not None and not (isinstance(mv, float) and np.isnan(mv)) else 0
-                return _status_value(hv_num, mv_num)
-            df_clean["STATUS"] = df_clean.apply(_status_from_carried, axis=1)
-        df_clean["% to BOM"] = df_clean.apply(_pct_bom, axis=1)
+            df_clean = df_clean.assign(
+                STATUS=_status_from_carried_list())
+        df_clean = df_clean.assign(**{"% to BOM": _pct_bom_list()})
         return df_clean
 
     # Defensive: drop HELPER/STATUS/% to BOM dari df kalau sudah ada (idempotent case)
     for c in ["HELPER", "STATUS", "% to BOM"]:
         if c in df_clean.columns:
             df_clean = df_clean.drop(columns=[c])
-    helper_records = df_clean.apply(_resolve_helper, axis=1, result_type="expand")
-    helper_records.columns = ["HELPER", "STATUS", "% to BOM"]
-    out = pd.concat([df_clean.reset_index(drop=True), helper_records.reset_index(drop=True)], axis=1)
+    helpers, statuses = _helper_status_lists()
+    helper_records = pd.DataFrame(
+        {"HELPER": helpers, "STATUS": statuses,
+         "% to BOM": _pct_bom_list()})
+    out = pd.concat([df_clean.reset_index(drop=True),
+                     helper_records.reset_index(drop=True)], axis=1)
     # Defensive: pastikan tidak ada duplicate columns
     if out.columns.duplicated().any():
         out = out.loc[:, ~out.columns.duplicated()]
@@ -1118,18 +1174,18 @@ def stage_12_6_quadrant(
         0
     )
 
-    # Quadrant logic
-    def _quadrant(row):
-        p = row["_prevalence"]
-        s = row["_persistence"]
-        if p >= quadrant_threshold and s >= quadrant_threshold:
-            return "SISTEMIK"
-        if p >= quadrant_threshold and s < quadrant_threshold:
-            return "MUSIMAN"
-        if p < quadrant_threshold and s >= quadrant_threshold:
-            return "LOKAL-KRONIS"
-        return "INSIDEN"
-    df["QUADRANT"] = df.apply(_quadrant, axis=1)
+    # Quadrant logic — v2.13.7 (perf-audit B): apply(axis=1) 25.901 baris
+    # (213 ms) → np.select vektor; NaN memicu semua kondisi False →
+    # "INSIDEN", identik cabang demi cabang kode lama.
+    p = df["_prevalence"].to_numpy()
+    s = df["_persistence"].to_numpy()
+    df["QUADRANT"] = np.select(
+        [(p >= quadrant_threshold) & (s >= quadrant_threshold),
+         (p >= quadrant_threshold) & (s < quadrant_threshold),
+         (p < quadrant_threshold) & (s >= quadrant_threshold)],
+        ["SISTEMIK", "MUSIMAN", "LOKAL-KRONIS"],
+        default="INSIDEN",
+    )
 
     # Cleanup helper cols
     df = df.drop(columns=["_prevalence", "_persistence"], errors="ignore")
