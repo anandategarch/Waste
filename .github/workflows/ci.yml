@@ -42,7 +42,7 @@ jobs:
           ruff check . --select E9,F63,F7,F82
         continue-on-error: false
 
-      - name: Test suite (898 test — golden regression + unit + analisa v2.5.0 + semantik filter v2.5.1 + struktur UI PySide6 v2.6.0 + fix audit v2.7.0 + penyederhanaan v2.8.0 + pop-up detail & kolom % to BOM & 3 view v2.8.1 + hotfix SETUP.bat v2.8.2 + busy feedback filter v2.8.3 + tab Hari Mencurigakan & istilah awam & tooltip & perf v2.9.0 + pembanding periode multi-file & Tipikal & bukti bulan-lalu v2.10.0 + drill-down banding & kolom perubahan v2.10.2 + tab Follow Up v2.12.0 + perf tombol v2.12.1 + UI/UX fix batch v2.12.2 + Opsi A banding & filter header v2.12.3 + sidebar & slicer dihapus + funnel semua kolom v2.12.4 + header anti-terpotong & guard klik-ganda v2.12.5 + klik-2× filter dihapus & pop-up selalu bisa dibuka & follow-up hari v2.13.5)
+      - name: Test suite (914 test — golden regression + unit + analisa v2.5.0 + semantik filter v2.5.1 + struktur UI PySide6 v2.6.0 + fix audit v2.7.0 + penyederhanaan v2.8.0 + pop-up detail & kolom % to BOM & 3 view v2.8.1 + hotfix SETUP.bat v2.8.2 + busy feedback filter v2.8.3 + tab Hari Mencurigakan & istilah awam & tooltip & perf v2.9.0 + pembanding periode multi-file & Tipikal & bukti bulan-lalu v2.10.0 + drill-down banding & kolom perubahan v2.10.2 + tab Follow Up v2.12.0 + perf tombol v2.12.1 + UI/UX fix batch v2.12.2 + Opsi A banding & filter header v2.12.3 + sidebar & slicer dihapus + funnel semua kolom v2.12.4 + header anti-terpotong & guard klik-ganda v2.12.5 + klik-2× filter dihapus & pop-up selalu bisa dibuka & follow-up hari v2.13.5 + gel-A deep audit v2.13.6)
         run: python -m pytest tests/ -v --tb=short
         env:
           QT_QPA_PLATFORM: offscreen

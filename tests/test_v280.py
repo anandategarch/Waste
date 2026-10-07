@@ -477,6 +477,16 @@ class TestDokumentasiJujur:
     def test_help_html_tak_menyebut_tab_dihapus(self):
         from ui.app import _HELP_HTML
         for title in REMOVED_TAB_TITLES:
+            # v2.13.6 (gel-A audit): 'Kualitas Data' kini juga nama KARTU 🧪
+            # di dalam tab Scorecard Cabang (resurface v2.13.2) — menyebut
+            # kartu itu di Bantuan adalah dokumentasi SAH. Yang tetap
+            # dilarang: mengiklankan sebagai TAB terpisah (pola seksi
+            # '<h3>Tab …</h3>' / bold judul tab berdiri sendiri).
+            if title == "Kualitas Data":
+                assert "<h3>Tab Kualitas Data</h3>" not in _HELP_HTML, (
+                    "Bantuan mengiklankan tab 'Kualitas Data' yang dihapus "
+                    "seolah tab terpisah (yang sah = kartu di Scorecard)")
+                continue
             assert f"<b>{title}</b>" not in _HELP_HTML, (
                 f"Bantuan masih menyebut tab '{title}' yang sudah dihapus")
 

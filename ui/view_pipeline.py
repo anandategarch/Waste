@@ -12,6 +12,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -54,9 +55,24 @@ class PipelineView(QWidget):
         self._worker: PipelineWorker | None = None
         self._running = False
 
+        # v2.13.6 (audit R2): tinggi-min 4 kartu = 716px (terukur) >
+        # ruang halaman tab ±582px di 1366×768 → tombol Simpan/Reset/
+        # Pratinjau di kartu Threshold terpotong. Bungkus QScrollArea:
+        # kartu 1-3 tetap muat & terlihat, kartu Threshold digulir.
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 8, 8, 8)
-        lay.setSpacing(8)
+        lay.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        page = QWidget()
+        self._page = page
+        scroll.setWidget(page)
+        lay.addWidget(scroll)
+        # NB: nama 'page_lay' — jangan 'pl' (var 'pl' dipakai QHBoxLayout
+        # prow di card 2 kode lama; tabrakan nama = layout siklik → hang).
+        page_lay = QVBoxLayout(page)
+        page_lay.setContentsMargins(8, 8, 8, 8)
+        page_lay.setSpacing(8)
 
         # ===== Card 1: Input workbook =====
         c1 = Card(self)
@@ -82,7 +98,7 @@ class PipelineView(QWidget):
         b_sample.clicked.connect(self._use_sample)
         rl.addWidget(b_sample)
         l1.addWidget(row)
-        lay.addWidget(c1)
+        page_lay.addWidget(c1)
 
         # ===== Card 2: Parameter + Kontrol =====
         c2 = Card(self)
@@ -123,7 +139,7 @@ class PipelineView(QWidget):
         self._lbl_status = WLabel("Siap. Pilih workbook lalu klik Mulai Pipeline.", c2)
         self._lbl_status.setObjectName("hint")
         l2.addWidget(self._lbl_status)
-        lay.addWidget(c2)
+        page_lay.addWidget(c2)
 
         # ===== Card 3: Ringkasan + Log (splitter vertikal) =====
         c3 = Card(self)
@@ -144,7 +160,7 @@ class PipelineView(QWidget):
         self._log.setMaximumBlockCount(2000)
         self._log.setPlaceholderText("Log proses (14 stage) tampil di sini saat pipeline berjalan…")
         l3.addWidget(self._log, 1)
-        lay.addWidget(c3, 1)
+        page_lay.addWidget(c3, 1)
 
         # ===== Card 4: Threshold & Konfigurasi =====
         c4 = Card(self)
@@ -203,13 +219,13 @@ class PipelineView(QWidget):
         inner_lay.addStretch(1)
         scroll.setWidget(inner)
         l4.addWidget(scroll, 1)
-        lay.addWidget(c4, 1)
+        page_lay.addWidget(c4, 1)
 
         # Log line dari ctx → panel log (worker progress juga lewat sini)
         ctx.log_line.connect(self._append_log)
         # Set split: ringkasan/log card mendapat ruang lebih besar
-        lay.setStretch(2, 3)
-        lay.setStretch(3, 2)
+        page_lay.setStretch(2, 3)
+        page_lay.setStretch(3, 2)
 
     # ------------------------------------------------------------
     # INPUT

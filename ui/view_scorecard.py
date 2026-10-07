@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QPushButton,
+    QScrollArea,
+    QFrame,
     QVBoxLayout,
     QWidget,
 )
@@ -64,9 +66,25 @@ class ScorecardView(QWidget):
         super().__init__(parent)
         self._ctx = ctx
 
+        # v2.13.6 (audit R1): konten scorecard ±1.270px tinggi-min — tak
+        # mungkin dipadatkan ke ruang halaman tab (±582px di 1366×768;
+        # terukur offscreen). Bungkus QScrollArea supaya kartu bawah
+        # (Tren Bulanan / Hari Sistemik / Kualitas Data) tetap TERJANGKAU
+        # lewat gulir di layar kecil. ⤢/⛶ & reparent tabel tak terdampak
+        # (tabel tetap anak kartu di halaman ini); tabel ≤ 200 baris punya
+        # scrollbar sendiri — gulir roda di atas tabel tetap milik tabel.
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 8, 8, 8)
-        lay.setSpacing(8)
+        lay.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        page = QWidget()
+        self._page = page
+        scroll.setWidget(page)
+        lay.addWidget(scroll)
+        page_lay = QVBoxLayout(page)
+        page_lay.setContentsMargins(8, 8, 8, 8)
+        page_lay.setSpacing(8)
 
         # ---- KPI row (4 kartu) ---------------------------------------
         kpi_row = QWidget(self)
@@ -100,7 +118,7 @@ class ScorecardView(QWidget):
                      self._kpi_sistemik):
             kl.addWidget(card)
         kl.addStretch(1)
-        lay.addWidget(kpi_row)
+        page_lay.addWidget(kpi_row)
         self._kpi_row = kpi_row
 
         # ---- Kartu utama: tabel scorecard -----------------------------
@@ -147,7 +165,7 @@ class ScorecardView(QWidget):
         self._table.double_clicked.connect(self._on_double)
         cl.addWidget(self._table, 1)
         self._tcl = cl
-        lay.addWidget(card, 3)
+        page_lay.addWidget(card, 3)
         self._main_card = card
 
         # ---- Baris kartu pendukung: kerugian + hari -------------------
@@ -250,7 +268,7 @@ class ScorecardView(QWidget):
         scl.addWidget(self._sistemik_table, 1)
         sl.addWidget(scard, 1)
         rl.addWidget(side, 2)
-        lay.addWidget(row2, 2)
+        page_lay.addWidget(row2, 2)
         self._row2 = row2
 
         # v2.13.3 (⑧): kartu tren multi-bulan (butuh ≥ 2 pembanding —
@@ -278,7 +296,7 @@ class ScorecardView(QWidget):
             {}, self._page_apply("trend"), self._page_state("trend"),
             all_cols=True, skip=())
         tl2.addWidget(self._trend_table, 1)
-        lay.addWidget(tcard, 2)
+        page_lay.addWidget(tcard, 2)
         self._row3 = tcard
 
         # Pop-up rincian cabang — satu instance dipakai ulang.
@@ -410,8 +428,8 @@ class ScorecardView(QWidget):
                 if "SEVERITY" in dq.columns else 0
             self._lbl_dq.setText(
                 f"{len(dq)} temuan ({n_warn} warning) — hover judul "
-                "kolom utk istilah; klik 2× sel PENJELASAN utk baca "
-                "lengkap (tooltip).")
+                "kolom utk istilah; arahkan kursor ke sel PENJELASAN utk "
+                "baca lengkap (tooltip).")
 
         # v2.13.3 (⑧): kartu tren multi-bulan (≥ 2 pembanding).
         trend = self._apply_local("trend", m.get("trend"))

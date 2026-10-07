@@ -2,9 +2,10 @@
 
 Struktur:
 - Toolbar: Export Excel + Bantuan
-- QTabWidget 5 view (v2.9.0: + Hari Mencurigakan): Anomali (default) ·
-  Follow Up · Hari Mencurigakan · Banding Periode · Pipeline — render
-  lazy per-view (H2)
+- QTabWidget 6 tab (v2.13.1: + Scorecard Cabang): Anomali (default) ·
+  Follow Up · Hari Mencurigakan · Scorecard Cabang · Banding Periode ·
+  Pipeline — render lazy per-view (H2). Tab Scorecard & Pipeline dibungkus
+  QScrollArea (v2.13.6) — konten panjang tetap terjangkau di layar kecil.
 - Status bar: pesan status + hitungan baris/anomali permanen
 
 v2.12.4: sidebar filter kiri (v2.8.0) DIHAPUS — filter kini lewat
@@ -70,6 +71,15 @@ _HELP_HTML = """
 <li><b>Centang ✓ di kolom pertama</b> (v2.13.5) atau tombol <b>☑ Masuk Follow Up</b> di pop-up detail = kumpulkan baris ini ke daftar Follow Up; tombol <b>☑ Centang yang tampil</b> = centang massal hasil filter.</li>
 <li><b>Bila ada file bulan lalu</b> (tab Banding Periode): muncul kolom <b>NILAI BULAN LALU</b> — nilai tanggal yang sama bulan sebelumnya + berapa kali lipatnya.</li>
 </ul>
+<h3>Tab Scorecard Cabang (v2.13.1)</h3>
+<ul>
+<li>Jawaban untuk pertanyaan manajemen: <b>"kunjungi cabang mana dulu, bawa bukti apa, berapa bisa dihemat?"</b> — tabel per cabang, RANK = urutan kunjungan (urut potensi hemat).</li>
+<li>Kolom penting: <b>INTENSITAS %</b> (waste vs penjualan/BOM), <b>KELEBIHAN</b> (potensi hemat vs tipikal cabang lain), <b>ALASAN DOMINAN</b>, <b>HARI TERSANGKA</b>, <b>STATUS INPUT</b> (verdict pelaporan: Lengkap / Berhenti Input / Memang Tak Pernah).</li>
+<li><b>Klik 2× baris = rincian cabang</b> (pop-up: top kerugian vs tipikal + profil alasan + verdict input).</li>
+<li>KPI: <b>POTENSI HEMAT</b> · <b>INTENSITAS TIPIKAL</b> (median) · <b>CABANG #1</b> · <b>HARI SISTEMIK</b> (hari naik serentak banyak cabang = masalah bersama).</li>
+<li>Kartu pendukung: 💰 <b>Top Kerugian vs Tipikal</b> (ranking uang per baris) · 📅 <b>Pola Hari Kalender</b> (Senin–Minggu asli dari nama bulan file) · 🧪 <b>Kualitas Data</b> (pemeriksaan otomatis — arahkan kursor ke sel PENJELASAN utk baca lengkap) · 📈 <b>Tren Bulanan</b> (butuh ≥ 2 file bulan lalu).</li>
+<li>Di layar kecil halaman ini <b>bisa digulir</b> (v2.13.6) — semua kartu tetap terjangkau; tombol ⤢ Perbesar Tabel / ⛶ Layar Penuh juga tersedia.</li>
+</ul>
 <h3>Tab Follow Up (v2.12.0)</h3>
 <ul>
 <li><b>Centang baris mencurigakan</b> (kolom ✓ di tab Anomali <b>atau tab Hari Mencurigakan</b>, atau tombol ☑ di pop-up detail) → baris terkumpul di tab <b>Follow Up</b> dalam format rekap: TOTAL · AVG · MAX · SOURCE DATA · JENIS · KETERANGAN · NAMA BARANG · NAMA RESTO · SATUAN · hari 1–31.</li>
@@ -123,8 +133,9 @@ baris; tabel tanpa cap baris.</p>
 
 
 class MainWindow(QMainWindow):
-    """Jendela utama: toolbar + 5 tab view + status bar (v2.12.4: tanpa
-    sidebar — filter via funnel judul kolom, tabel lebar penuh)."""
+    """Jendela utama: toolbar + 6 tab view + status bar (v2.12.4: tanpa
+    sidebar — filter via funnel judul kolom, tabel lebar penuh; v2.13.1:
+    + tab Scorecard Cabang)."""
 
     def __init__(self) -> None:
         super().__init__()
