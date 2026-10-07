@@ -42,7 +42,7 @@ EXPECTED_MODULES = [
     "__init__.py", "shared.py", "theme.py", "state.py", "models.py",
     "workers.py", "widgets.py", "app.py",
     "view_anomali.py", "view_followup.py", "view_hari.py",
-    "view_periode.py", "view_pipeline.py",
+    "view_periode.py", "view_pipeline.py", "followup_table.py",
 ]
 
 
@@ -256,4 +256,4 @@ class TestVersiSync:
         from waste_anomaly import __version__
         cfg = json.loads(
             (REPO / "waste_anomaly" / "config.json").read_text(encoding="utf-8"))
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.13.7"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.13.8"

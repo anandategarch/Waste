@@ -7,6 +7,12 @@ publik yang DIJAGA supaya test lama tetap hijau (tanpa perubahan):
 
 Fungsi filter murni dipindah VERBATIM dari ui/shared.py v2.5.1 (semantik
 DD-M1/DD-L4/DQ-M1/IN-L1 terkunci test).
+
+v2.13.8 (gel-C deep audit): _build_search_blob + parameter
+search/day_min/day_max/search_blob _apply_filters DIHAPUS — fitur kotak
+cari & rentang hari dihapus dari UI sejak v2.12.4 (sidebar), blob worker
+dihapus v2.13.7; cabang-cabang itu mati di produksi (audit D11). Yang
+tersisa = semantik funnel yang HIDUP: cabang/item/jenis/keterangan/status.
 """
 from __future__ import annotations
 
@@ -37,7 +43,7 @@ def bundle_res_dir() -> Path:
     return _bundle_dir()
 
 
-APP_VERSION = "2.13.7"
+APP_VERSION = "2.13.8"
 APP_TITLE = "Waste Anomaly Detection"
 
 
@@ -68,57 +74,13 @@ def fmt_id(value: float, decimals: int = 0) -> str:
 # PURE FILTER HELPER (M23 → v2.5.1 semantics, VERBATIM dari ui lama)
 # ============================================================
 
-def _build_search_blob(df: pd.DataFrame) -> pd.Series:
-    """Kolom bantu pencarian: semua sel satu baris digabung jadi SATU string
-    kecil (v2.9.0, perf).
-
-    Masalah: pencarian 'semua kolom' menjalankan astype(str).str.lower()
-    .str.contains() di 53 kolom × 25.901 baris = 1,5 dtk BEKU tiap kata
-    yang diketik. Solusi: gabungkan sel per baris sekali (dipisah '\x01'),
-    lower, NaN → '' (setara gerbang DD-L4 'sel NaN dikecualikan') → tiap
-    pencarian tinggal SATU contains() atas 25.901 string pendek (~0,1 dtk).
-    Dibangun sekali per dataset di AppContext (cache data_version).
-
-    NOTE pemisah: '\x01' (SOH), BUKAN '\x00' — NUL adalah terminator
-    string C: numpy/pandas string-op memotongnya senyap ('a'+'\x00'+'b'
-    → 'ab', terbukti eksperimen) → pencarian bisa cocok LINTAS sel yang
-    salah (mis. '70' cocok di sambungan '7|0'). '\x01' utuh sampai ke
-    contains() dan mustahil diketik user.
-    """
-    sep = "\x01"
-    parts: list[pd.Series] = []
-    for col in df.columns:
-        s = df[col]
-        txt = s.astype(str).str.lower()
-        # NaN/None jangan jadi 'nan' yang bisa cocok dicari — kembalikan ''
-        # (semantik sama dgn gerbang notna() jalur per-kolom).
-        txt = txt.where(s.notna(), "")
-        parts.append(txt)
-    if not parts:
-        return pd.Series([""] * len(df), index=df.index)
-    blob = parts[0]
-    for p in parts[1:]:
-        blob = blob + sep + p
-    return blob
-
-
-def _apply_filters(df: pd.DataFrame, filters: dict | None,
-                   day_min: int | None = None, day_max: int | None = None,
-                   search: str = "",
-                   search_blob: pd.Series | None = None) -> pd.DataFrame:
+def _apply_filters(df: pd.DataFrame, filters: dict | None) -> pd.DataFrame:
     """Filter df murni (tanpa side-effect, tanpa render).
 
     filters: dict key → nilai; None / list kosong di-skip.
       cabang→NAMA RESTO, item→NAMA BARANG, jenis→JENIS (list → isin),
       keterangan→KETERANGAN, status→ANOMALY STATUS.
-    day_min/day_max: rentang HARI MAX (inklusif). v2.5.1 (DD-M1): baris
-      HARI MAX null (≈ semua baris Kosong TOTAL=0) TIDAK lagi lolos.
-    search: substring case-insensitive di kolom (mask OR, vectorized);
-      v2.5.1 (DD-L4): sel NaN dikecualikan.
     v2.5.1 (DQ-M1): keterangan dibandingkan dengan normalisasi whitespace.
-    search_blob (v2.9.0): hasil _build_search_blob(df) — semua filter
-      baris-local (mask per baris) sehingga urutan search vs dropdown
-      bebas; hasil identik dgn jalur per-kolom, hanya 10× lebih cepat.
     v2.12.1 (perf): TANPA salinan awal df. Dulu `filtered = df.copy()`
       dijalankan SEBELUM mask apa pun (25.901×53 = ~21 ms sia-sia di SETIAP
       ganti filter, termasuk saat kembali ke state TANPA filter — jalur
@@ -130,12 +92,10 @@ def _apply_filters(df: pd.DataFrame, filters: dict | None,
     # v2.12.1: fast path — tak ada kerja: kembalikan df apa adanya
     # (konsumen hanya membaca; anomali_df/KPI/display semuanya read-only
     # atau bekerja di salinannya sendiri).
-    search_active = bool((search or "").strip())
     filters_active = any(
         v is not None and not (isinstance(v, list) and not v)
         for v in (filters or {}).values())
-    day_active = day_min is not None and day_max is not None
-    if not search_active and not filters_active and not day_active:
+    if not filters_active:
         return df
 
     filtered = df
@@ -143,23 +103,6 @@ def _apply_filters(df: pd.DataFrame, filters: dict | None,
         "cabang": "NAMA RESTO", "item": "NAMA BARANG", "jenis": "JENIS",
         "keterangan": "KETERANGAN", "status": "ANOMALY STATUS",
     }
-
-    # Search dulu (baris-local — urutan bebas; blob = jalur cepat).
-    search = (search or "").strip().lower()
-    if search:
-        if search_blob is not None and search_blob.index.equals(df.index):
-            mask = search_blob.str.contains(search, regex=False, na=False)
-            filtered = filtered[mask]
-        else:
-            mask = pd.Series(False, index=filtered.index)
-            for col in filtered.columns:
-                sub = filtered[col]
-                if not sub.notna().any():
-                    continue
-                mask |= sub.notna() & sub.astype(str).str.lower().str.contains(
-                    search, regex=False, na=False
-                )
-            filtered = filtered[mask]
 
     for key, val in (filters or {}).items():
         if val is None or (isinstance(val, list) and not val):
@@ -182,13 +125,4 @@ def _apply_filters(df: pd.DataFrame, filters: dict | None,
             ]
         else:
             filtered = filtered[filtered[col] == val]
-
-    # Rentang hari (HARI MAX in [day_min, day_max]) — ketat (DD-M1).
-    if (day_min is not None and day_max is not None
-            and "HARI MAX" in filtered.columns):
-        hari_max = pd.to_numeric(filtered["HARI MAX"], errors="coerce")
-        filtered = filtered[
-            hari_max.between(day_min, day_max, inclusive="both")
-            & hari_max.notna()
-        ]
     return filtered

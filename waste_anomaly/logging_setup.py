@@ -3,14 +3,16 @@
 Sebelumnya: 16+ exception ditelan diam-diam (``except: pass``), error
 produksi tidak meninggalkan jejak file apa pun (log hanya popup in-memory
 + 2 print stderr). Sekarang: logger terkonfigurasi menulis ke
-``logs/waste_anomaly.log`` (rotating 1 MB × 3 backup) + hook exception
-global Tkinter (``report_callback_exception``).
+``logs/waste_anomaly.log`` (rotating 1 MB × 3 backup); exception global
+UI ditangani ``sys.excepthook`` di ui/app.py (_qt_excepthook).
 
 Cara pakai (ui/app.py startup):
     from waste_anomaly.logging_setup import setup_logging
     log_path = setup_logging()          # → logs/waste_anomaly.log
-    ...
-    install_tk_exception_hook(app)      # pasang hook ke root Tk
+
+v2.13.8 (gel-C deep audit): install_tk_exception_hook + tk_suppressed
+DIHAPUS — sisa era Tkinter (UI PySide6 sejak v2.6.0, hook Tk tak pernah
+dipanggil lagi; contoh pemakaian lama di docstring ini juga menyesatkan).
 """
 
 from __future__ import annotations
@@ -18,7 +20,6 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import sys
-import traceback
 from pathlib import Path
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -102,39 +103,3 @@ def setup_logging(
         log_path, LOG_MAX_BYTES // 1024, LOG_BACKUP_COUNT,
     )
     return log_path
-
-
-def install_tk_exception_hook(root) -> None:
-    """Pasang hook exception global untuk callback Tkinter (F11).
-
-    Tanpa hook ini, exception di event handler Tk hanya tercetak ke stderr
-    dan TIDAK masuk file log. Dengan hook: traceback lengkap ke file log +
-    status bar app (bila tersedia) supaya user tahu sesuatu gagal.
-    """
-    log = logging.getLogger("waste_anomaly.ui")
-
-    def _hook(exc_type, exc_value, exc_tb):
-        if issubclass(exc_type, tk_suppressed()):
-            # TclError saat teardown window itu normal (widget sudah mati)
-            return
-        log.error(
-            "Exception di callback Tk: %s: %s\n%s",
-            exc_type.__name__, exc_value,
-            "".join(traceback.format_tb(exc_tb)),
-        )
-
-    try:
-        root.report_callback_exception = _hook
-    except Exception:  # pragma: no cover — root bukan widget Tk biasa
-        log.debug("Gagal memasang report_callback_exception", exc_info=True)
-
-
-def tk_suppressed():
-    """tk.TclError lazily — modul ini dipakai juga oleh non-UI (pipeline tests)."""
-    try:
-        import tkinter
-        return tkinter.TclError
-    except ImportError:  # pragma: no cover — environment tanpa tkinter
-        class _NeverMatch(Exception):
-            pass
-        return _NeverMatch

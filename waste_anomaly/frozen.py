@@ -4,7 +4,6 @@ MASALAH (ditemukan saat double-check v2.4.0): jalur file yang DITULIS
 aplikasi dulunya resolve dari ``Path(__file__)``:
 
     waste_anomaly/utils.py   → CONFIG_PATH  (config.json — threshold user)
-    waste_anomaly/filters.py → PROFILES_PATH (profil filter user)
     ui/shared.py             → APP_DIR      (folder data/ + "Buka Folder Sample")
 
 Di exe PyInstaller, ``__file__`` modul menunjuk ke dir ekstraksi temp
@@ -14,7 +13,7 @@ exe ditutup — kebalikan dari klaim BUILD_EXE.bat ("config.json disimpan
 berdampingan dengan exe").
 
 Konvensi sekarang (dipakai semua modul):
-    - File WRITABLE (config sidecar, filters.json, folder data/, logs) →
+    - File WRITABLE (config sidecar, followup.json, folder data/, logs) →
       folder EXE:      ``exe_dir()``  (``Path(sys.executable).parent``).
     - Resource READ-ONLY bundled (ikon, config default) →
       ``bundle_dir()`` (``sys._MEIPASS``; repo root saat dev).

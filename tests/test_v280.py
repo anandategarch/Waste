@@ -535,9 +535,11 @@ class TestBusyFeedbackV283:
             "cursor tidak dipulihkan setelah refresh selesai")
 
     def test_jalur_sinyal_filter_juga_terbungkus(self):
-        """ctx.set_day_range → filters_changed → render tabel: jalur yang
-        DIPAKAI USER saat apply filter harus melewati busy_feedback juga
-        (bukan hanya pemanggilan manual _refresh_table)."""
+        """ctx.set_filter → filters_changed → render tabel: jalur yang
+        DIPAKAI USER saat apply funnel harus melewati busy_feedback juga
+        (bukan hanya pemanggilan manual _refresh_table).
+        (v2.13.8: set_day_range diganti set_filter — rentang hari sudah
+        dihapus bersama sidebar; jalur sinyalnya tetap dikunci.)"""
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QApplication
         view, ctx = _make_view()
@@ -547,9 +549,9 @@ class TestBusyFeedbackV283:
         orig = view._refresh_table_impl
         view._refresh_table_impl = lambda: (
             seen.append(QApplication.overrideCursor()), orig())[-1]
-        ctx.set_day_range(2, 3)
+        ctx.set_filter("jenis", ["WASTE"])
         QApplication.processEvents()
-        assert seen, "set_day_range tidak memicu render (jalur filter putus)"
+        assert seen, "set_filter tidak memicu render (jalur filter putus)"
         assert seen[0] is not None and seen[0].shape() == Qt.CursorShape.BusyCursor
         assert QApplication.overrideCursor() is None
         view.hide()

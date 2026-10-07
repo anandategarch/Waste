@@ -2,6 +2,8 @@
 
 Python + PySide6 (Qt) **anomaly workbench** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif (klik baris = pop-up + tombol fokus; klik-2× filter dihapus v2.13.5)**, **benchmark peer aktif (pop-up detail + sinyal S8/S9)**, **kolom % to BOM (waste vs penjualan kuantiti)**, **data quality otomatis (pipeline & export)**, **compare periode bulan-ke-bulan**, **banding vs beberapa bulan lalu (multi-file, kuantiti tanpa BOM, v2.10.0)**, dan **filter funnel di judul SEMUA kolom tabel (v2.12.3/v2.12.4 — sidebar filter & slicer & filter profile dihapus)**, dan **tab Follow Up: centang ✓ baris mencurigakan → shortlist rekap + warna hari + ekspor + impor hasil tindak lanjut (v2.12.0/v2.13.3)**, dan **tab Scorecard Cabang: urutan kunjungan audit + potensi hemat + detektor input kosong + top kerugian + pola hari kalender + hari sistemik + kualitas data + tren multi-bulan (v2.13.1-3)** (6 tab; v2.13.6: tab Scorecard & Pipeline dibungkus scroll — konten panjang tetap terjangkau di layar kecil).
 
+> **v2.13.8** — **GELOMBANG C DEEP AUDIT: BERSIH-BERSIHING DEAD CODE + KONSOLIDASI KEMBAR** (audit menemukan ±25 fungsi mati-total + modul yatim + fitur-mati + 10 metode kembar identik antar view): (1) **utils.py 484 → 211 baris** — 17 fungsi mati-total dihapus (to_number, safe_sum…, pct, dll; nol call-site produksi/test sejak vektorisasi penuh stage_02 v2.2.0) + docstring yang berbohong ("yang aktif dipakai") ditulis ulang jujur. (2) **Modul waste_anomaly/filters.py DIHAPUS TOTAL** — yatim sejak sidebar/filter-profile dihapus v2.12.4 (6 fungsi mati + 4 hanya-test; 3 test frozen-path-nya dihapus terdokumentasi — kontrak frozen-sidecar tetap terkunci penuh lewat TestConfigPath, mekanisme identik). (3) **logging_setup: install_tk_exception_hook + tk_suppressed DIHAPUS** — sisa era Tkinter (UI PySide6 sejak v2.6.0) + contoh pemakaian menyesatkan di docstring dibersihkan. (4) **MESIN FITUR MATI DIHAPUS dari state/shared**: set_search/set_day_range/set_filters_multi/invalidate_filter_cache/filter_summary/CHIP_LABELS/_search_blob + _build_search_blob + cabang search/rentang-hari _apply_filters — kotak cari & rentang hari sudah tak ada di UI sejak v2.12.4 (audit D11: blob ±1,2 dtk/run terbuang — eager dihapus v2.13.7, kini seluruh jalurnya); _apply_filters kini murni semantik funnel yang hidup (5 dimensi) — 18 test lama yang mengunci fitur mati dihapus/ditulis-ulang terdokumentasi (pola repo "kunci ketiadaan"). (5) **Konsolidasi kembar AnomaliView ⇄ HariView**: 10 metode identik (±250 baris ×2) → SATU sumber ui/followup_table.py (FollowupTableMixin + HF_COLS tunggal; _DISP_LRU per-view 8/4) — view_anomali 1178→1008 baris, view_hari 636→474 baris; modul baru terdaftar manifest dua-arah + EXPECTED_MODULES. (6) Dead code UI: PipelineView.set_workbook, ScorecardView.SC_COLS, ui/__init__ lazy-export; 3 import mati (pipeline np/pd, loader load_config). (7) **Fix E5**: mutasi ✓ view_periode kini lewat notify_column_changed (sinkron snapshot numpy — dulu dataChanged manual mem-bypass). 928−18+16 = **926 test** (+test_v2138 16 test pengunci: resolusi mixin/kunci ketiadaan API mati/kontrak funnel); E2E 29/29 (interaksi NYATA lewat mixin: klik pop-up, ✓ toggle, funnel, bulk); ruff fatal+F401 bersih seluruh repo.
+
 > **v2.13.7** — **GELOMBANG B DEEP AUDIT: ENGINE 2× LEBIH CEPAT (−53%), OUTPUT IDENTIK 100%** (vektorisasi 6 titik panas Python-per-baris/per-grup + pemangkasan kerja sia-sia — terukur data asli 25.901 baris, equality penuh 105 kolom vs baseline): (1) **stage_03 KONTRIBUSI TERBESAR** — loop 2.500 grup × mask-python (2.267 ms = 43% pipeline; cProfile 2.503× boolean-mask) → vektor penuh: satu groupby 4-kunci + stable-sort + drop_duplicates (semantik idxmax dipertahankan persis: tie → KETERANGAN terkecil); GABUNGAN: lambda-per-grup 12,6k panggilan → dedup + groupby-join level-C (urutan kontribusi preserve-order identik). (2) **stage_02** — HARI MAX `day_matrix.iloc[i]` per baris (akses termahal pandas) + 2 loop median/second-max → matrix numpy sekali (sort + posisi tengah + argmax vektor). (3) **stage_12_6 QUADRANT** — apply(axis=1) 25.901 baris (213 ms) → np.select. (4) **stage_10** — 3 apply(axis=1) (Series per baris, 207 ms) → transkripsi kolom-numpy cabang-per-cabang (semantik None-vs-NaN & urutan try/except disalin persis). (5) **loader** — normalisasi float 15-digit per-sel 771 ms per workbook → kolom bulat < 10^15 terbukti no-op ("%.15g" mencetak bulat ≤ 15 digit PERSIS) → di-skip; kolom desimal tetap per-sel — kena juga tiap file pembanding 54k baris. (6) **pembanding** — to_numeric 31 kolom dihitung 4× per file → SEKALI dibagi 4 agregat; scorecard insights O(n_resto×n_baris) → satu groupby. (7) **blob pencarian worker dihapus** (±1,2 dtk per run sia-sia — fitur cari sudah tak ada sejak v2.12.4; jalur lazy state tetap utk pengujian). (8) df.copy() pra-merge redundan dibuang. **Hasil: pipeline 5,68 → 2,67 dtk (−53%); suite test 232 → 202 dtk; E2E 7,6 → 4,8 dtk; output 105 kolom × 25.901 baris IDENTIK (dtype+nilai) + golden utuh.** 914+14 = **928 test** (test_v2137: 14 uji EKIVALENSI ORACLE — tiap titik divektorkan diuji lawan replika algoritma lama: stage_03/02/12.6/10 + loader skip-no-op + period num≡None + worker tanpa blob).
 
 > **v2.13.6** — **GELOMBANG A DEEP AUDIT: LAYOUT + TEKS JUJUR + BANNER** (audit menyeluruh UI/UX/kode/dead-code/engine): (1) **Tab Scorecard & Pipeline kini bisa digulir** — terukur offscreen: konten Scorecard menuntut 1.270px & Pipeline 716px padahal ruang halaman tab ±582px di 1366×768 → kartu Tren Bulanan/Hari Sistemik/Kualitas Data bawah & tombol Simpan/Reset/Pratinjau kartu Threshold **tak pernah terlihat** tanpa scroll; kini dibungkus QScrollArea (widgetResizable, tanpa bingkai) — view boleh diciutkan (min-hint 68px), konten utuh & terjangkau lewat gulir; ⤢/⛶ & reparent tabel tak terdampak; tabel ≤ 200 baris punya scrollbar sendiri. (2) **Instruksi mati dibetulkan**: label kartu DQ menyuruh "klik 2× sel PENJELASAN" padahal tabel DQ tak punya handler klik-2× → kini "arahkan kursor" (tooltip sel memang ada). (3) **Bantuan (F1) kini memuat seksi Tab Scorecard Cabang** (satu-satunya tab yang tak terdokumentasi) + catatan halaman bisa digulir. (4) **Banner MULAI.bat/SETUP.bat disegarkan** — masih v2.12.5 + mengiklankan "3 view" + "Sidebar Ctrl+Shift+F" (sidebar dihapus v2.12.4; banner menipu 7 versi minor); kini v2.13.6 + 6 tab + tanpa jejak sidebar, CRLF dijaga. (5) README seksi drill-down ditulis ulang (masih mengajarkan sidebar & klik-2×→filter yang dihapus) + tree diperbarui (tanpa modul v2.13.x). Docstring app/ui_app "5 view/3 view" → 6 tab. 898+16 = **914 test**; 0 perubahan perilaku data/golden.
@@ -311,11 +313,12 @@ Waste/
 │   ├── view_scorecard.py          ← Tab 4 Scorecard Cabang (v2.13.1): urutan kunjungan audit +
 │   │                                 KPI + Top Kerugian + Pola Hari + DQ + Tren (QScrollArea v2.13.6)
 │   ├── view_periode.py            ← Tab 5 Banding Periode: multi-file bulan lalu + Tipikal median (v2.10.0)
-│   └── view_pipeline.py           ← Tab 6 Pipeline (+ ringkasan + threshold editor; QScrollArea v2.13.6)
+│   ├── view_pipeline.py           ← Tab 6 Pipeline (+ ringkasan + threshold editor; QScrollArea v2.13.6)
+│   └── followup_table.py          ← Mixin ✓-follow-up + funnel (kembar Anomali⇄Hari, konsolidasi v2.13.8)
 ├── assets/                         ← Ikon aplikasi (ico + png)
 ├── make_sample.py                  ← Generate sample workbook untuk testing
 ├── sample_workbook.xlsx            ← Fixture test in-repo (v2.7.0 — hasil make_sample.py)
-├── tests/                          ← Test suite pytest (928 test)
+├── tests/                          ← Test suite pytest (926 test)
 │   ├── conftest.py
 │   ├── fixtures/ui_methods_manifest.txt  ← Manifest def top-level ui/ (kunci struktural DUA-ARAH, v2.7.0)
 │   ├── test_pipeline_regression.py ← Golden regression 25.901 baris (14 test)
@@ -326,12 +329,12 @@ Waste/
 │   ├── test_key_normalization.py   ← Normalisasi kunci join (13)
 │   ├── test_float_precision.py     ← Presisi 15 digit (idempotency) (10)
 │   ├── test_logging.py             ← Logging framework (5)
-│   ├── test_frozen_paths.py        ← Path frozen-mode exe (seed sidecar) (10)
+│   ├── test_frozen_paths.py        ← Path frozen-mode exe (seed sidecar) (7)
 │   ├── test_temporal.py            ← Analisa temporal (52)
 │   ├── test_priority.py            ← Money view + benchmark peer (41)
 │   ├── test_data_quality.py        ← 7 pemeriksaan kualitas data (58)
 │   ├── test_period_compare.py      ← Compare periode bulan-ke-bulan (23)
-│   ├── test_filter_semantics.py    ← Semantik filter + fmt_id (26)
+│   ├── test_filter_semantics.py    ← Semantik filter + fmt_id (9)
 │   ├── test_ui_structure.py        ← Struktur paket ui/ (manifest + offscreen) (16)
 │   ├── test_v270_wave1.py          ← Regresi fix audit v2.7.0 gel. 1 (8; v2.10.0:
 │   │                                 kontrak PeriodWorker pindah ke test_v2100.py)
@@ -341,14 +344,14 @@ Waste/
 │   ├── test_v280.py                ← Regresi v2.8.0–v2.8.3: pop-up detail + kolom % to BOM
 │   │                                 + busy feedback (33)
 │   ├── test_v290.py                ← Regresi v2.9.0: Stage 15 hari tersangka + tab
-│   │                                 Hari Mencurigakan + istilah awam + cache perf (38)
+│   │                                 Hari Mencurigakan + istilah awam + cache perf (35)
 │   ├── test_v2100.py               ← Regresi v2.10.0+v2.10.1: pembanding multi-file +
 │   │                                 tipikal + bukti bulan-lalu + fix path status (64)
 │   ├── test_v2102.py               ← Regresi v2.10.2+v2.10.3: drill-down banding +
 │   │                                 kolom perubahan + audit underscore/pop-up basi (67)
-│   ├── test_v2110.py               ← Regresi v2.11.0: slicer multi-select (6)
+│   ├── test_v2110.py               ← Regresi v2.11.0: slicer multi-select (3)
 │   ├── test_v2120.py               ← Regresi v2.12.0: tab Follow Up (42)
-│   ├── test_v2121.py               ← Regresi v2.12.1: perf tombol (32)
+│   ├── test_v2121.py               ← Regresi v2.12.1: perf tombol (30)
 │   ├── test_v2122.py               ← Regresi v2.12.2: UI/UX fix batch (31)
 │   ├── test_v2123.py               ← Regresi v2.12.3: Opsi A + BULAN LALU + filter header (27)
 │   ├── test_v2124.py               ← Regresi v2.12.4: sidebar/slicer dihapus + funnel semua kolom + hint dihapus (28)
@@ -360,8 +363,9 @@ Waste/
 │   ├── test_v2134.py               ← Regresi v2.13.4: fix 'Hari Data BARU' + FutureWarning (10)
 │   ├── test_v2135.py               ← Regresi v2.13.5: klik-2× dihapus + pop-up + follow-up hari (29)
 │   ├── test_v2136.py               ← Regresi v2.13.6: gel-A audit — scroll + teks + banner (16)
-│   └── test_v2137.py               ← Regresi v2.13.7: gel-B engine cepat — ekivalensi oracle vektorisasi (14)
-├── .github/workflows/ci.yml        ← CI: matrix Python × OS, lint + 928 test
+│   ├── test_v2137.py               ← Regresi v2.13.7: gel-B engine cepat — ekivalensi oracle vektorisasi (14)
+│   └── test_v2138.py               ← Regresi v2.13.8: gel-C — kunci ketiadaan dead code + mixin (16)
+├── .github/workflows/ci.yml        ← CI: matrix Python × OS, lint + 926 test
 ├── waste_anomaly/
 │   ├── __init__.py                 ← __version__ single-source (2.10.1)
 │   ├── frozen.py                   ← Resolusi path PyInstaller exe vs dev (v2.4.1)
@@ -383,7 +387,6 @@ Waste/
 │   ├── insights.py                 ← Analisa scorecard v2.13.1: resto_intensity, money_ranking,
 │   │                                 coverage_report, systemic_days, weekday_real, branch_trend
 │   ├── profile.py                  ← Stage 15b (v2.13.0): PROFIL baris + KELEBIHAN vs peer
-│   ├── filters.py                  ← Filter profile persistence (yatim — sidebar dihapus)
 │   ├── followup.py                 ← Identitas baris + daftar follow-up + export + resolusi (v2.12.0/v2.13.3)
 │   ├── exporter.py                 ← Multi-sheet xlsx writer + mode streaming
 │   └── utils.py                    ← Helper (load_config, norm_text, dll)

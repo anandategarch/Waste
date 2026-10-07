@@ -217,8 +217,8 @@ class TestFilteredDfCache:
         return AppContext({"default_key_akhir": 31})
 
     def test_cache_hit_dan_invalidasi(self):
-        """filtered_df() dua kali → objek sama (memo); setter filter/
-        search dan set_dataset meng-invalidasi (hasil dihitung ulang)."""
+        """filtered_df() dua kali → objek sama (memo); setter filter dan
+        set_dataset meng-invalidasi (hasil dihitung ulang)."""
         ctx = self._make_ctx()
         df = pd.DataFrame({
             "NAMA RESTO": ["R1", "R1", "R2", "R2"],
@@ -240,7 +240,7 @@ class TestFilteredDfCache:
         assert len(f3) == 2
         assert set(f3["NAMA RESTO"]) == {"R2"}
 
-        ctx.set_search("zzz")  # tidak ada match → invalidasi + kosong
+        ctx.set_filter("item", "I9")  # tak ada match → invalidasi + kosong
         f4 = ctx.filtered_df()
         assert f4 is not f3
         assert f4.empty
@@ -263,8 +263,7 @@ class TestFilteredDfCache:
         ctx.set_filter("cabang", "R1")
         got = ctx.filtered_df().reset_index(drop=True)
         want = _apply_filters(
-            df, ctx.active_filters, day_min=None, day_max=None,
-            search=ctx.search).reset_index(drop=True)
+            df, ctx.active_filters).reset_index(drop=True)
         pd.testing.assert_frame_equal(got, want)
 
 

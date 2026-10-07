@@ -248,9 +248,6 @@ class PipelineView(QWidget):
     def current_workbook(self) -> str:
         return self._ent_workbook.text().strip()
 
-    def set_workbook(self, path: str) -> None:
-        self._ent_workbook.setText(path)
-
     # ------------------------------------------------------------
     # RUN / CANCEL
     # ------------------------------------------------------------

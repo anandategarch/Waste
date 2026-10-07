@@ -52,11 +52,8 @@ from .state import AppContext
 from .widgets import Card, DataTable, KpiCard, WLabel, busy_feedback
 
 # Kolom tabel utama = SCORECARD_COLS (insights) — urutan PERSIS.
-SC_COLS = [
-    "RANK", "NAMA RESTO", "TOTAL WASTE", "INTENSITAS %", "KELEBIHAN",
-    "ALASAN DOMINAN", "ITEM TIAP HARI", "ANOMALI", "HARI TERSANGKA",
-    "BARU", "PULIH", "STATUS INPUT",
-]
+# (v2.13.8 gel-C: konstanta SC_COLS lokal DIHAPUS — tak pernah dirujuk;
+# insights.SCORECARD_COLS adalah satu sumber kebenaran.)
 
 
 class ScorecardView(QWidget):

@@ -434,19 +434,15 @@ class TestWorkerBlob:
     def test_worker_tak_membangun_blob_eager(self):
         """Fitur cari dihapus v2.12.4 — membangun blob ±1,2 dtk per run
         di worker murni terbuang (audit P7/D11). Kunci: worker tak lagi
-        MEMANGGIL pembangun blob / menaruhnya di summary (jalur lazy
-        state tetap sah — dites terpisah di bawah)."""
+        MEMANGGIL pembangun blob / menaruhnya di summary (v2.13.8: seluruh
+        mesin search/hari-range dihapus dari state & shared — audit D11)."""
         src = (REPO / "ui" / "workers.py").read_text(encoding="utf-8")
         assert 'from .shared import' not in src, (
             "worker tidak boleh lagi mengimpor pembangun blob")
         assert 'search_blob' not in src, (
             "worker tidak boleh lagi menaruh blob di summary")
-
-    def test_jalur_lazy_state_masih_hidup(self):
-        """Semantik filter cari tetap teruji via state (blob dibangun
-        malas saat search di-set) — kontrak test lama utuh."""
-        from ui.shared import _build_search_blob
-        df = pd.DataFrame({"A": ["kunci satu", "kunci dua", None]})
-        blob = _build_search_blob(df)
-        assert blob.str.contains("satu", regex=False, na=False).tolist()[0]
-        assert not blob.str.contains("tiga", regex=False, na=False).any()
+        state_src = (REPO / "ui" / "state.py").read_text(encoding="utf-8")
+        assert "set_search" not in state_src
+        assert "set_day_range" not in state_src
+        shared_src = (REPO / "ui" / "shared.py").read_text(encoding="utf-8")
+        assert "def _build_search_blob" not in shared_src

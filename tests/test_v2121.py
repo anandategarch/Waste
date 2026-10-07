@@ -81,10 +81,12 @@ class TestApplyFiltersNoCopy:
             df, {"jenis": [], "keterangan": [], "status": []})
         assert out is df
 
-    def test_search_kosong_spasi_objek_sama(self):
+    def test_filter_kolom_tak_ada_objek_sama(self):
+        # kunci valid tapi kolom target absen → tak ada mask → df apa adanya
+        # (v2.13.8: rentang hari dihapus — kunci valid = jenis)
         from ui.shared import _apply_filters
-        df = _df_synth()
-        out = _apply_filters(df, None, search="   ")
+        df = _df_synth().drop(columns=["JENIS"])
+        out = _apply_filters(df, {"jenis": ["WASTE"]})
         assert out is df
 
     def test_dengan_filter_objek_baru_konten_benar(self):
@@ -94,20 +96,6 @@ class TestApplyFiltersNoCopy:
         assert out is not df
         assert (out["JENIS"] == "WASTE").all()
         assert len(out) == int((df["JENIS"] == "WASTE").sum())
-
-    def test_day_range_objek_baru(self):
-        from ui.shared import _apply_filters
-        df = _df_synth()
-        out = _apply_filters(df, {}, day_min=5, day_max=9)
-        assert out is not df
-        assert out["HARI MAX"].between(5, 9).all()
-
-    def test_filter_kolom_tak_ada_objek_sama(self):
-        # kunci valid tapi kolom target absen → tak ada mask → df apa adanya
-        from ui.shared import _apply_filters
-        df = _df_synth().drop(columns=["HARI MAX"])
-        out = _apply_filters(df, {}, day_min=1, day_max=31)
-        assert out is df
 
     def test_tanpa_filter_tak_termutasi_konsumen(self):
         # konsumen baca-saja: mask/slice kolom menghasilkan objek baru —
@@ -209,11 +197,11 @@ class TestDisplayLru:
         view.refresh()
         _qapp().processEvents()
         disp_a1 = view._table._src_df  # objek display state A
-        ctx.set_filters_multi({"jenis": ["WASTE"]})
+        ctx.set_filter("jenis", ["WASTE"])
         view._refresh_table()
         _qapp().processEvents()
         assert view._table._src_df is not disp_a1
-        ctx.set_filters_multi({"jenis": []})
+        ctx.set_filter("jenis", [])
         view._refresh_table()
         _qapp().processEvents()
         assert view._table._src_df is disp_a1  # ← inti LRU (cache fit kena)

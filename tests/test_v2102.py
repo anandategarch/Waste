@@ -713,7 +713,7 @@ class TestConfigV2102:
 
     def test_versi_naik(self):
         from ui.shared import APP_VERSION
-        assert APP_VERSION == "2.13.7"  # v2.13.7: gel-B engine cepat (vektorisasi)
+        assert APP_VERSION == "2.13.8"  # v2.13.8: gel-C bersih-bersih dead code + mixin
 
 
 # ============================================================

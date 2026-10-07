@@ -37,56 +37,17 @@ def det() -> pd.DataFrame:
 
 
 # ============================================================
-# DD-M1 — rentang hari ketat
+# v2.13.8 (gel-C): TestDayRangeStrict + TestSearchNaNExcluded DIHAPUS
+# — rentang hari & kotak cari dihapus dari UI sejak v2.12.4 (sidebar);
+# _apply_filters kini murni semantik funnel (DD-M1/DD-L4/DQ-M1/IN-L1
+# yang HIDUP tetap dikunci di bawah).
 # ============================================================
 
-class TestDayRangeStrict:
-    def test_baris_nol_tidak_lolos(self, det):
-        """HARI MAX null (baris TOTAL=0) DIBUANG saat rentang aktif —
-        dulu semua 23.470 baris nol lolos dan tabel tampak tak terfilter."""
-        res = _apply_filters(det, {}, day_min=1, day_max=31)
-        assert len(res) == 3  # hanya baris HARI MAX not-null
-        assert res["TOTAL"].sum() == pytest.approx(600.0)
-
-    def test_rentang_1_10(self, det):
-        res = _apply_filters(det, {}, day_min=1, day_max=10)
-        assert set(res["NAMA BARANG"]) == {"A", "B"}
-
-    def test_tanpa_rentang_semua_baris(self, det):
-        """day_min/day_max None = tanpa filter — semua 5 baris lolos."""
+class TestTanpaFilterSemuaBaris:
+    def test_tanpa_filter_semua_baris(self, det):
+        """filters kosong = tanpa filter — semua 5 baris lolos."""
         res = _apply_filters(det, {})
         assert len(res) == 5
-
-# ============================================================
-# DD-L4 — search tidak mencocokkan NaN
-# ============================================================
-
-class TestSearchNaNExcluded:
-    def test_search_nan_tidak_match(self, det):
-        """str(NaN) = 'nan' — dulu search 'nan' menemukan baris ber-NaN."""
-        res = _apply_filters(det, {}, search="nan")
-        assert len(res) == 0
-
-    def test_search_na_string_tidak_match(self):
-        df = pd.DataFrame({
-            "A": ["x", None],
-            "B": [1.0, 2.0],
-        })
-        # str(pd.NA) = '<NA>' pada kolom object nullable
-        res = _apply_filters(df, {}, search="NA")
-        assert len(res) == 0
-
-    def test_search_nilai_valid_tetap_match(self, det):
-        res = _apply_filters(det, {}, search="cancel")
-        assert set(res["KETERANGAN"]) == {"Cancel Nota"}
-
-    def test_search_angka_tidak_match_kolom_nan(self, det):
-        """Digit tunggal boleh match kolom hari numerik yang ADA nilai —
-        tapi tidak menciptakan match dari NaN di HARI MAX."""
-        res = _apply_filters(det, {}, search="5")
-        # baris HARI MAX=5 (baris A) lolos via '5'; baris nol tidak
-        assert "A" in set(res["NAMA BARANG"])
-        assert len(res) >= 1
 
 
 # ============================================================

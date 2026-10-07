@@ -19,9 +19,6 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
-
 from . import stages
 from .day_focus import annotate_day_evidence
 from .loader import load_bom, load_database_satuan, load_rekap_mentah

@@ -48,39 +48,14 @@ def _df_slicer() -> pd.DataFrame:
 
 
 # ============================================================
-# set_filters_multi (state) — coalesce broadcast
+# set_filters_multi — DIHAPUS v2.13.8 (gel-C deep audit)
 # ============================================================
-
-class TestV2110SetFiltersMulti:
-    def _ctx(self):
-        _qapp()
-        from ui.state import AppContext
-        return AppContext({})
-
-    def test_dua_dimensi_satu_broadcast(self):
-        ctx = self._ctx()
-        ctx.set_dataset(_df_slicer(), {"key_akhir": 31})
-        n = {"emit": 0}
-        ctx.filters_changed.connect(
-            lambda: n.__setitem__("emit", n["emit"] + 1))
-        ctx.set_filters_multi(
-            {"jenis": ["WASTE"], "keterangan": ["Cancel Nota"]})
-        assert ctx.active_filters["jenis"] == ["WASTE"]
-        assert ctx.active_filters["keterangan"] == ["Cancel Nota"]
-        assert n["emit"] == 1  # SATU render — bukan satu per dimensi
-
-    def test_kunci_asing_diabaikan(self):
-        ctx = self._ctx()
-        before = dict(ctx.active_filters)
-        ctx.set_filters_multi({"dimensi_tak_dikenal": ["X"], "status": None})
-        assert ctx.active_filters == before
-
-    def test_memo_filtered_df_terinvalidasi(self):
-        ctx = self._ctx()
-        ctx.set_dataset(_df_slicer(), {"key_akhir": 31})
-        assert len(ctx.filtered_df()) == 6
-        ctx.set_filters_multi({"jenis": ["SUSUT"]})
-        assert len(ctx.filtered_df()) == 2  # bukan salinan memo basi
+# API hanya dipakai test sejak SlicerBar dihapus (v2.12.4) — fitur
+# "set beberapa dimensi + satu broadcast" tak punya konsumen produksi
+# (funnel memakai set_filter satu-satu; kunci-asing diabaikan oleh
+# desain kolom map _apply_filters). 3 test dihapus bersama API-nya;
+# semantik list _apply_filters yang HIDUP tetap dikunci di bawah.
+# ==============================================================
 
 
 # ============================================================

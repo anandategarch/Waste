@@ -53,6 +53,7 @@ from waste_anomaly.period_history import CHANGE_CATEGORIES, change_vs_history
 from waste_anomaly.profile import annotate_profile_vs_history
 from waste_anomaly.signals import SIGNAL_PARTS
 
+from .followup_table import FollowupTableMixin, HF_COLS as _HF_COLS
 from .models import (
     COLUMN_TOOLTIPS,
     DELTA_PCT_COLS,
@@ -96,10 +97,9 @@ TABLE_COLS = [
 # punya filter"): 5 kolom mapping tetap GLOBAL (sinkron antar tab Anomali/
 # Hari + KPI ikut terfilter); kolom lain = filter LOKAL tampilan view ini
 # (mask isin per kolom — KPI/daftar Follow Up tak tersentuh).
-_HF_COLS = {
-    "NAMA RESTO": "cabang", "NAMA BARANG": "item", "JENIS": "jenis",
-    "KETERANGAN": "keterangan", "ANOMALY STATUS": "status",
-}
+# v2.13.8 (gel-C): _HF_COLS kini tinggal di followup_table.HF_COLS (satu
+# sumber — dulu modul ini + view_hari mengimpor kembali; isi SAMA persis).
+
 
 # 12 sinyal — label ringkas utk chip + fragmen teks ANOMALY REASONS
 # (sumber tunggal fragmen: SIGNAL_PARTS di waste_anomaly/signals.py).
@@ -558,8 +558,14 @@ class DetailDialog(QDialog):
         self.activateWindow()
 
 
-class AnomaliView(QWidget):
-    """View 'Anomali': KPI + tabel ranking (penuh) + pop-up detail."""
+class AnomaliView(FollowupTableMixin, QWidget):
+    """View 'Anomali': KPI + tabel ranking (penuh) + pop-up detail.
+
+    v2.13.8 (gel-C): 10 metode kembar ✓-follow-up/funnel diwariskan dari
+    FollowupTableMixin (konsolidasi dgn HariView — dulu salinan ±250
+    baris); _DISP_LRU khusus view ini = 8."""
+
+    _DISP_LRU = 8
 
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -915,186 +921,11 @@ class AnomaliView(QWidget):
             self._kpi.update_from(filtered, full)
 
     # ------------------------------------------------------------
-    # v2.12.0 — FOLLOW UP: display ✓/__FP + toggle + sinkron in-place
+    # v2.13.8 (gel-C): 10 metode ✓-follow-up + funnel (dulu §v2.12.0
+    # s/d _on_selection) DIWARISKAN dari FollowupTableMixin —
+    # konsolidasi kembar AnomaliView ⇄ HariView (±250 baris → 1 sumber).
     # ------------------------------------------------------------
-    def _fps_for(self, df: pd.DataFrame) -> pd.Series:
-        """Sidik jari baris (memo per objek df — nilai tak pernah berubah
-        utk df yang sama; pola memo objek cache fit).
 
-        v2.12.1: bila memo dataset PENUH tersedia (dibangun PipelineWorker
-        di thread background — pola search_blob), sidik jari subset =
-        reindex O(len) (~2 ms) BUKAN md5 ulang (~40-100 ms per state).
-        Memo penuh TIDAK dipicu dari sini (bangun malas 25.901 baris di
-        thread UI = beku) — fallback md5 lokal bila belum ada."""
-        if self._fps_src is not df or self._fps is None:
-            full = None
-            c = self._ctx
-            if (getattr(c, "_fp_series", None) is not None
-                    and c._fp_version == c.data_version
-                    and c._fp_series.index.is_unique
-                    and df.index.is_unique
-                    and df.index.isin(c._fp_series.index).all()):
-                full = c._fp_series
-            if full is not None:
-                self._fps = full.reindex(df.index)
-            else:
-                self._fps = fingerprint_series(df)
-            self._fps_src = df
-        return self._fps
-
-    def _display_df(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Salinan df + kolom ✓ (bool) + __FP — OBJEK STABIL per objek df
-        (LRU-8 + weakref, v2.12.1) supaya cache fit DataTable tetap kena
-        ANTAR-STATE (toggle slicer A→B→A: objek display A dipakai ulang,
-        bukan salinan baru tiap kali); nilai ✓ SELALU disegarkan dari
-        state saat dipakai.
-
-        Kontrak 'konsumen hanya membaca' utk objek LRU anomali / enriched
-        tetap utuh: mutasi centang hanya menyentuh salinan view ini."""
-        key = id(df)
-        entry = self._disp_cache.get(key)
-        if entry is not None and entry[0]() is df and entry[1] is not None:
-            self._disp_cache.move_to_end(key)
-            disp = entry[1]
-            disp[CHECK_COL] = disp[FP_COL].isin(
-                self._ctx.followup_set())
-            return disp
-        fps = self._fps_for(df)
-        disp = df.copy()
-        disp[FP_COL] = fps
-        disp.insert(0, CHECK_COL, fps.isin(self._ctx.followup_set()))
-        self._disp_cache[key] = (weakref.ref(df), disp)
-        while len(self._disp_cache) > 8:
-            self._disp_cache.popitem(last=False)
-        return disp
-
-    def _on_check_toggled(self, row: int, checked: bool) -> None:
-        """Klik sel ✓ → state ctx (broadcast → badge tab + tab Follow Up)."""
-        rec = self._table.model().record(row)
-        fp = rec.get(FP_COL) if rec is not None else None
-        if fp is None or str(fp) == "nan":
-            return
-        self._ctx.toggle_followup(str(fp), checked)
-        n = len(self._ctx.followup_keys)
-        self._ctx.set_status(
-            ("✓ Masuk Follow Up" if checked else "✓ Dikeluarkan dari Follow Up")
-            + f" — total {fmt_id(n)} baris", "done")
-
-    def _on_followup_changed(self) -> None:
-        """State follow-up berubah (toggle di mana pun/bulk/prune) —
-        segarkan kolom ✓ model IN-PLACE (dataChanged satu kolom) —
-        BUKAN render ulang (cache fit + ukuran baris tak tersentuh)."""
-        m = self._table.model()
-        mdf = m.dataframe
-        if (mdf is not None and len(mdf) > 0
-                and CHECK_COL in mdf.columns and FP_COL in mdf.columns):
-            mdf[CHECK_COL] = mdf[FP_COL].isin(self._ctx.followup_set())
-            m.notify_column_changed(CHECK_COL)
-
-    def _on_check_all(self) -> None:
-        """Tombol '☑ Centang yang tampil' — semua baris model saat ini
-        (hasil filter/slicer) masuk follow-up, SATU broadcast."""
-        mdf = self._table.model().dataframe
-        if mdf is None or len(mdf) == 0 or FP_COL not in mdf.columns:
-            self._ctx.set_status("Tidak ada baris yang tampil — longgarkan "
-                                 "filter dulu.", "error")
-            return
-        fps = [str(v) for v in mdf[FP_COL].tolist()]
-        added = self._ctx.add_followup_many(fps)
-        total = len(self._ctx.followup_keys)
-        if added:
-            self._ctx.set_status(
-                f"✓ {fmt_id(added)} baris masuk Follow Up — total {fmt_id(total)}",
-                "done")
-        else:
-            self._ctx.set_status(
-                f"Semua baris yang tampil sudah tercentang (total {fmt_id(total)})",
-                "done")
-
-    def _on_header_filter(self, col: str, key: str, values) -> None:
-        """v2.12.3 — menu funnel header → state ctx (sinkron dgn chip
-        slicer — satu sumber kebenaran active_filters).
-        v2.12.4 — kolom NON-mapping (SEMUA kolom lain punya funnel kini):
-        filter LOKAL tampilan view ini (mask isin — state ctx tak
-        tersentuh, KPI & Follow Up tak berubah)."""
-        if col in _HF_COLS:
-            self._ctx.set_filter(key, values)  # global — antar-tab sinkron
-            return
-        if values:
-            self._hfilters[col] = list(values)
-        else:
-            self._hfilters.pop(col, None)
-        self._refresh_table()
-
-    def _hf_state(self, col: str):
-        """v2.12.3 — status funnel kolom utk MELUKIS (aktif = terisi).
-        List kosong = tanpa filter (semantik _apply_filters).
-        v2.12.4 — kolom lokal: baca _hfilters view."""
-        key = _HF_COLS.get(col)
-        if key is not None:
-            v = self._ctx.active_filters.get(key)
-            if isinstance(v, list):
-                return v or None
-            if isinstance(v, str) and v:
-                return [v]
-            return None
-        v = self._hfilters.get(col)
-        return list(v) if v else None
-
-    def _mask_local(self, disp: pd.DataFrame) -> pd.DataFrame:
-        """v2.12.4 — mask isin per kolom funnel LOKAL di atas display df.
-
-        Memo LRU per (id objek display, tanda tangan filter) supaya objek
-        hasil STABIL per state → cache fit DataTable tetap kena (pola
-        _disp_cache). Kolom ✓ disegarkan tiap pemakaian (state follow-up
-        bisa berganti saat objek ini tak sedang jadi model)."""
-        if not self._hfilters:
-            return disp
-        sig = tuple(sorted((c, tuple(v)) for c, v in self._hfilters.items()))
-        key = (id(disp), sig)
-        out = self._mask_cache.get(key)
-        if out is None:
-            m = pd.Series(True, index=disp.index)
-            for col, vals in self._hfilters.items():
-                if col in disp.columns and vals:
-                    m &= disp[col].isin(vals)
-            # .copy() eksplisit — hasil slice dgn _is_copy terpasang;
-            # assignment kolom ✓ di bawah memicu SettingWithCopyWarning
-            # palsu (objek ini memang salinan baru milik memo).
-            out = disp[m].copy()
-            self._mask_cache[key] = out
-            while len(self._mask_cache) > 4:
-                self._mask_cache.popitem(last=False)
-        else:
-            self._mask_cache.move_to_end(key)
-        if CHECK_COL in out.columns and FP_COL in out.columns:
-            out[CHECK_COL] = out[FP_COL].isin(self._ctx.followup_set())
-        return out
-
-    def _on_clear_filters(self) -> None:
-        """v2.12.4 — tombol '✕ Hapus Filter': lepas SEMUA filter aktif
-        (funnel global ctx + funnel lokal view + ambang skor) — pengganti
-        tombol 'Hapus Semua Filter' sidebar yang dihapus."""
-        self._hfilters.clear()
-        had_global = bool(self._ctx.active_filters and any(
-            v for v in self._ctx.active_filters.values())) \
-            or self._ctx.day_min is not None or bool((self._ctx.search or "").strip())
-        if had_global:
-            self._ctx.reset_filters()   # score_min ikut 0 — spin disinkronkan render
-            self._ctx.filters_changed.emit()
-        else:
-            self._refresh_table()
-        self._ctx.set_status("✓ Semua filter dihapus", "done")
-
-    def _on_selection(self) -> None:
-        """Klik baris (atau navigasi keyboard) → pop-up detail (v2.8.1).
-        v2.13.5: tekanan di sel ✓ → pop-up TIDAK dibuka (aksi centang
-        murni — flag window mousePressEvent, lihat suppress_row_popup)."""
-        if self._table.suppress_row_popup():
-            return
-        rec = self._table.selected_record()
-        if rec is not None:
-            self._popup.show_record(rec)
 
     # ------------------------------------------------------------
     # v2.12.2 — MELEBARKAN TABEL (pola tab Banding Periode)

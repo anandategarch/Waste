@@ -47,8 +47,6 @@ except ImportError:
 # openpyxl hanya untuk list_sheets/list_named_ranges (metadata, bukan bulk read)
 from openpyxl import load_workbook
 
-from .utils import load_config
-
 _log = logging.getLogger(__name__)
 
 

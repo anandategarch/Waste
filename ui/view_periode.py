@@ -1170,8 +1170,10 @@ class PeriodeView(QWidget):
                     and 0 <= row < len(mdf)):
                 col = mdf.columns.get_loc(CHECK_COL)
                 mdf.iat[row, col] = False
-                idx = m.index(row, col)
-                m.dataChanged.emit(idx, idx)
+                # v2.13.8 (audit E5): notify_column_changed MENYINKRONKAN
+                # snapshot numpy model — dulu dataChanged.emit manual
+                # mem-bypass snapshot (nilai basi tersimpan utk sel itu).
+                m.notify_column_changed(CHECK_COL)
             self._ctx.set_status(
                 "Item ini tidak punya baris anomali di bulan berjalan "
                 "(semua Normal) — tidak ada yang perlu ditindaklanjuti.",

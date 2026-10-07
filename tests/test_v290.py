@@ -459,40 +459,10 @@ class TestPerfCacheV290:
         assert t.columnWidth(0) == w1
         t.close()
 
-    def test_blob_pencarian_ekuivalen_dgn_perkolom(self):
-        from ui.shared import _apply_filters, _build_search_blob
-        df = pd.DataFrame({
-            "NAMA RESTO": ["A.OUTLET", "B.OUTLET", "C.OUTLET"],
-            "NAMA BARANG": ["ITEM UJI", "MIE", "KEJU"],
-            "TOTAL": [70.0, np.nan, 4.0],
-            "JENIS": ["WASTE", "WASTE", "TRIAL"],
-        })
-        blob = _build_search_blob(df)
-        for term in ("uji", "KEJU", "70", "nan", "waste", "z"):
-            a = _apply_filters(df, None, search=term)
-            b = _apply_filters(df, None, search=term, search_blob=blob)
-            assert list(a.index) == list(b.index), (
-                f"blob ≠ per-kolom untuk term {term!r}")
-        # NaN tidak boleh cocok dicari 'nan'
-        assert blob.iloc[1].split("\x01")[2] == ""
-
-    def test_blob_pemisah_bukan_nul(self):
-        """\x00 dipotong senyap oleh numpy/pandas (C-terminator) → harus \x01."""
-        from ui.shared import _build_search_blob
-        df = pd.DataFrame({"A": ["x"], "B": ["1"]})
-        blob = _build_search_blob(df)
-        assert "\x01" in blob.iloc[0]
-        assert "\x00" not in blob.iloc[0]
-
-    def test_set_dataset_menerima_blob_worker(self):
-        from ui.state import AppContext
-        from ui.shared import _build_search_blob
-        df = _hari_df()
-        blob = _build_search_blob(df)
-        ctx = AppContext({})
-        ctx.set_dataset(df, {"key_akhir": 31, "search_blob": blob})
-        assert ctx._search_blob is blob
-        assert ctx._search_blob_version == ctx.data_version
+    # v2.13.8 (gel-C): 3 test blob pencarian DIHAPUS bersama
+    # _build_search_blob (fitur kotak cari dihapus dari UI sejak
+    # v2.12.4 — blob worker dihapus v2.13.7; nol konsumen produksi).
+    # Ekuivalensi blob-vs-perkolom tak lagi relevan tanpa fiturnya.
 
 
 # ============================================================

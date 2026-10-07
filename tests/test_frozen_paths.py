@@ -1,11 +1,11 @@
 """Test resolusi path frozen-mode PyInstaller (v2.4.1).
 
 KONTEKS BUG yang di-lock di sini:
-``CONFIG_PATH`` / ``PROFILES_PATH`` / ``APP_DIR`` dulunya resolve dari
+``CONFIG_PATH`` / ``APP_DIR`` dulunya resolve dari
 ``Path(__file__)`` — di exe PyInstaller itu menunjuk dir ekstraksi temp
 ``_MEIPASS`` yang DIHAPUS saat aplikasi ditutup. Akibat: threshold yang
-disimpan user (tab Konfigurasi) dan profil filter hilang senyap di mode
-exe — kebalikan klaim BUILD_EXE.bat.
+disimpan user (tab Konfigurasi) hilang senyap di mode exe — kebalikan
+klaim BUILD_EXE.bat.
 
 Perilaku baru yang dikunci:
   1. Dev mode → path lama persis (tidak boleh berubah — golden regression
@@ -15,8 +15,12 @@ Perilaku baru yang dikunci:
      exe saat pertama kali dijalankan").
   3. Frozen + sidecar ada → sidecar dipakai (edit user bertahan).
   4. Frozen + seed gagal (folder exe read-only) → fallback bundled read-only.
-  5. filters.json → sidecar folder exe saat frozen.
-  6. ui app_dir() → folder exe saat frozen (folder data/ writable).
+  5. ui app_dir() → folder exe saat frozen (folder data/ writable).
+
+v2.13.8 (gel-C): seksi FILTERS PATH DIHAPUS bersama modul
+waste_anomaly/filters.py (yatim sejak sidebar/filter-profile dihapus
+v2.12.4 — nol konsumen produksi; frozen-sidecar pattern tetap terkunci
+penuh lewat TestConfigPath di bawah, mekanismenya identik).
 
 Monkeypatch menargetkan nama yang di-bind di modul konsumen
 (``waste_anomaly.utils.is_frozen`` dst.) karena ``from .frozen import ...``
@@ -28,7 +32,6 @@ from pathlib import Path
 
 import pytest
 
-import waste_anomaly.filters as wf
 import waste_anomaly.utils as wu
 
 
@@ -57,12 +60,9 @@ def frozen_env(tmp_path, monkeypatch):
         monkeypatch.setattr(wu, "is_frozen", lambda: True)
         monkeypatch.setattr(wu, "exe_dir", lambda: exe_dir)
         monkeypatch.setattr(wu, "bundle_dir", lambda: meipass)
-        monkeypatch.setattr(wf, "is_frozen", lambda: True)
-        monkeypatch.setattr(wf, "exe_dir", lambda: exe_dir)
 
     def unfreeze():
         monkeypatch.setattr(wu, "is_frozen", lambda: False)
-        monkeypatch.setattr(wf, "is_frozen", lambda: False)
 
     return exe_dir, meipass, bundled_cfg, freeze, unfreeze
 
@@ -118,30 +118,6 @@ class TestConfigPath:
         cfg = wu.load_config()
         assert cfg.get("version") == "2.4.1"
         assert (exe_dir / "config.json").exists()
-
-
-# ============================================================
-# FILTERS PATH (waste_anomaly/filters.py)
-# ============================================================
-
-class TestFiltersPath:
-    def test_dev_mode_path_tidak_berubah(self, frozen_env):
-        _, _, _, _, unfreeze = frozen_env
-        unfreeze()
-        p = wf.profiles_path()
-        assert p == Path(wf.__file__).resolve().parent.parent / "filters.json"
-
-    def test_frozen_sidecar_exe_dir(self, frozen_env):
-        exe_dir, _, _, freeze, _ = frozen_env
-        freeze()
-        assert wf.profiles_path() == exe_dir / "filters.json"
-
-    def test_frozen_save_load_roundtrip(self, frozen_env):
-        exe_dir, _, _, freeze, _ = frozen_env
-        freeze()
-        assert wf.save_profiles({"pro1": {"cabang": "X"}})
-        assert (exe_dir / "filters.json").exists()
-        assert wf.load_profiles() == {"pro1": {"cabang": "X"}}
 
 
 # ============================================================

@@ -27,7 +27,7 @@ EXPECTED_MODULES = [
     "__init__.py", "shared.py", "theme.py", "state.py", "models.py",
     "workers.py", "widgets.py", "app.py",
     "view_anomali.py", "view_followup.py", "view_hari.py",
-    "view_periode.py", "view_pipeline.py",
+    "view_periode.py", "view_pipeline.py", "followup_table.py",
 ]
 
 # File mixin Tkinter lama — TIDAK BOLEH kembali (rebuild = penggantian total)
