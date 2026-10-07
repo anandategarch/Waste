@@ -713,7 +713,7 @@ class TestConfigV2102:
 
     def test_versi_naik(self):
         from ui.shared import APP_VERSION
-        assert APP_VERSION == "2.13.4"  # v2.13.1: insights + tab Scorecard
+        assert APP_VERSION == "2.13.5"  # v2.13.5: klik-2× dihapus + follow-up hari
 
 
 # ============================================================

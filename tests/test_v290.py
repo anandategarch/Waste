@@ -284,12 +284,33 @@ class TestHariView:
         assert "busy_feedback(" in src
         assert "_refresh_table_impl" in src
 
-    def test_drill_down_double_klik(self):
+    def test_double_klik_tak_lagi_filter(self):
+        """v2.13.5 (permintaan user): klik-2× di tab Hari Mencurigakan
+        TIDAK lagi memasang filter cabang+item — _on_double dihapus;
+        emit sinyal double_clicked = tanpa efek state."""
         view, ctx = _make_hari_view()
-        rec = view._table._model.record(0)
-        view._on_double(rec)
-        assert ctx.active_filters["cabang"] == "A.OUTLET"
-        assert ctx.active_filters["item"] == "ITEM UJI"
+        assert not hasattr(view, "_on_double")
+        assert not hasattr(view, "_batch_filters")
+        rec = view._table.model().record(0)
+        view._table.double_clicked.emit(rec)
+        assert not any(ctx.active_filters.values())
+
+    def test_kolom_centang_followup_ada(self):
+        """v2.13.5: tab Hari Mencurigakan punya kolom ✓ follow-up
+        (permintaan user "hari mencurigakan juga beri opsi untuk follow
+        up") — pola AnomaliView: ✓ kolom pertama + __FP identitas baris."""
+        view, ctx = _make_hari_view()
+        from waste_anomaly.followup import CHECK_COL, FP_COL
+        m = view._table.model()
+        assert m.dataframe.columns[0] == CHECK_COL
+        assert FP_COL in m.dataframe.columns
+        # toggle via jalur model (klik sel ✓) → state ctx berubah
+        rec = m.record(0)
+        fp = str(rec[FP_COL])
+        view._on_check_toggled(0, True)
+        assert fp in ctx.followup_set()
+        view._on_check_toggled(0, False)
+        assert fp not in ctx.followup_set()
 
     def test_kpi_rasio_terbesar(self):
         view, _ = _make_hari_view()

@@ -9,6 +9,18 @@ jendela pop-up non-modal berisi 12 sinyal + peer + uang + tombol
 drill-down. Tabel kini memenuhi SELURUH tinggi view (tanpa splitter).
 Kolom "% to BOM" (waste dibanding penjualan kuantiti) ditambahkan ke
 tabel per-ranking; kolom rasio ditampilkan sebagai persen.
+
+v2.13.5 (permintaan user "hilangkan yang klik 2x"): klik-2× baris TIDAK
+LAGI memasang filter cabang+item — perilaku itu justru sumber keluhan
+"klik 1× pop-up kadang tidak muncul dan malah ketrigger klik 2× yang
+langsung filter" (klik-2× → set_filter → render ulang → pop-up di-hide
+di awal _refresh_table_impl). Jalur drill fokus kini HANYA tombol
+eksplisit di pop-up detail (niat user jelas, tak pernah tak disengaja).
+Pop-up kini juga muncul ulang saat baris YANG SAMA diklik lagi (tutup
+pop-up → klik baris sama dulu: currentRowChanged tak memicu — sinyal
+QTableView.clicked kini ikut dihubungkan + guard idempoten di
+DetailDialog.show_record supaya klik-baris-berganti tidak membangun
+ulang panel dua kali).
 """
 from __future__ import annotations
 
@@ -32,7 +44,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from waste_anomaly.followup import CHECK_COL, FP_COL, fingerprint_series
+from waste_anomaly.followup import (
+    CHECK_COL,
+    FP_COL,
+    fingerprint_series,
+)
 from waste_anomaly.period_history import CHANGE_CATEGORIES, change_vs_history
 from waste_anomaly.profile import annotate_profile_vs_history
 from waste_anomaly.signals import SIGNAL_PARTS
@@ -172,6 +188,11 @@ class DetailPanel(Card):
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._ctx = ctx
+        # v2.13.5: tombol follow-up di pop-up (sinkron dgn state ctx —
+        # toggle dari mana pun memperbarui teksnya tanpa rebuild).
+        self._fu_btn: QPushButton | None = None
+        self._cur_fp: str | None = None
+        ctx.followup_changed.connect(self._on_fu_state_changed)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(8)
@@ -189,7 +210,11 @@ class DetailPanel(Card):
     def clear(self) -> None:
         """Kosongkan panel (V26-L12): df terfilter berubah → record yang
         sedang ditampilkan bisa jadi sudah tidak lolos filter — jangan
-        biarkan panel menampilkan data basi (pola teardown show_record)."""
+        biarkan panel menampilkan data basi (pola teardown show_record).
+        v2.13.5: ref tombol follow-up + fp ikut direset (widgetnya
+        sudah deleteLater — jangan biarkan handler menyentuh mayat)."""
+        self._fu_btn = None
+        self._cur_fp = None
         self._title.setText(self._PROMPT)
         old = self._content.layout()
         if old is not None:
@@ -201,6 +226,10 @@ class DetailPanel(Card):
 
     def show_record(self, rec: pd.Series) -> None:
         """Render ulang konten detail dari record baris terpilih."""
+        # v2.13.5: reset ref tombol follow-up (konten lama dibuang —
+        # tombol lama dideleteLater; nilai baru dipasang di bawah).
+        self._fu_btn = None
+        self._cur_fp = None
         # Buang konten lama
         old = self._content.layout()
         if old is not None:
@@ -323,8 +352,20 @@ class DetailPanel(Card):
             "= NILAI; sel merah = hari tersangka"))
         lay.addWidget(self._day_map(rec))
 
-        # Tombol drill-down (filter langsung dari baris ini)
-        lay.addWidget(self._section("Drill-down dari baris ini"))
+        # Tombol tindak lanjut + drill-down (niat eksplisit — satu-satunya
+        # jalur fokus sejak v2.13.5; klik-2× baris tak lagi memfilter).
+        lay.addWidget(self._section("Tindak lanjut & drill-down dari baris ini"))
+        fp = self._row_fingerprint(rec)
+        if fp is not None:
+            self._cur_fp = str(fp)
+            in_list = self._cur_fp in self._ctx.followup_set()
+            self._fu_btn = QPushButton(self._fu_btn_text(in_list))
+            self._fu_btn.setToolTip(
+                "Tambahkan / keluarkan baris ini dari daftar Follow Up\n"
+                "(tab Follow Up — format rekap siap serah terima petugas).\n"
+                "Sama seperti mencentang kolom ✓ di tabel.")
+            self._fu_btn.clicked.connect(self._on_fu_toggle)
+            lay.addWidget(self._fu_btn)
         btns = QWidget()
         bl = QHBoxLayout(btns)
         bl.setContentsMargins(0, 0, 0, 0)
@@ -347,6 +388,58 @@ class DetailPanel(Card):
         bl.addStretch(1)
         lay.addWidget(btns)
         lay.addStretch(1)
+
+    # ------------------------------------------------------------
+    # v2.13.5 — tombol follow-up di pop-up (satu klik dari investigasi
+    # ke daftar tindak lanjut; sinkron dua arah dgn kolom ✓ tabel)
+    # ------------------------------------------------------------
+    def _row_fingerprint(self, rec: pd.Series) -> str | None:
+        """Sidik jari baris utk identitas follow-up.
+
+        Utama: kolom __FP tersembunyi di record (tabel Anomali/Hari/
+        Follow Up memasangnya di df tampilan — murah, tinggal baca).
+        Fallback: hitung ulang utk 1 baris (record dari fixture tanpa
+        __FP; ~ms — md5 satu baris). None hanya bila hash gagal."""
+        v = rec.get(FP_COL)
+        if v is not None and str(v) not in ("", "nan", "None"):
+            return str(v)
+        try:
+            one = rec.to_frame().T
+            fp = fingerprint_series(one)
+            if len(fp):
+                out = fp.iloc[0]
+                if out:
+                    return str(out)
+        except Exception:  # noqa: BLE001, S110 — record eksotis (test fixture): fallback None memang perilaku yang diinginkan
+            pass
+        return None
+
+    def _fu_btn_text(self, in_list: bool) -> str:
+        return ("☑ Masuk Follow Up" if not in_list
+                else "✅ Sudah di Follow Up — klik utk keluarkan")
+
+    def _on_fu_toggle(self) -> None:
+        """Klik tombol → toggle state ctx (broadcast → badge tab + tabel
+        kolom ✓ semua view + tombol ini sendiri via _on_fu_state_changed)."""
+        if self._cur_fp is None:
+            return
+        self._ctx.toggle_followup(
+            self._cur_fp, self._cur_fp not in self._ctx.followup_set())
+        n = len(self._ctx.followup_keys)
+        self._ctx.set_status(
+            f"✓ Daftar follow-up kini {fmt_id(n)} baris (dari pop-up "
+            "detail)", "done")
+
+    def _on_fu_state_changed(self) -> None:
+        """followup_changed (toggle/bulk dari mana pun) → perbarui teks
+        tombol pop-up IN-PLACE bila pop-up sedang menampilkan baris."""
+        if self._fu_btn is not None and self._cur_fp is not None:
+            try:
+                self._fu_btn.setText(
+                    self._fu_btn_text(self._cur_fp
+                                      in self._ctx.followup_set()))
+            except RuntimeError:  # widget sudah dihancurkan Qt (clear)
+                self._fu_btn = None
 
     def _section(self, text: str) -> QLabel:
         lbl = QLabel(text)
@@ -418,6 +511,12 @@ class DetailDialog(QDialog):
     terbuka. Satu instance dipakai ulang — setiap klik baris memperbarui
     isi pop-up yang sama (bukan menumpuk jendela baru). Tutup lewat X
     kapan saja; klik baris lain membukanya kembali.
+
+    v2.13.5: klik baris YANG SAMA (pop-up sempat ditutup X / refresh)
+    membuka pop-up kembali — dulu currentRowChanged tak memicu karena
+    index tak berubah. Guard idempoten: show_record dipanggil dua kali
+    berturut untuk record sama (klik = currentRowChanged + clicked)
+    cukup membangun SEKALI.
     """
 
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
@@ -425,13 +524,34 @@ class DetailDialog(QDialog):
         self.setWindowTitle("Detail Anomali — 12 Sinyal & Pembanding")
         self.setModal(False)
         self.resize(920, 640)
+        self._shown_sig: tuple | None = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 8, 8, 8)
         self._panel = DetailPanel(ctx, self)
         lay.addWidget(self._panel)
 
+    def _record_sig(self, rec: pd.Series) -> tuple:
+        """Identitas record utk guard idempoten (fp utama, identitas
+        kunci sbg cadangan — membedakan klik-baris-sama dari klik-berganti)."""
+        fp = rec.get(FP_COL)
+        return (
+            str(fp) if fp is not None else None,
+            str(rec.get("NAMA RESTO")), str(rec.get("NAMA BARANG")),
+            str(rec.get("JENIS")), str(rec.get("KETERANGAN")),
+            str(rec.get("SOURCE DATA")), str(rec.get("TOTAL")),
+        )
+
     def show_record(self, rec: pd.Series) -> None:
-        """Tampilkan record di panel + munculkan pop-up di depan."""
+        """Tampilkan record di panel + munculkan pop-up di depan.
+
+        Idempoten (v2.13.5): record SAMA & pop-up masih tampak → tidak
+        dibangun ulang (klik tunggal memicu currentRowChanged + clicked;
+        klik ulang baris saat pop-up terbuka tak boleh mengedipkan
+        rebuild ~70 widget)."""
+        sig = self._record_sig(rec)
+        if self.isVisible() and sig == self._shown_sig:
+            return
+        self._shown_sig = sig
         self._panel.show_record(rec)
         self.show()
         self.raise_()
@@ -548,8 +668,8 @@ class AnomaliView(QWidget):
         self._btn_full = QPushButton("⛶ Layar Penuh", head)
         self._btn_full.setToolTip(
             "Buka tabel ini di jendela LAYAR PENUH (tekan Esc atau Tutup\n"
-            "untuk kembali). Centang ✓ / sort / pop-up detail / klik 2×\n"
-            "tetap berfungsi penuh di jendela itu.")
+            "untuk kembali). Centang ✓ / sort / pop-up detail tetap\n"
+            "berfungsi penuh di jendela itu.")
         self._btn_full.clicked.connect(self._on_fullscreen)
         hcl.addWidget(self._btn_full)
         tcl.addWidget(head)
@@ -570,7 +690,15 @@ class AnomaliView(QWidget):
             all_cols=True, skip=(CHECK_COL, FP_COL))
         self._table.selectionModel().currentRowChanged.connect(
             lambda *_: self._on_selection())
-        self._table.double_clicked.connect(self._on_double)
+        # v2.13.5: sinyal QTableView.clicked memicu di SETIAP klik — termasuk
+        # klik baris yang SAMA (currentRowChanged diam saat index tak
+        # berubah). Tanpa ini: tutup pop-up (X) → klik baris sama → pop-up
+        # TIDAK muncul lagi (keluhan user "klik 1× pop-up kadang tidak
+        # muncul"). Guard idempoten DetailDialog membuat pemanggilan ganda
+        # (currentRowChanged + clicked utk satu klik) tetap membangun sekali.
+        # v2.13.5: klik-2× → filter DIHAPUS (permintaan user) — sinyal
+        # double_clicked tabel ini TIDAK lagi punya subscriber.
+        self._table.row_clicked.connect(lambda *_: self._on_selection())
         tcl.addWidget(self._table, 1)
         lay.addWidget(table_card, 1)
 
@@ -580,7 +708,6 @@ class AnomaliView(QWidget):
         # dikembalikan ke kartu pada POSISI LAYOUT ASLI (index dicatat).
         self._fs_dlg: QDialog | None = None
         self._fs_idx: int = 1  # v2.12.4: head(0) + tabel(1) — slicer/hint dihapus
-
         # Pop-up detail (v2.8.1) — satu instance dipakai ulang.
         self._popup = DetailDialog(ctx, self)
 
@@ -588,9 +715,6 @@ class AnomaliView(QWidget):
         # render saat dibuka (on_shown). View default biasanya terlihat saat
         # pipeline selesai → render langsung.
         self._dirty = True
-        # v2.7.0 (V26-L4): guard coalesce — _on_double menerapkan dua filter
-        # sekaligus TANPA render perantara (satu render di akhir).
-        self._batch_filters = False
         # v2.10.2: versi cache enrich (df + baseline + data/history) —
         # kombinasi sama → salinan berkolom sama dipakai ulang.
         # v2.12.1: satu slot → LRU weakref (bolak-balik antar state filter
@@ -644,8 +768,6 @@ class AnomaliView(QWidget):
             self._dirty = True
 
     def _on_filters_changed(self) -> None:
-        if self._batch_filters:
-            return  # render di-coalesce oleh _on_double (V26-L4)
         if self.isVisible():
             self._refresh_table()
         else:
@@ -965,7 +1087,11 @@ class AnomaliView(QWidget):
         self._ctx.set_status("✓ Semua filter dihapus", "done")
 
     def _on_selection(self) -> None:
-        """Klik baris (atau navigasi keyboard) → pop-up detail (v2.8.1)."""
+        """Klik baris (atau navigasi keyboard) → pop-up detail (v2.8.1).
+        v2.13.5: tekanan di sel ✓ → pop-up TIDAK dibuka (aksi centang
+        murni — flag window mousePressEvent, lihat suppress_row_popup)."""
+        if self._table.suppress_row_popup():
+            return
         rec = self._table.selected_record()
         if rec is not None:
             self._popup.show_record(rec)
@@ -993,9 +1119,9 @@ class AnomaliView(QWidget):
         """Pop-out TABEL ASLI ke jendela maximized (Esc = kembali).
 
         Reparent widget tabel (bukan salinan render) → centang ✓, sort,
-        seleksi→pop-up detail, klik 2× drill — semua tetap hidup dan IKUT
-        TERBARUI saat filter berganti (model sama, sinyal sama). Posisi
-        layout asli dicatat utk dipulihkan utuh saat ditutup."""
+        seleksi→pop-up detail — semua tetap hidup dan IKUT TERBARUI saat
+        filter berganti (model sama, sinyal sama). Posisi layout asli
+        dicatat utk dipulihkan utuh saat ditutup."""
         if self._table.model().rowCount() == 0:
             self._ctx.set_status(
                 "Belum ada data utk dibesarkan — jalankan pipeline dulu "
@@ -1041,20 +1167,11 @@ class AnomaliView(QWidget):
         self._tcl.insertWidget(self._fs_idx, self._table, 1)
         self._ctx.set_status("⤡ Tabel kembali ke tab Anomali", "done")
 
-    def _on_double(self, rec: pd.Series) -> None:
-        """Klik 2×: fokus cabang+item sekaligus (drill-down P8).
-
-        v2.7.0 (V26-L4): dua set_filter = dua broadcast filters_changed =
-        dua render (regresi coalesce v2.5.1 DD-L2). Guard _batch_filters
-        menelan render perantara; kedua filter tetap diterapkan lalu tabel
-        di-render SEKALI di akhir (tanpa menyentuh ui/state.py).
-        """
-        self._batch_filters = True
-        try:
-            if rec.get("NAMA RESTO") is not None:
-                self._ctx.set_filter("cabang", rec.get("NAMA RESTO"))
-            if rec.get("NAMA BARANG") is not None:
-                self._ctx.set_filter("item", rec.get("NAMA BARANG"))
-        finally:
-            self._batch_filters = False
-        self._refresh_table()
+    # v2.13.5: _on_double (klik-2× → filter cabang+item) DIHAPUS atas
+    # permintaan user — perilaku itu membuat pop-up detail "kadang tidak
+    # muncul" (klik-2× → set_filter → render → _popup.hide() di awal
+    # _refresh_table_impl; klik#1-nya malah menjadikan klik tunggal yang
+    # seolah tidak membuka apa-apa). Jalur fokus drill kini HANYA tombol
+    # eksplisit di pop-up detail ("🏬 Fokus cabang ini" dst. — niat user
+    # jelas, tak pernah terpicu tak sengaja). Guard _batch_filters ikut
+    # hilang bersama satu-satunya pemakainya.

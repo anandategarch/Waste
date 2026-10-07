@@ -498,6 +498,11 @@ class DataTable(QTableView):
     kolom auto-width dari sampel, tooltip + wrap utk teks panjang."""
 
     double_clicked = Signal(object)  # pd.Series (record baris)
+    # v2.13.5: klik baris APA PUN — termasuk baris YANG SAMA (pop-up
+    # detail bisa dibuka ulang setelah ditutup). Diferensiasi vs sinyal
+    # QTableView.clicked: klik pada sel kolom centang ✓ TIDAK diteruskan
+    # (sedang memasukkan/mencabut baris — pop-up justru mengganggu).
+    row_clicked = Signal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -513,6 +518,11 @@ class DataTable(QTableView):
         self._hf_skip: set[str] = set()  # v2.12.4: kolom tanpa funnel
         self._hf_apply = None
         self._hf_state = None
+        # v2.13.5: tekanan mouse terakhir di sel ✓ — window sempit saat
+        # mousePressEvent (currentRowChanged memicu sinkron di dalamnya;
+        # view memeriksa suppress_row_popup() supaya klik sel ✓ pada baris
+        # BARU pun tak membuka pop-up detail — alur centang massal murni).
+        self._press_check = False
         # v2.12.5: (waktu, rect-global menu funnel terakhir tertutup)
         # — sumber guard klik-ganda artefak (lihat mouseDoubleClickEvent)
         self._hf_hide: tuple[float, QRect | None] = (-1e9, None)
@@ -560,6 +570,8 @@ class DataTable(QTableView):
         self._refit_timer.setInterval(120)
         self._refit_timer.timeout.connect(lambda: self._refit_rows())
         self.doubleClicked.connect(self._on_double)
+        # v2.13.5: relay clicked → row_clicked (kecuali sel kolom ✓).
+        self.clicked.connect(self._on_clicked)
         # Sort by header → tinggi baris harus dihitung ulang (baris visual
         # berganti isi; tinggi lama tidak cocok → teks wrap terpotong).
         # v2.9.0: juga tandai urutan non-default → entri cache fit untuk
@@ -645,10 +657,65 @@ class DataTable(QTableView):
         if not quiet and 0 < self._model.rowCount() <= 3000:
             self._refit_timer.start()
 
+    def mousePressEvent(self, e) -> None:
+        """v2.13.5 — tandai bila tekanan jatuh di sel kolom ✓.
+
+        Flag hidup HANYA selama pemanggilan super() (currentRowChanged
+        memicu SINKRON di dalamnya — view membaca suppress_row_popup()
+        di jendela itu); dibersihkan di finally supaya tak ada state basi
+        yang salah menekan pop-up navigasi keyboard berikutnya."""
+        idx = self.indexAt(e.position().toPoint())
+        self._press_check = bool(
+            idx.isValid() and not self._relay_row_click_ok(idx))
+        try:
+            super().mousePressEvent(e)
+        finally:
+            self._press_check = False
+
+    def suppress_row_popup(self) -> bool:
+        """True bila tekanan mouse yang sedang diproses ada di sel ✓ —
+        view pop-up detail memeriksa ini agar centang = aksi murni."""
+        return self._press_check
+
     def _on_double(self, index) -> None:
         rec = self._model.record(index.row())
         if rec is not None:
             self.double_clicked.emit(rec)
+        # v2.13.5: klik-2× TIDAK lagi dipakai utk filter (dihapus dari
+        # view atas permintaan user) — diteruskan ke row_clicked supaya
+        # pop-up detail TETAP terbuka pada pasangan klik cepat (Qt hanya
+        # memancarkan clicked utk tekan#1; tekan#2 = DblClick tanpa
+        # clicked — tanpa relay ini, klik-ulang-cepat-baris-sama tidak
+        # membuka apa-apa). Guard ✓ tetap: klik-2× sel centang = tetap
+        # murni aksi centang.
+        if self._relay_row_click_ok(index):
+            self.row_clicked.emit(index)
+
+    def _relay_row_click_ok(self, index) -> bool:
+        """Klik (tunggal/ganda) pada sel ✓ → jangan relay ke row_clicked
+        (user sedang memasukkan/mencabut baris follow-up — pop-up detail
+        justru mengganggu alur centang massal)."""
+        m = self._model
+        check = getattr(m, "_check_col", None)
+        if check is None or not index.isValid():
+            return True
+        cols = getattr(m, "_cols", None)
+        if not cols and m.dataframe is not None:
+            cols = list(m.dataframe.columns)
+        hit_check = bool(
+            cols and 0 <= index.column() < len(cols)
+            and cols[index.column()] == check)
+        return not hit_check
+
+    def _on_clicked(self, index) -> None:
+        """v2.13.5 — relay QTableView.clicked → row_clicked.
+
+        clicked memicu di SETIAP tekan-lepas valid — termasuk klik baris
+        YANG SAMA (currentRowChanged diam saat index tak berubah; tanpa
+        relay ini pop-up detail tak bisa dibuka ulang setelah ditutup X
+        — keluhan user "klik 1× pop-up kadang tidak muncul")."""
+        if self._relay_row_click_ok(index):
+            self.row_clicked.emit(index)
 
     # ------------------------------------------------------------
     # v2.12.5 — klik ganda artefak pasca menu funnel ditelan

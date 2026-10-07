@@ -384,7 +384,11 @@ class TestV270DetailClear:
 # ============================================================
 
 class TestV270DoubleKlikCoalesce:
-    def test_double_klik_satu_render_dua_filter(self):
+    def test_double_klik_tak_lagi_filter_satu_render_pun(self):
+        """v2.13.5: klik-2× → filter DIHAPUS (permintaan user) — _on_double
+        & guard coalesce _batch_filters ikut hilang bersama subjeknya.
+        Sinyal double_clicked tak punya subscriber: emit = 0 render, 0
+        filter (jalur fokus drill tinggal tombol eksplisit pop-up detail)."""
         from ui.view_anomali import DetailPanel
         view, ctx = _make_view()
         calls: list[int] = []
@@ -396,16 +400,18 @@ class TestV270DoubleKlikCoalesce:
 
         view._refresh_table = counting
         try:
+            assert not hasattr(view, "_on_double")
+            assert not hasattr(view, "_batch_filters"), (
+                "guard coalesce hanya dipakai _on_double — ikut dihapus")
             rec = view._table._model.record(0)
-            view._on_double(rec)
+            view._table.double_clicked.emit(rec)
         finally:
             view._refresh_table = orig
-        # SEMANTIK v2.5.1 DD-L2: kedua filter diterapkan, SATU render
-        assert len(calls) == 1
-        assert ctx.active_filters["cabang"] == rec.get("NAMA RESTO")
-        assert ctx.active_filters["item"] == rec.get("NAMA BARANG")
-        # tabel ter-render ulang → pop-up detail tidak basi (V26-L12 ikut;
-        # v2.8.1: pop-up tertutup + panel kembali ke prompt)
+        # TANPA subscriber: tidak ada filter, tidak ada render — tabel
+        # & pop-up tak tersentuh (klik-2× kini murni klik-tunggal #2).
+        assert calls == []
+        assert not any(ctx.active_filters.values())
+        assert view._table.model().rowCount() > 0
         assert view._popup.isHidden()
         assert view._popup._panel._title.text() == DetailPanel._PROMPT
 

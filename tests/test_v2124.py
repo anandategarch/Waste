@@ -378,10 +378,19 @@ class TestHariFunnelLokal:
         t = view._table
         m = t.model()
         app = _qapp()
+        # v2.13.5: kolom ✓ follow-up kini juga tampil di tabel Hari —
+        # SENGAJA tanpa funnel (kolom aksi centang, pola AnomaliView:
+        # skip=(CHECK_COL, FP_COL)).
+        from waste_anomaly.followup import CHECK_COL
         vis = [str(m.headerData(c, Qt.Orientation.Horizontal))
                for c in range(m.columnCount())
                if not t.isColumnHidden(c)]
+        assert CHECK_COL in vis, "kolom ✓ follow-up harus tampil (v2.13.5)"
         for name in vis:
+            if name == CHECK_COL:
+                assert not t._hf_has(name), (
+                    "kolom ✓ = aksi centang, bukan filter")
+                continue
             assert t._hf_has(name), f"kolom '{name}' tanpa funnel"
         assert not hasattr(view, "_hint")
 

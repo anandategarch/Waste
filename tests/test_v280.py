@@ -223,13 +223,38 @@ class TestTabelAnomaliPenuhDanPopup:
         assert view._popup.isHidden(), "pop-up harus tertutup saat refresh"
         assert view._popup._panel._title.text() == DetailPanel._PROMPT
 
-    def test_double_klik_tetap_drill_down(self):
-        """Klik 2× = fokus cabang+item (perilaku v2.7.0 dipertahankan)."""
+    def test_double_klik_tak_lagi_filter(self):
+        """v2.13.5 (permintaan user "hilangkan yang klik 2x"): klik-2×
+        baris TIDAK lagi memasang filter cabang+item — _on_double dihapus
+        dari AnomaliView. Sinyal double_clicked tabel tak punya subscriber:
+        emit manual = tanpa efek pada state & render (jalur fokus drill
+        tinggal tombol eksplisit di pop-up detail)."""
         view, ctx = _make_view()
+        assert not hasattr(view, "_on_double"), (
+            "_on_double harus dihapus bersama perilaku filter klik-2×")
         rec = view._table._model.record(0)
-        view._on_double(rec)
-        assert ctx.active_filters["cabang"] == rec.get("NAMA RESTO")
-        assert ctx.active_filters["item"] == rec.get("NAMA BARANG")
+        n_before = view._table.model().rowCount()
+        view._table.double_clicked.emit(rec)
+        assert not any(ctx.active_filters.values()), (
+            "klik-2× tidak boleh lagi memfilter")
+        assert view._table.model().rowCount() == n_before
+
+    def test_popup_muncul_lagi_baris_sama(self):
+        """v2.13.5: pop-up ditutup → klik baris YANG SAMA → pop-up muncul
+        lagi (dulu currentRowChanged diam karena index tak berubah —
+        akar keluhan user "klik 1× pop-up kadang tidak muncul")."""
+        from PySide6.QtWidgets import QApplication
+        view, _ = _make_view()
+        QApplication.processEvents()
+        view._table.setCurrentIndex(view._table.model().index(0, 0))
+        assert view._popup.isVisible()
+        view._popup.close()
+        QApplication.processEvents()
+        assert view._popup.isHidden()
+        # klik baris sama: index tak berubah → hanya jalur row_clicked
+        view._table.row_clicked.emit(view._table.model().index(0, 0))
+        assert view._popup.isVisible(), (
+            "klik baris sama harus membuka pop-up lagi")
 
     def test_hint_baru_menyebut_pop_up(self):
         """Hint menggambarkan perilaku baru: klik baris = pop-up detail."""

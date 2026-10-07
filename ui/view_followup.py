@@ -92,15 +92,16 @@ class FollowUpView(QWidget):
         cl.setContentsMargins(12, 10, 12, 10)
         cl.setSpacing(6)
         title = WLabel("Daftar Follow Up — baris tercentang (✓) di tab "
-                       "Anomali & Banding Periode", card)
+                       "Anomali, Hari Mencurigakan & Banding Periode", card)
         title.setObjectName("cardTitle")
         title.setToolTip(
             "Kumpulan baris anomali yang Anda centang (kolom ✓) di tab "
-            "Anomali, ATAU baris tabel banding (tab Banding Periode — "
-            "halaman Cabang/Item: satu centang = baris ANOMALI resto/item "
-            "itu masuk — baris Normal tidak ikut, jadi umumnya tepat 1 "
-            "baris per item per resto).\nDaftar ini TIDAK terpengaruh "
-            "filter — baris yang sudah dikumpulkan menetap.\nHari "
+            "Anomali, tab Hari Mencurigakan, ATAU tombol '☑ Masuk Follow "
+            "Up' di pop-up detail, ATAU baris tabel banding (tab Banding "
+            "Periode — halaman Cabang/Item: satu centang = baris ANOMALI "
+            "resto/item itu masuk — baris Normal tidak ikut, jadi umumnya "
+            "tepat 1 baris per item per resto).\nDaftar ini TIDAK "
+            "terpengaruh filter — baris yang sudah dikumpulkan menetap.\nHari "
             "mencurigakan diberi warna: merah = hari tersangka (puncak); "
             "amber = nilai ≥ 2× rata-rata hari aktif.\nKolom TOTAL "
             "BULAN LALU + PERUBAHAN % muncul bila file pembanding dimuat "
@@ -158,6 +159,10 @@ class FollowUpView(QWidget):
         # Klik baris = pop-up detail (komponen sama dgn tab Anomali).
         self._table.selectionModel().currentRowChanged.connect(
             lambda *_: self._on_selection())
+        # v2.13.5: klik baris SAMA saat pop-up sempat ditutup → pop-up
+        # muncul lagi (sinyal clicked memicu di SETIAP klik; guard
+        # idempoten DetailDialog mencegah rebuild ganda).
+        self._table.row_clicked.connect(lambda *_: self._on_selection())
         cl.addWidget(self._table, 1)
 
         lay.addWidget(card, 1)
@@ -228,10 +233,11 @@ class FollowUpView(QWidget):
                             "(tab Pipeline → Mulai Pipeline).")
             return
         if rows.empty:
-            self._set_empty("Belum ada baris tercentang — buka tab Anomali, "
-                            "centang kolom ✓ pada baris mencurigakan "
-                            "(atau tombol ☑ Centang yang tampil / centang "
-                            "✓ di tab Banding Periode).")
+            self._set_empty("Belum ada baris tercentang — buka tab Anomali "
+                            "atau Hari Mencurigakan, centang kolom ✓ pada "
+                            "baris mencurigakan (atau tombol ☑ Masuk Follow "
+                            "Up di pop-up detail / tombol ☑ Centang yang "
+                            "tampil / centang ✓ di tab Banding Periode).")
             return
         with busy_feedback(self._ctx.set_status, "Menyusun daftar follow-up"):
             self._rows = rows
@@ -382,6 +388,11 @@ class FollowUpView(QWidget):
              else "✓ Baris dikeluarkan dari Follow Up"), "done")
 
     def _on_selection(self) -> None:
+        """Klik baris (atau navigasi keyboard) → pop-up detail (v2.8.1).
+        v2.13.5: tekanan di sel ✓ → pop-up TIDAK dibuka (aksi centang
+        murni — flag window mousePressEvent, lihat suppress_row_popup)."""
+        if self._table.suppress_row_popup():
+            return
         rec = self._table.selected_record()
         if rec is not None:
             self._popup.show_record(rec)

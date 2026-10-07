@@ -14,13 +14,23 @@ UI:
 - Combo: hanya baris dengan bukti hari (default) / semua anomali
 - Tabel terurut RASIO VS CABANG LAIN (terbesar duluan) — hover judul
   kolom = penjelasan istilah (COLUMN_TOOLTIPS); klik baris = pop-up
-  detail 12 sinyal + peta hari 1-31; klik 2× = fokus cabang+item.
+  detail 12 sinyal + peta hari 1-31.
+- v2.13.5: kolom ✓ follow-up (pola tab Anomali) + tombol '☑ Centang
+  yang tampil' — baris hari-mencurigakan langsung masuk daftar Follow
+  Up tanpa pindah tab; tombol follow-up juga ada di pop-up detail.
+- v2.13.5 (permintaan user): klik-2× baris TAK LAGI memasang filter —
+  keluhan "klik 1× pop-up kadang tidak muncul dan malah ketrigger
+  klik 2× yang langsung filter" (klik-2× → set_filter → render →
+  pop-up di-hide). Fokus cabang/item kini hanya lewat tombol eksplisit
+  pop-up detail. Pop-up juga muncul ulang saat baris SAMA diklik
+  lagi (sinyal clicked + guard idempoten DetailDialog).
 
 Istilah sengaja awam (permintaan user): "tipikal cabang lain", "berapa
 kali lipat", "porsi dari total bulanan" — bukan jargon statistik.
 """
 from __future__ import annotations
 
+import weakref
 from collections import OrderedDict
 
 import pandas as pd
@@ -38,7 +48,7 @@ from .state import AppContext
 from .view_anomali import DetailDialog, _HF_COLS
 from .widgets import Card, DataTable, KpiCard, WLabel, busy_feedback
 from waste_anomaly.period_history import day_evidence_vs_history
-from waste_anomaly.followup import FP_COL
+from waste_anomaly.followup import CHECK_COL, FP_COL, fingerprint_series
 
 # Kolom tabel hari-mencurigakan (ramping — detail lengkap di pop-up).
 # v2.10.0: 3 kolom bukti vs bulan lalu HANYA muncul bila data pembanding
@@ -117,7 +127,7 @@ class HariView(QWidget):
         self._btn_full = QPushButton("⛶ Layar Penuh", head)
         self._btn_full.setToolTip(
             "Buka tabel ini di jendela LAYAR PENUH (tekan Esc atau Tutup\n"
-            "untuk kembali). Sort / pop-up detail / klik 2× tetap\n"
+            "untuk kembali). Sort / pop-up detail / centang ✓ tetap\n"
             "berfungsi penuh di jendela itu.")
         self._btn_full.clicked.connect(self._on_fullscreen)
         hcl.addWidget(self._btn_full)
@@ -143,6 +153,15 @@ class HariView(QWidget):
         ctl.addWidget(self._cb_mode)
         # v2.12.4 — pengganti tombol '✕ Hapus Semua Filter' sidebar: lepas
         # SEMUA filter (funnel global + lokal) sekaligus (pola AnomaliView).
+        self._btn_fu_all = QPushButton("☑ Centang yang tampil", ctrl)
+        self._btn_fu_all.setToolTip(
+            "Centang SEMUA baris hari-mencurigakan yang sedang tampil "
+            "(hasil filter saat ini) sekaligus ke daftar Follow Up.\n"
+            "Cocok dipakai setelah funnel kolom menyempitkan daftar: "
+            "saring → centang massal → tinjau di tab Follow Up.\n"
+            "(v2.13.5 — pola tab Anomali, kini juga di tab ini.)")
+        self._btn_fu_all.clicked.connect(self._on_check_all)
+        ctl.addWidget(self._btn_fu_all)
         self._btn_clear = QPushButton("✕ Hapus Filter", ctrl)
         self._btn_clear.setToolTip(
             "Hapus SEMUA filter yang sedang aktif — funnel kolom (global "
@@ -157,15 +176,27 @@ class HariView(QWidget):
 
         self._table = DataTable(card)
         self._table.setMinimumHeight(200)
+        # v2.13.5 — kolom centang ✓ follow-up in-place (pola AnomaliView:
+        # klik sel = flip bool + sinyal check_toggled → state ctx TANPA
+        # render ulang; dataChanged satu sel — cache fit tak tersentuh).
+        self._table.model().set_check_column(CHECK_COL)
+        self._table.model().set_row_key_column(FP_COL)
+        self._table.model().check_toggled.connect(self._on_check_toggled)
         # v2.12.3: funnel filter + opsi sort di header tabel (satu state
         # ctx dgn tab Anomali). v2.12.4: SEMUA kolom ber-funnel — kolom
         # mapping global, lainnya filter LOKAL (pola AnomaliView).
+        # v2.13.5: kolom ✓ juga di-skip (pola AnomaliView).
         self._table.setup_header_filters(
             _HF_COLS, self._on_header_filter, self._hf_state,
-            all_cols=True, skip=(FP_COL,))
+            all_cols=True, skip=(CHECK_COL, FP_COL))
         self._table.selectionModel().currentRowChanged.connect(
             lambda *_: self._on_selection())
-        self._table.double_clicked.connect(self._on_double)
+        # v2.13.5: klik baris SAMA saat pop-up sempat ditutup harus
+        # membuka pop-up lagi — currentRowChanged diam saat index tak
+        # berubah (keluhan user "pop-up kadang tidak muncul"); sinyal
+        # clicked memicu di SETIAP klik. Guard idempoten DetailDialog
+        # mencegah rebuild ganda (currentRowChanged + clicked).
+        self._table.row_clicked.connect(lambda *_: self._on_selection())
         cl.addWidget(self._table, 1)
         self._tcl = cl  # v2.12.3: reparent ⛶ (pulihkan index layout tabel)
         lay.addWidget(card, 1)
@@ -190,15 +221,25 @@ class HariView(QWidget):
         # pola AnomaliView: hanya menyaring TAMPILAN tabel ini.
         self._hfilters: dict[str, list] = {}
         self._mask_cache: "OrderedDict[tuple, pd.DataFrame]" = OrderedDict()
+        # v2.13.5: df tampilan = salinan + ✓/__FP (pola AnomaliView) —
+        # LRU-4 + weakref ke df sumber supaya objek display STABIL per
+        # objek df → cache fit DataTable tetap kena antar-refresh; nilai
+        # ✓ selalu disegarkan dari state saat dipakai.
+        self._disp_cache: "OrderedDict[int, tuple]" = OrderedDict()
+        self._fps_src: pd.DataFrame | None = None
+        self._fps: pd.Series | None = None
 
         # Reaksi state — pola lazy H2 (sama dengan AnomaliView).
         self._dirty = True
-        self._batch_filters = False
         ctx.data_ready.connect(self._on_data_ready)
         ctx.filters_changed.connect(self._on_filters_changed)
         # v2.10.0: pembanding bulan lalu selesai dimuat → render ulang
         # (kolom bukti bulan lalu muncul) bila terlihat, else tandai dirty.
         ctx.history_ready.connect(self._on_history_ready)
+        # v2.13.5: centangan follow-up berubah (toggle/bulk dari mana pun,
+        # termasuk tombol di pop-up detail) → segarkan kolom ✓ IN-PLACE
+        # (pola AnomaliView._on_followup_changed — bukan render ulang).
+        ctx.followup_changed.connect(self._on_followup_changed)
 
     # ------------------------------------------------------------
     # STATE
@@ -208,14 +249,16 @@ class HariView(QWidget):
         # reset (pola AnomaliView).
         self._hfilters.clear()
         self._mask_cache.clear()
+        # v2.13.5: memo display/fingerprint berasal dataset lama — lepas
+        # instan (pola AnomaliView; kunci id() df lama tak bisa kena lagi).
+        self._disp_cache.clear()
+        self._fps_src, self._fps = None, None
         if self.isVisible():
             self.refresh()
         else:
             self._dirty = True
 
     def _on_filters_changed(self) -> None:
-        if self._batch_filters:
-            return
         if self.isVisible():
             self._refresh_table()
         else:
@@ -289,17 +332,21 @@ class HariView(QWidget):
         if months:
             df_show = self._with_history(df_show)
         cols = [c for c in TABLE_COLS if c in df_show.columns]
+        # v2.13.5: df tampilan = salinan + ✓ + __FP (pola AnomaliView —
+        # kontrak 'konsumen hanya membaca': objek memo tak dimutasi;
+        # mutasi centang hanya menyentuh salinan view ini).
+        disp = self._display_df(df_show)
         # v2.12.3: JENIS keluar dari narrow_hide (permintaan user "tambahkan
         # kolom jenis" — dulu disembunyikan responsif di layar sempit
         # 1366px; kini selalu tampil — SUSUT/TRIAL/WASTE terlihat langsung).
-        # v2.12.4: funnel LOKAL kolom non-ctx — mask isin di atas df_show
+        # v2.12.4: funnel LOKAL kolom non-ctx — mask isin di atas display
         # (memo per state — pola AnomaliView._mask_local).
-        shown = self._mask_local(df_show)
+        shown = self._mask_local(disp)
         self._table.set_dataframe(
             shown, sort_desc="RASIO VS CABANG LAIN",
             narrow_hide=["KETERANGAN", "NILAI BULAN LALU",
                          "TIPIKAL BEBERAPA BULAN", "ALASAN HARI"],
-            visible_cols=cols)
+            visible_cols=[CHECK_COL] + cols)
         n_tampil = len(shown)
         if n_tampil == 0:
             self._lbl_count.setText(
@@ -350,22 +397,105 @@ class HariView(QWidget):
     # INTERAKSI
     # ------------------------------------------------------------
     def _on_selection(self) -> None:
+        """Klik baris (atau navigasi keyboard) → pop-up detail (v2.8.1).
+        v2.13.5: tekanan di sel ✓ → pop-up TIDAK dibuka (aksi centang
+        murni — flag window mousePressEvent, lihat suppress_row_popup)."""
+        if self._table.suppress_row_popup():
+            return
         rec = self._table.selected_record()
         if rec is not None:
             self._popup.show_record(rec)
 
-    def _on_double(self, rec: pd.Series) -> None:
-        """Klik 2×: fokus cabang+item (pola drill-down AnomaliView + guard
-        coalesce V26-L4 — dua filter, satu render)."""
-        self._batch_filters = True
-        try:
-            if rec.get("NAMA RESTO") is not None:
-                self._ctx.set_filter("cabang", rec.get("NAMA RESTO"))
-            if rec.get("NAMA BARANG") is not None:
-                self._ctx.set_filter("item", rec.get("NAMA BARANG"))
-        finally:
-            self._batch_filters = False
-        self._refresh_table()
+    # ------------------------------------------------------------
+    # v2.13.5 — FOLLOW UP (pola AnomaliView: ✓ in-place + bulk + memo)
+    # ------------------------------------------------------------
+    def _fps_for(self, df: pd.DataFrame) -> pd.Series:
+        """Sidik jari baris (memo per objek df — pola AnomaliView._fps_for;
+        reindex O(len) dari memo penuh worker bila tersedia, md5 lokal
+        sebagai fallback)."""
+        if self._fps_src is not df or self._fps is None:
+            full = None
+            c = self._ctx
+            if (getattr(c, "_fp_series", None) is not None
+                    and c._fp_version == c.data_version
+                    and c._fp_series.index.is_unique
+                    and df.index.is_unique
+                    and df.index.isin(c._fp_series.index).all()):
+                full = c._fp_series
+            if full is not None:
+                self._fps = full.reindex(df.index)
+            else:
+                self._fps = fingerprint_series(df)
+            self._fps_src = df
+        return self._fps
+
+    def _display_df(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Salinan df + kolom ✓ (bool) + __FP — objek STABIL per objek df
+        (LRU-4 + weakref, pola AnomaliView._display_df) supaya cache fit
+        DataTable tetap kena antar-refresh; nilai ✓ SELALU disegarkan
+        dari state saat dipakai."""
+        key = id(df)
+        entry = self._disp_cache.get(key)
+        if entry is not None and entry[0]() is df and entry[1] is not None:
+            self._disp_cache.move_to_end(key)
+            disp = entry[1]
+            disp[CHECK_COL] = disp[FP_COL].isin(
+                self._ctx.followup_set())
+            return disp
+        fps = self._fps_for(df)
+        disp = df.copy()
+        disp[FP_COL] = fps
+        disp.insert(0, CHECK_COL, fps.isin(self._ctx.followup_set()))
+        self._disp_cache[key] = (weakref.ref(df), disp)
+        while len(self._disp_cache) > 4:
+            self._disp_cache.popitem(last=False)
+        return disp
+
+    def _on_check_toggled(self, row: int, checked: bool) -> None:
+        """Klik sel ✓ → state ctx (broadcast → badge tab Follow Up +
+        kolom ✓ tab Anomali + tombol pop-up detail — semua satu sumber)."""
+        rec = self._table.model().record(row)
+        fp = rec.get(FP_COL) if rec is not None else None
+        if fp is None or str(fp) == "nan":
+            return
+        self._ctx.toggle_followup(str(fp), checked)
+        n = len(self._ctx.followup_keys)
+        self._ctx.set_status(
+            ("✓ Masuk Follow Up" if checked else "✓ Dikeluarkan dari Follow Up")
+            + f" — total {fmt_id(n)} baris", "done")
+
+    def _on_followup_changed(self) -> None:
+        """State follow-up berubah (toggle di mana pun / bulk / tombol
+        pop-up) → segarkan kolom ✓ model IN-PLACE (dataChanged satu kolom
+        — BUKAN render ulang; cache fit + ukuran baris tak tersentuh).
+        Pola AnomaliView._on_followup_changed."""
+        m = self._table.model()
+        mdf = m.dataframe
+        if (mdf is not None and len(mdf) > 0
+                and CHECK_COL in mdf.columns and FP_COL in mdf.columns):
+            mdf[CHECK_COL] = mdf[FP_COL].isin(self._ctx.followup_set())
+            m.notify_column_changed(CHECK_COL)
+
+    def _on_check_all(self) -> None:
+        """Tombol '☑ Centang yang tampil' — semua baris model saat ini
+        (hasil filter/funnel) masuk follow-up, SATU broadcast (pola
+        AnomaliView._on_check_all)."""
+        mdf = self._table.model().dataframe
+        if mdf is None or len(mdf) == 0 or FP_COL not in mdf.columns:
+            self._ctx.set_status("Tidak ada baris yang tampil — longgarkan "
+                                 "filter dulu.", "error")
+            return
+        fps = [str(v) for v in mdf[FP_COL].tolist()]
+        added = self._ctx.add_followup_many(fps)
+        total = len(self._ctx.followup_keys)
+        if added:
+            self._ctx.set_status(
+                f"✓ {fmt_id(added)} baris masuk Follow Up — total {fmt_id(total)}",
+                "done")
+        else:
+            self._ctx.set_status(
+                f"Semua baris yang tampil sudah tercentang (total {fmt_id(total)})",
+                "done")
 
     def _on_header_filter(self, col: str, key: str, values) -> None:
         """v2.12.3 — menu funnel header → state ctx (sinkron dgn tab
@@ -397,7 +527,12 @@ class HariView(QWidget):
 
     def _mask_local(self, df_show: pd.DataFrame) -> pd.DataFrame:
         """v2.12.4 — mask isin per kolom funnel LOKAL (memo LRU per state,
-        pola AnomaliView._mask_local — objek stabil → cache fit kena)."""
+        pola AnomaliView._mask_local — objek stabil → cache fit kena).
+        v2.13.5: hasil = SALINAN (.copy() — pola AnomaliView: hasil slice
+        dgn _is_copy terpasang; mutasi kolom ✓ oleh model.setData akan
+        memicu SettingWithCopyWarning palsu + bisa bocor ke objek memo)
+        + nilai ✓ disegarkan tiap pemakaian (state bisa berganti saat
+        objek mask ini tak sedang jadi model)."""
         if not self._hfilters:
             return df_show
         sig = tuple(sorted((c, tuple(v)) for c, v in self._hfilters.items()))
@@ -408,12 +543,14 @@ class HariView(QWidget):
             for col, vals in self._hfilters.items():
                 if col in df_show.columns and vals:
                     m &= df_show[col].isin(vals)
-            out = df_show[m]
+            out = df_show[m].copy()
             self._mask_cache[key] = out
             while len(self._mask_cache) > 4:
                 self._mask_cache.popitem(last=False)
         else:
             self._mask_cache.move_to_end(key)
+        if CHECK_COL in out.columns and FP_COL in out.columns:
+            out[CHECK_COL] = out[FP_COL].isin(self._ctx.followup_set())
         return out
 
     def _on_clear_filters(self) -> None:
