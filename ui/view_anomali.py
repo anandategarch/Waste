@@ -21,6 +21,14 @@ pop-up → klik baris sama dulu: currentRowChanged tak memicu — sinyal
 QTableView.clicked kini ikut dihubungkan + guard idempoten di
 DetailDialog.show_record supaya klik-baris-berganti tidak membangun
 ulang panel dua kali).
+
+v2.13.9 (permintaan user "pop up hanya tampilkan yang penting-penting
+aja, jangan semua — aku jadi bingung"): DetailPanel didesain ulang —
+RINGKASAN (±7 angka kunci berlabel awam) + chip sinyal TERPICU SAJA +
+alasan + peta hari + tombol tindak lanjut; daftar ±25 kolom lengkap
+kini di balik tombol "▸ Tampilkan semua kolom data" (default sembunyi,
+per-baris). Guard funnel v2.12.5 diperluas ke TEKAN TUNGGAL replay
+(mousePressEvent — lihat widgets.py: bug "klik filter muncul pop-up").
 """
 from __future__ import annotations
 
@@ -173,17 +181,119 @@ DETAIL_COLS = [
     "PROFIL", "KELEBIHAN", "PEER MEDIAN (AKTIF)", "PEER AKTIF",
 ]
 
+# Baris (label, kolom sumber, formatter, kolom tooltip) RINGKASAN pop-up
+# v2.13.9 — permintaan user: "data pada bagian pop up hanya tampilkan yang
+# penting penting aja jangan semua ditampilkan aku jadi bingung". Pop-up
+# lama menampilkan ±25 baris metrik SEKALIGUS — kini hanya ±7 angka kunci
+# yang menjawab pertanyaan investigasi (apa/siapa/kapan/seberapa besar/
+# dibanding siapa), label Bahasa awam; sisanya di balik tombol
+# "Tampilkan semua kolom data".
+_SUMMARY_SPECS: list[tuple[str, tuple[str, ...], object]] = [
+    ("Jenis & alasan catatan", ("JENIS", "KETERANGAN"), "_join"),
+    ("Total waste sebulan", ("TOTAL",), "_num0"),
+    ("Puncak sehari", ("MAX",), "_peak"),
+    ("vs penjualan (BOM)", ("% to BOM",), "_pct"),
+    ("vs cabang lain (median)", ("TOTAL / PEER MEDIAN",), "_ratio"),
+    ("vs bulan lalu", ("PERUBAHAN %",), "_delta"),
+    ("Peringkat waste cabang", ("RANGKING WASTE",), "_raw"),
+]
+
+
+def _rec_val(rec: pd.Series, col: str):
+    """Nilai kolom baris; None bila hilang/NaN (pd.isna None-safe)."""
+    v = rec.get(col)
+    if v is None:
+        return None
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass  # nilai eksotis — biarkan formatter mengurus
+    return v
+
+
+def _summary_rows(rec: pd.Series) -> list[tuple[str, str, str]]:
+    """Bangun baris ringkasan penting: (label, nilai, tooltip gabungan).
+
+    Baris dengan nilai kosong DILEWATI — pop-up tetap ramping di data
+    tanpa pembanding (Hari tab / fixture sintetis)."""
+    out: list[tuple[str, str, str]] = []
+
+    def tip(cols: tuple[str, ...]) -> str:
+        return "\n\n".join(COLUMN_TOOLTIPS[c] for c in cols
+                           if c in COLUMN_TOOLTIPS)
+
+    for label, cols, how in _SUMMARY_SPECS:
+        shown = ""
+        if how == "_join":
+            parts = [str(_rec_val(rec, c)).strip()
+                     for c in cols if _rec_val(rec, c) is not None]
+            parts = [p for p in parts if p and p not in ("nan", "None")]
+            shown = " · ".join(parts)
+        elif how == "_num0":
+            v = _rec_val(rec, cols[0])
+            if v is not None:
+                shown = fmt_cell(v, 0)
+                sat = _rec_val(rec, "SATUAN")
+                if sat is not None and str(sat).strip():
+                    shown += f" {str(sat).strip()}"
+        elif how == "_peak":
+            v = _rec_val(rec, cols[0])
+            if v is not None:
+                shown = fmt_cell(v, 0)
+                for src in ("HARI TERSANGKA", "HARI MAX"):
+                    h = _rec_val(rec, src)
+                    if h is not None:
+                        try:
+                            shown += f" di tanggal {int(float(h))}"
+                            break
+                        except (TypeError, ValueError):
+                            pass
+        elif how == "_pct":
+            v = _rec_val(rec, cols[0])
+            if v is not None:
+                shown = fmt_pct(v)
+        elif how == "_ratio":
+            v = _rec_val(rec, cols[0])
+            if v is not None:
+                shown = fmt_ratio_x(v)
+                n = _rec_val(rec, "PEER COUNT")
+                if n is not None:
+                    try:
+                        shown += f" (median {fmt_id(int(float(n)))} cabang)"
+                    except (TypeError, ValueError):
+                        pass
+        elif how == "_delta":
+            v = _rec_val(rec, cols[0])
+            if v is not None:
+                shown = fmt_delta_pct(v)
+                old = _rec_val(rec, "BULAN LALU")
+                if old is not None and fmt_cell(old, 0):
+                    shown += f" — bulan lalu {fmt_cell(old, 0)}"
+        else:  # _raw
+            v = _rec_val(rec, cols[0])
+            if v is not None:
+                shown = fmt_cell(v)
+        if shown:
+            out.append((label, shown, tip(cols)))
+    return out
+
 
 class DetailPanel(Card):
     """Panel detail satu baris anomali: identitas + sinyal + drill-down.
 
     v2.8.1: panel ini tinggal DI DALAM DetailDialog (pop-up) — bukan lagi
     bagian splitter di bawah tabel.
+    v2.13.9: isi RINGKAS (permintaan user): ringkasan angka kunci →
+    sinyal terpicu saja → alasan → peta hari → tindak lanjut → tombol
+    pembuka daftar kolom lengkap (default tersembunyi).
     """
 
     # Prompt default — dipakai __init__ DAN clear() (V26-L12)
+    # v2.13.9: teks mengikuti desain ringkas (ringkasan + sinyal terpicu
+    # + peta hari; kolom lengkap di balik tombol).
     _PROMPT = ("Klik baris anomali di tabel untuk menampilkan detailnya "
-               "di sini (12 sinyal, peer, uang).")
+               "di sini (ringkasan, sinyal terpicu, peta hari).")
 
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -192,6 +302,9 @@ class DetailPanel(Card):
         # toggle dari mana pun memperbarui teksnya tanpa rebuild).
         self._fu_btn: QPushButton | None = None
         self._cur_fp: str | None = None
+        # v2.13.9: wadah + tombol kolom-lengkap (diisi show_record).
+        self._full_box: QWidget | None = None
+        self._more_btn: QPushButton | None = None
         ctx.followup_changed.connect(self._on_fu_state_changed)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 10, 12, 10)
@@ -212,9 +325,12 @@ class DetailPanel(Card):
         sedang ditampilkan bisa jadi sudah tidak lolos filter — jangan
         biarkan panel menampilkan data basi (pola teardown show_record).
         v2.13.5: ref tombol follow-up + fp ikut direset (widgetnya
-        sudah deleteLater — jangan biarkan handler menyentuh mayat)."""
+        sudah deleteLater — jangan biarkan handler menyentuh mayat).
+        v2.13.9: ref wadah/tombol kolom-lengkap ikut direset (mayat)."""
         self._fu_btn = None
         self._cur_fp = None
+        self._full_box = None
+        self._more_btn = None
         self._title.setText(self._PROMPT)
         old = self._content.layout()
         if old is not None:
@@ -225,11 +341,20 @@ class DetailPanel(Card):
                     w.deleteLater()
 
     def show_record(self, rec: pd.Series) -> None:
-        """Render ulang konten detail dari record baris terpilih."""
+        """Render ulang konten detail dari record baris terpilih.
+
+        v2.13.9 — desain "hanya yang penting" (permintaan user: pop-up
+        lama menampilkan SEMUA kolom sekaligus — membingungkan). Susunan:
+        chip status + skor → RINGKASAN (±7 angka kunci) → sinyal TERPICU
+        saja (chip merah; jumlah di judul seksi) → alasan → peta hari
+        1-31 → tindak lanjut → tombol "Tampilkan semua kolom data"
+        (±25 baris metrik kini tersembunyi, dibuka bila mau)."""
         # v2.13.5: reset ref tombol follow-up (konten lama dibuang —
         # tombol lama dideleteLater; nilai baru dipasang di bawah).
         self._fu_btn = None
         self._cur_fp = None
+        self._full_box = None   # v2.13.9: ref wadah kolom lengkap
+        self._more_btn = None   # v2.13.9: ref tombol pembuka kolom lengkap
         # Buang konten lama
         old = self._content.layout()
         if old is not None:
@@ -264,40 +389,72 @@ class DetailPanel(Card):
         hl.addStretch(1)
         lay.addWidget(head)
 
-        # Grid 12 sinyal — chip merah bila terpicu
+        # v2.13.9 — RINGKASAN PENTING (permintaan user "yang penting-penting
+        # aja"): ±7 angka kunci berlabel Bahasa awam, nilai kosong dilewati.
+        # Tooltip label/nilai = kamus istilah kolom sumbernya.
+        sum_rows = _summary_rows(rec)
+        if sum_rows:
+            lay.addWidget(self._section("Ringkasan"))
+            sum_w = QWidget()
+            sfl = QFormLayout(sum_w)
+            sfl.setContentsMargins(0, 0, 0, 0)
+            sfl.setSpacing(4)
+            sfl.setFieldGrowthPolicy(
+                QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+            for label, shown, tip in sum_rows:
+                key = QLabel(f"{label}:", sum_w)
+                key.setStyleSheet("color:#64748b;")
+                if tip:
+                    key.setToolTip(tip)
+                val_lbl = WLabel(shown, sum_w)
+                val_lbl.setStyleSheet("font-weight:600;")
+                if tip:
+                    val_lbl.setToolTip(tip)
+                sfl.addRow(key, val_lbl)
+            lay.addWidget(sum_w)
+
+        # Sinyal TERPICU SAJA (v2.13.9 — dulu grid 12 chip: 7-11 di
+        # antaranya abu-abu "tidak terpicu" = kebisingan visual; yang
+        # penting investigasi = chip MERAH. Jumlah total tetap disebut
+        # di judul seksi; nilai _s* / fragmen ANOMALY REASONS baca
+        # seperti v2.7.0 — lihat komentar SIGNALS di atas).
         reasons_raw = rec.get("ANOMALY REASONS")
         reasons_text = "" if reasons_raw is None else str(reasons_raw)
         if reasons_text in ("nan", "None", "<NA>"):
             reasons_text = ""
-        grid = QWidget()
-        gl = QGridLayout(grid)
-        gl.setContentsMargins(0, 0, 0, 0)
-        gl.setSpacing(6)
-        for i, (col, label, fragment) in enumerate(SIGNALS):
+        trig: list[tuple[str, str]] = []
+        for col, label, fragment in SIGNALS:
             val = rec.get(col, 0)
             try:
                 val = float(pd.to_numeric(pd.Series([val])).iloc[0])
             except Exception:
                 val = 0.0
-            # v2.7.0: baca dari fragmen ANOMALY REASONS (data riil) ATAU
-            # nilai _s* bila kolom hadir (fixture sintetis) — lihat komentar
-            # SIGNALS di atas.
             triggered = (val > 0) or (fragment in reasons_text)
             if triggered:
-                fg, bg = "#dc2626", "#fef2f2"
                 text = (f"{label} ✓ ({fmt_id(val, 0)})" if val > 0
                         else f"{label} ✓")
-            else:
-                fg, bg = "#64748b", "#f1f5f9"
-                text = label
-            chip = StatusChip(text, fg, bg)
-            # v2.9.0: hover chip = penjelasan sinyal Bahasa awam
-            # (permintaan user: tooltip SEMUA istilah, bukan hanya S-1).
-            tip = _CHIP_TIPS.get(col, "")
-            if tip:
-                chip.setToolTip(tip)
-            gl.addWidget(chip, i // 3, i % 3)
-        lay.addWidget(grid)
+                trig.append((col, text))
+        lay.addWidget(self._section(
+            f"Sinyal terpicu ({len(trig)} dari {len(SIGNALS)})"))
+        if trig:
+            grid = QWidget()
+            gl = QGridLayout(grid)
+            gl.setContentsMargins(0, 0, 0, 0)
+            gl.setSpacing(6)
+            for i, (col, text) in enumerate(trig):
+                chip = StatusChip(text, "#dc2626", "#fef2f2")
+                # v2.9.0: hover chip = penjelasan sinyal Bahasa awam
+                # (permintaan user: tooltip SEMUA istilah, bukan hanya S-1).
+                tip = _CHIP_TIPS.get(col, "")
+                if tip:
+                    chip.setToolTip(tip)
+                gl.addWidget(chip, i // 3, i % 3)
+            lay.addWidget(grid)
+        else:
+            note = WLabel("Tidak ada sinyal terpicu pada baris ini.",
+                          self._content)
+            note.setObjectName("muted")
+            lay.addWidget(note)
 
         # Alasan (teks lengkap ANOMALY REASONS)
         reasons = fmt_cell(rec.get("ANOMALY REASONS"))
@@ -305,13 +462,21 @@ class DetailPanel(Card):
             lay.addWidget(self._section("Alasan terdeteksi"))
             lay.addWidget(WLabel(reasons))
 
-        # Metrik konteks (QFormLayout — wrap, tidak terpotong)
-        lay.addWidget(self._section("Konteks & pembanding"))
+        # Metrik konteks LENGKAP (v2.13.9: kini di balik tombol — dulu
+        # QFormLayout ±25 baris tampil SELALU, sumber "aku jadi bingung").
+        # Dibangun utuh seperti v2.8.1 (format persen/rasio/teks sama),
+        # lalu disembunyikan; tombol toggle di bagian bawah pop-up.
+        full_box = QWidget()
+        fbl = QVBoxLayout(full_box)
+        fbl.setContentsMargins(0, 0, 0, 0)
+        fbl.setSpacing(4)
+        fbl.addWidget(self._section("Konteks & pembanding — semua kolom"))
         metrics = QWidget()
         fl = QFormLayout(metrics)
         fl.setContentsMargins(0, 0, 0, 0)
         fl.setSpacing(4)
         fl.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        n_full = 0
         for col in DETAIL_COLS:
             if col in ("ANOMALY SCORE", "ANOMALY STATUS", "NAMA RESTO",
                        "NAMA BARANG", "ANOMALY REASONS"):
@@ -335,7 +500,10 @@ class DetailPanel(Card):
                 if tip:
                     val_lbl.setToolTip(tip)
                 fl.addRow(key, val_lbl)
-        lay.addWidget(metrics)
+                n_full += 1
+        fbl.addWidget(metrics)
+        full_box.setVisible(False)
+        self._full_box = full_box
 
         # Peta hari 1-31 (v2.9.0): nilai waste per hari dalam mini-grid —
         # hari tersangka disorot merah. "Grafik batang" tanpa matplotlib:
@@ -387,7 +555,49 @@ class DetailPanel(Card):
             bl.addWidget(b)
         bl.addStretch(1)
         lay.addWidget(btns)
+
+        # v2.13.9 — tombol pembuka kolom lengkap (di paling bawah, SETELAH
+        # tindak lanjut: aksi tetap terlihat tanpa gulir; data mentah =
+        # opsional). Kolom lengkap = semua DETAIL_COLS baris ini.
+        if n_full:
+            more = QPushButton(
+                f"▸ Tampilkan semua kolom data ({n_full})", self._content)
+            more.setToolTip(
+                "Buka / tutup daftar lengkap semua kolom data baris ini.\n"
+                "Dulu daftar ini selalu tampil (±25 baris) — kini "
+                "tersembunyi supaya pop-up hanya menampilkan yang penting.")
+            more.setStyleSheet(
+                "QPushButton { text-align:left; color:#64748b; "
+                "border:none; background:transparent; padding:2px 0; "
+                "font-weight:400; }"
+                "QPushButton:hover { color:#0f172a; }")
+            more.setCursor(Qt.CursorShape.PointingHandCursor)
+            more.clicked.connect(self._toggle_full)
+            self._more_btn = more
+            lay.addWidget(more)
+            lay.addWidget(full_box)
         lay.addStretch(1)
+
+    def _toggle_full(self) -> None:
+        """v2.13.9 — buka/tutup daftar kolom lengkap (teks tombol ikut).
+        Baris baru (show_record) selalu mulai TERSEMBUNYI — pop-up "hanya
+        yang penting" adalah keadaan default."""
+        box = self._full_box
+        if box is None:
+            return
+        show = box.isHidden()
+        box.setVisible(show)
+        if self._more_btn is not None:
+            self._more_btn.setText(
+                ("▾ Sembunyikan daftar kolom lengkap" if show
+                 else "▸ Tampilkan semua kolom data"))
+            try:
+                self._more_btn.setToolTip(
+                    "Klik utk menyembunyikan kembali daftar kolom lengkap."
+                    if show else
+                    "Buka / tutup daftar lengkap semua kolom data baris ini.")
+            except RuntimeError:
+                pass
 
     # ------------------------------------------------------------
     # v2.13.5 — tombol follow-up di pop-up (satu klik dari investigasi
@@ -517,11 +727,16 @@ class DetailDialog(QDialog):
     index tak berubah. Guard idempoten: show_record dipanggil dua kali
     berturut untuk record sama (klik = currentRowChanged + clicked)
     cukup membangun SEKALI.
+
+    v2.13.9: isi panel RINGKAS (lihat DetailPanel) — kolom lengkap
+    di balik tombol "▸ Tampilkan semua kolom data".
     """
 
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Detail Anomali — 12 Sinyal & Pembanding")
+        # v2.13.9: judul jujur — isi kini ringkas (bukan lagi 12 chip +
+        # ±25 baris metrik sekaligus).
+        self.setWindowTitle("Detail Anomali — Ringkasan Baris")
         self.setModal(False)
         self.resize(920, 640)
         self._shown_sig: tuple | None = None

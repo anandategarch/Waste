@@ -1,7 +1,7 @@
 """
 Waste Anomaly Detection — Python/pandas replica dari Power Query M code.
 
-Versi: 2.13.8
+Versi: 2.13.9
 Author: anandategarch
 Lisensi: MIT
 
@@ -17,7 +17,7 @@ Penggunaan dasar (tanpa UI):
 Untuk UI (PySide6), jalankan:  python ui_app.py
 """
 
-__version__ = "2.13.8"
+__version__ = "2.13.9"
 __all__ = ["pipeline", "loader", "stages", "signals", "exporter", "utils",
            "temporal", "priority", "data_quality", "period_compare",
            "period_history"]

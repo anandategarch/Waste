@@ -663,7 +663,23 @@ class DataTable(QTableView):
         Flag hidup HANYA selama pemanggilan super() (currentRowChanged
         memicu SINKRON di dalamnya — view membaca suppress_row_popup()
         di jendela itu); dibersihkan di finally supaya tak ada state basi
-        yang salah menekan pop-up navigasi keyboard berikutnya."""
+        yang salah menekan pop-up navigasi keyboard berikutnya.
+
+        v2.13.9 — tekan#1 REPLAY pasca menu funnel juga DITELAN.
+        Klik yang MENUTUP menu funnel di-replay Qt ke tabel sebagai
+        tekan tunggal (mekanisme v2.12.5 §dok mouseDoubleClickEvent);
+        guard v2.12.5 hanya menelan klik-GANDA artefak — tekan#1 lolos
+        → baris terseleksi → currentRowChanged → pop-up detail terbuka
+        tanpa niat user. Laporan user v2.13.8 "masih ada bug pada klik
+        filter muncul pop up" — terbukti empiris (tests/repro_filter_
+        popup_2139.py: klik tunggal 0 ms pasca-tutup-menu → popup
+        visible True). Dalam jendela _HF_HIDE_GUARD_S setelah menu
+        tertutup, tekan kiri pada tabel diabaikan TOTAL (tanpa seleksi);
+        klik sah sesudah jendela itu utuh (kontrol repro [4] hijau)."""
+        if (e.button() == Qt.MouseButton.LeftButton
+                and time.monotonic() - self._hf_hide[0] < _HF_HIDE_GUARD_S):
+            e.accept()
+            return
         idx = self.indexAt(e.position().toPoint())
         self._press_check = bool(
             idx.isValid() and not self._relay_row_click_ok(idx))

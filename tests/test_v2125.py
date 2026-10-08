@@ -19,13 +19,19 @@ Akar terukur (bukti piksel data asli 1366×700):
     klik-ganda → doubleClicked → DetailDialog terbuka sendiri.
     Fix: mouseDoubleClickEvent menelan klik-ganda dalam <0.6 s setelah
     menu funnel tertutup (klik tunggal pilih-baris tetap hidup).
+    v2.13.9 REVISI (laporan user: "masih ada bug pada klik filter muncul
+    pop up"): tekan#1 replay TUNGGAL ternyata juga membuka pop-up di tab
+    ber-sinyal currentRowChanged (Anomali/Hari/Follow Up) — kini tekan
+    kiri dalam jendela guard juga DITELAN (mousePressEvent, lihat
+    test_v2139.py); test "klik tunggal tetap memilih baris" lama
+    ditulis ulang jujur di kelas TestGuardDClick.
 
 Cakupan:
 [A] anti-terpotong: font QSS, lantai jujur, piksel strip bersih,
     ikon funnel tetap dilukis, konstanta theme dipakai QSS.
 [B] guard DClick: waktu tertutup tercatat; artefak ditelan; klik ganda
     sah tetap hidup (setelah selang / tabel tanpa menu); klik tunggal
-    tetap memilih baris.
+    dalam guard ditelan (revisi v2.13.9) + kontrol klik sah.
 [C] zona hit funnel baru ([w-24, w-2] — ikon di right-12).
 """
 from __future__ import annotations
@@ -246,9 +252,17 @@ class TestGuardDClick:
         assert len(fired) == 1
         host.close()
 
-    def test_klik_tunggal_tetap_memilih_baris(self):
-        """Guard hanya menelan klik GANDA — klik tunggal pilih-baris
-        tetap hidup dalam jendela guard."""
+    def test_klik_tunggal_dalam_guard_ditelan_v2139(self):
+        """v2.13.9 REVISI desain (test v2.12.5 lama ditulis ulang jujur —
+        alasan tercatat): dulu klik tunggal dalam jendela guard masih
+        memilih baris ("pilih-baris tetap hidup"). Tekanan tunggal itu
+        justru jalur bocornya tekan#1 REPLAY: klik yang menutup menu
+        funnel di-replay Qt ke tabel → baris terseleksi → pop-up detail
+        terbuka tanpa niat user — laporan user v2.13.8 "masih ada bug
+        pada klik filter muncul pop up" (repro: tests/repro_filter_
+        popup_2139.py [3]). Kini tekan kiri dalam jendela guard DITELAN
+        TOTAL (tanpa seleksi); klik sah sesudah jendela utuh (lihat
+        test_v2139.TestGuardTekanTunggal utk bukti dua arah)."""
         t, host = _table()
         hdr = t.horizontalHeader()
         app = _qapp()
@@ -267,8 +281,30 @@ class TestGuardDClick:
                 Qt.MouseButton.LeftButton,
                 Qt.KeyboardModifier.NoModifier))
         app.processEvents()
+        assert t.currentIndex().row() != 1, (
+            "tekan#1 replay pasca-tutup-menu harus ditelan (v2.13.9 — "
+            "dulu baris terseleksi → pop-up terbuka tanpa niat user)")
+        host.close()
+
+    def test_klik_tunggal_sah_setelah_guard_lewat(self):
+        """Kontrol sisi positif: jendela guard lewat → klik tunggal
+        memilih baris & memicu sinyal klik normal (fitur inti utuh)."""
+        t, host = _table()
+        app = _qapp()
+        t._hf_hide = (time.monotonic() - 5.0, None)  # guard kedaluwarsa
+        vp = t.viewport()
+        y = t.rowHeight(0) + t.rowHeight(1) // 2
+        gp = vp.mapToGlobal(QPoint(30, y))
+        lp = QPointF(vp.mapFromGlobal(gp))
+        for tipe in (QEvent.Type.MouseButtonPress,
+                     QEvent.Type.MouseButtonRelease):
+            QApplication.sendEvent(vp, QMouseEvent(
+                tipe, lp, QPointF(gp), Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier))
+        app.processEvents()
         assert t.currentIndex().row() == 1, (
-            "klik tunggal pilih-baris mati dalam jendela guard")
+            "klik tunggal normal harus tetap memilih baris")
         host.close()
 
 

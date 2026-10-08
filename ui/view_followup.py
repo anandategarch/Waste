@@ -16,7 +16,8 @@ Perilaku:
   TERSANGKA/HARI MAX — konsisten peta hari pop-up detail); amber =
   nilai ≥ 2× rata-rata hari aktif (lonjakan sekunder).
 - Klik baris = pop-up detail (komponen yang sama dgn tab Anomali —
-  12 sinyal, peta hari, peer).
+  ringkasan + sinyal terpicu + peta hari, v2.13.9; kolom lengkap di
+  balik tombol "▸ Tampilkan semua kolom data").
 - Ekspor Excel: format rekap + 3 kolom serah terima kosong (PIC/
   KATEGORI/PENYEBAB — konvensi REKAP MENTAH), hari mencurigakan ikut
   diberi fill merah/amber.

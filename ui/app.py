@@ -58,7 +58,7 @@ _HELP_HTML = """
 <h3>Tab Anomali (pemburu anomali)</h3>
 <ul>
 <li>Tabel anomali ter-ranking (skor tertinggi di atas; klik header kolom untuk sort).</li>
-<li>Klik baris → <b>pop-up detail</b>: 12 sinyal, angka pembanding, % to BOM (waste vs penjualan), peta nilai per hari 1–31, dan konteks lengkap.</li>
+<li>Klik baris → <b>pop-up detail ringkas</b> (v2.13.9): <b>Ringkasan</b> (total sebulan, puncak sehari + tanggalnya, vs penjualan, vs cabang lain, vs bulan lalu, peringkat) → <b>sinyal yang terpicu saja</b> (chip merah) → alasan → <b>peta nilai per hari 1–31</b> → tombol tindak lanjut. Seluruh kolom data tetap tersedia lewat tombol <b>▸ Tampilkan semua kolom data</b> di bawah.</li>
 <li>Tombol drill-down di pop-up: fokus cabang / item / alasan dari baris terpilih; tombol <b>☑ Masuk Follow Up</b> mengumpulkan baris ke daftar tindak lanjut.</li>
 <li><b>Klik 2× baris TIDAK lagi memfilter</b> (v2.13.5) — fokus cabang/item hanya lewat tombol di pop-up, supaya klik 1× selalu membuka pop-up detail.</li>
 <li>"Skor ≥" menyembunyikan anomali ber-skor rendah (skor maksimum = 19).</li>
