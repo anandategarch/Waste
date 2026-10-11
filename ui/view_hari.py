@@ -343,12 +343,21 @@ class HariView(FollowupTableMixin, QWidget):
             self._lbl_count.setText(
                 "Belum ada data — buka tab Pipeline, pilih workbook, jalankan.")
             return
-        if "HARI TERSANGKA" not in df.columns:
-            # Dataset tanpa kolom bukti hari (fixture sintetis / pipeline lama)
+        # v2.13.15 (gel-6 C12): kolom bukti stage-15 HARI TERSANGKA *atau*
+        # BUKTI HARI absen → pesan jujur "dataset tanpa bukti hari".
+        # Dulu HANYA 'HARI TERSANGKA' yang dicek: dataset ber-HARI TERSANGKA
+        # tapi TANPA 'BUKTI HARI' jatuh ke jalur bukti = semua-False →
+        # mode default 'Ada bukti hari' menampilkan 0 baris + pesan
+        # "0 anomali lolos filter — longgarkan filter / coba 'Semua
+        # anomali'" yang MENYALAHKAN filter padahal kolomnya absen
+        # (tombol 'Semua anomali' tak menolong — audit C12).
+        missing = [c for c in ("HARI TERSANGKA", "BUKTI HARI")
+                   if c not in df.columns]
+        if missing:
             self._table.set_dataframe(None)
             self._lbl_count.setText(
-                "Dataset ini tidak punya kolom bukti hari — jalankan ulang "
-                "pipeline (v2.9.0+).")
+                "Dataset ini tanpa bukti hari (kolom " + ", ".join(missing)
+                + " absen) — jalankan ulang pipeline (v2.9.0+).")
             self._update_kpi(None, 0, None)
             return
         bukti = (df["BUKTI HARI"].astype(str) == "YES") \
@@ -416,14 +425,34 @@ class HariView(FollowupTableMixin, QWidget):
                          "NILAI BULAN LALU", "ALASAN HARI"],
             visible_cols=[CHECK_COL] + cols)
         n_tampil = len(shown)
+        # v2.13.15 (gel-6 A15): INDIKATOR AMBANG SKOR LINTAS-TAB — spin
+        # "Anomali dengan skor ≥" (tab Anomali) menyaring ctx.anomali_df()
+        # yang JUGA jadi sumber tabel Hari; tabel ini diam-diam mengecil
+        # TANPA sebab terlihat (tak ada kontrol skor di tab ini; audit
+        # A15 "spin Skor ≥ berdampak lintas-tab tanpa indikasi di tab
+        # Hari"). Kini label hitungan menyebut ambang aktif + asalnya,
+        # tooltip menjelaskan cara melepasnya (spin ke 0 / ✕ Hapus
+        # Filter di tab Anomali — ✕ di tab ini juga melepas skor karena
+        # mixin _on_clear_filters me-reset score_min).
+        skor_min = int(self._ctx.score_min or 0)
+        skor_sfx = (f" · ⚠ Skor ≥ {skor_min} aktif (diatur di tab Anomali)"
+                    if skor_min > 0 else "")
+        if skor_min > 0:
+            self._lbl_count.setToolTip(
+                f"Tabel Hari hanya menampilkan anomali ber-skor ≥ {skor_min} "
+                "— ambang diatur spin \"Anomali dengan skor ≥\" di tab "
+                "Anomali dan berlaku lintas-tab (KPI ikut). Lepas: spin "
+                "ke 0 di tab Anomali, atau tombol ✕ Hapus Filter.")
+        else:
+            self._lbl_count.setToolTip("")
         if n_tampil == 0:
             self._lbl_count.setText(
                 "0 anomali lolos filter — longgarkan filter / coba "
-                "'Semua anomali'.")
+                "'Semua anomali'." + skor_sfx)
         else:
             self._lbl_count.setText(
                 f"{fmt_id(n_tampil)} baris tampil • {fmt_id(n_bukti_all)} "
-                f"dari {fmt_id(len(df))} anomali punya bukti hari")
+                f"dari {fmt_id(len(df))} anomali punya bukti hari" + skor_sfx)
         # Rasio terbesar utk KPI (dari shown — konsisten dgn tabel)
         rasio = None
         if "RASIO VS CABANG LAIN" in shown.columns:

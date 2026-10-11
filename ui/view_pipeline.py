@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .shared import APP_DIR, fmt_id, friendly_file_error
+from .shared import APP_DIR, LOG_RUN_LINES, fmt_id, friendly_file_error
 from .state import AppContext
 from .widgets import Card, WLabel, busy_feedback
 from .workers import PipelineWorker
@@ -244,7 +244,10 @@ class PipelineView(QWidget):
         self._log = QPlainTextEdit(c3)
         self._log.setObjectName("log")
         self._log.setReadOnly(True)
-        self._log.setMaximumBlockCount(2000)
+        # v2.13.15 (gel-6 D11): ambang blok panel log = LOG_RUN_LINES —
+        # dulu angka literal 2000 lokal vs 500 memori ctx vs 200 ekspor
+        # (audit D11: tiga ambang beda); kini SATU konstanta bersama.
+        self._log.setMaximumBlockCount(LOG_RUN_LINES)
         self._log.setPlaceholderText(
             f"Log proses ({PIPELINE_N_STAGES} stage) tampil di sini saat "
             "pipeline berjalan…")
@@ -373,8 +376,14 @@ class PipelineView(QWidget):
         self._btn_run.style().polish(self._btn_run)
         self._progress.setValue(0)
         self._ctx.set_status("Memulai pipeline…", "running")
-        self._ctx.log("=== Mulai Pipeline ===")
-        self._ctx.log(f"Workbook: {wb} • Key Akhir: {ka} (in-memory)")
+        # v2.13.15 (gel-6 D21) — DEDUPE HEADER LOG RUN: dulu baris ini
+        # "=== Mulai Pipeline ===" + "Workbook: … • Key Akhir: …" ditulis
+        # UI SEBELUM worker jalan, lalu engine mencatat DUPLIKATNYA via
+        # _on_progress ("=== Pipeline waste dimulai ===", "Workbook: …",
+        # "Key Akhir: …") — awal run menampilkan header+info ganda.
+        # Kini header & identitas run DATANG dari engine (diterjemahkan
+        # di batas UI, pola D18); UI hanya menambah baris yang TIDAK
+        # dikeluarkan engine (jumlah stage).
         self._ctx.log(
             f"{PIPELINE_N_STAGES} stage dianalisa in-memory — progres "
             "per stage di bawah")
@@ -438,7 +447,10 @@ class PipelineView(QWidget):
         # ("✓ Menyaring & menampilkan data selesai (N ms)") sehingga user
         # membaca pekerjaan filter sebagai hasil akhir; kini ditulis
         # SEKALI, SETELAH render (lihat bawah).
-        self._ctx.log("=== Selesai ===")
+        # v2.13.15 (gel-6 D21): baris "=== Selesai ===" DIHAPUS — header
+        # penutup SUDAH dicatat engine ("=== Pipeline DONE ===" → diter-
+        # jemahkan "=== Pipeline selesai ===" via _on_progress); menulis
+        # kedua = ekor log ber-header ganda (pasangan dedupe header awal).
         self._ctx.log(f"Total baris: {rows}")
         self._ctx.log(f"Anomali prioritas: {summary.get('prioritas_count', 0)}")
         cfg_err = summary.get("config_load_error")

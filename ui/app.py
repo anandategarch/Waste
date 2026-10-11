@@ -42,7 +42,14 @@ from PySide6.QtWidgets import (
 from waste_anomaly.logging_setup import setup_logging
 from waste_anomaly.utils import load_config
 
-from .shared import APP_DIR, APP_TITLE, APP_VERSION, bundle_res_dir, fmt_id
+from .shared import (
+    APP_DIR,
+    APP_TITLE,
+    APP_VERSION,
+    LOG_RUN_LINES,
+    bundle_res_dir,
+    fmt_id,
+)
 from .state import AppContext
 from .theme import QSS
 from .view_anomali import AnomaliView
@@ -172,7 +179,8 @@ tinggi penuh.</li>
 <p><b>Hover (arahkan mouse &amp; diamkan)</b> di: judul kolom tabel, label metrik pop-up,
 chip sinyal S1–S12, kartu KPI, dan kontrol filter — muncul penjelasan singkat
 bahasa sehari-hari (mis. "% to BOM = waste dibanding penjualan").</p>
-<p><b>Ekspor</b>: tombol <b>💾 Ekspor Excel</b> di toolbar (selalu tersedia) —
+<p><b>Ekspor</b>: tombol <b>💾 Ekspor Excel</b> di toolbar (aktif setelah
+pipeline menghasilkan data — sebelum itu tombol nonaktif) —
 laporan lengkap termasuk sheet analisa (Waste per Hari, Money View, Data Quality).</p>
 <p>Semua teks dirancang anti-terpotong: teks panjang otomatis berpindah
 baris; tabel tanpa cap baris.</p>
@@ -183,6 +191,23 @@ baris; tabel tanpa cap baris.</p>
 # ui.app._HELP_HTML; angka ambang dari config saat modul dimuat —
 # sama seperti ctx aplikasi yang memuat config sekali di startup).
 _HELP_HTML = _build_help_html(load_config())
+
+
+def _adaptive_min_height(screen_h: int | None) -> int:
+    """v2.13.15 (gel-6 D30) — tinggi-minimum jendela ADAPTIF LAYAR.
+
+    Dulu literal 700px: di layar pendek (netbook 1024×600, VM dengan
+    taskbar — available ±648) minimum MELEBIHI tinggi layar → jendela
+    tak bisa dimuat penuh (titlebar di luar jangkauan, layout terpotong;
+    audit D30 "jendela min 700px melebihi layar pendek"). Formula:
+    max(560, min(700, screen_h − 80)) — layar biasa tetap 700, layar
+    pendek turun sampai lantai 560 (layout masih layak: toolbar + bar
+    kontrol + KPI + ≥ 3 baris tabel + status bar); None (screen tak
+    diketahui) = 700 (default lama). Dikunci test_v21315 (formula) +
+    test_v280 (dipakai MainWindow)."""
+    if screen_h is None:
+        return 700
+    return max(560, min(700, screen_h - 80))
 
 
 class MainWindow(QMainWindow):
@@ -202,13 +227,17 @@ class MainWindow(QMainWindow):
 
         # Ukuran awal: clamp ke layar (M15) + posisi tengah
         screen = self.screen().availableGeometry() if self.screen() else None
+        # v2.13.15 (gel-6 D30): minimum TINGGI adaptif layar — helper
+        # _adaptive_min_height (dulu literal 700px melebihi layar pendek;
+        # lebar minimum 1024 tetap — tabel lebar by design).
+        min_h = _adaptive_min_height(screen.height() if screen else None)
         if screen is not None:
             w = min(1500, max(1024, screen.width() - 100))
-            h = min(900, max(700, screen.height() - 80))
+            h = min(900, max(min_h, screen.height() - 80))
             self.resize(w, h)
             self.move(max(0, (screen.width() - w) // 2),
                       max(0, (screen.height() - h) // 2))
-        self.setMinimumSize(1024, 700)
+        self.setMinimumSize(1024, min_h)
 
         self._build_toolbar()
         self._build_body()
@@ -237,12 +266,21 @@ class MainWindow(QMainWindow):
         bar.addWidget(sep)
 
         act_export = QAction("💾 Ekspor Excel", self)
-        act_export.setToolTip("Simpan laporan Excel (6 sheet inti + sheet analisa)")
+        act_export.setToolTip(
+            "Simpan laporan Excel (6 sheet inti + sheet analisa)\n"
+            "Aktif setelah pipeline menghasilkan data (tab Pipeline).")
         act_export.triggered.connect(self._export_excel)
         # v2.13.14 (gel-5 D24): Ctrl+E = ekspor — padanan keyboard tombol
         # toolbar (tetap aktif walau toolbar disembunyikan; QKeySequence
         # literal aman — pola act_help F1 gel-1).
         act_export.setShortcut(QKeySequence("Ctrl+E"))
+        # v2.13.15 (gel-6 D16): tombol NONAKTIF sampai ada data — dulu
+        # tampak siap-siap SEJAK first-run padahal ctx.df masih None:
+        # klik = dialog "Belum ada data" (janji kosong; audit D16 "tombol
+        # Export tampak siap padahal tanpa data"). Di-enable oleh
+        # _on_data_ready saat dataset non-kosong (dan dikembalikan ke
+        # keadaan-dengan-data pasca ekspor selesai/gagal).
+        act_export.setEnabled(False)
         bar.addAction(act_export)
         self._act_export = act_export
 
@@ -394,7 +432,10 @@ class MainWindow(QMainWindow):
         self._lbl_perm.setText(
             f"{fmt_id(total)} baris • {fmt_id(n_non)} berstatus non-Normal"
             f" • {fmt_id(n_pp)} prioritas+potensi • run {tstr}")
-        self._act_export.setEnabled(True)
+        # v2.13.15 (gel-6 D16): enable HANYA bila dataset non-kosong —
+        # dataset kosong (df.empty) tetap menonaktifkan (tak ada yang
+        # bisa diekspor; dulu setEnabled(True) tak bersyarat).
+        self._act_export.setEnabled(not df.empty)
         # v2.12.0: dataset baru — pangkas centangan follow-up yang
         # barisnya tak ada lagi (pipeline ulang / file berganti). Stale
         # key tak berbahaya (mask isin), tapi dibuang supaya badge
@@ -495,7 +536,7 @@ class MainWindow(QMainWindow):
         self.ctx.log(f"=== Ekspor Excel → {path} ===")
         self._export_worker = ExportWorker(
             df, path, dict(self.ctx.config), self.ctx.key_akhir,
-            list(self.ctx.log_lines[-200:]), self)
+            list(self.ctx.log_lines[-LOG_RUN_LINES:]), self)
         self._export_worker.set_log(self.ctx.log)
         self._export_worker.done.connect(self._on_export_done)
         self._export_worker.failed.connect(self._on_export_failed)
@@ -506,7 +547,10 @@ class MainWindow(QMainWindow):
 
     def _on_export_done(self, result: dict) -> None:
         self._exporting = False
-        self._act_export.setEnabled(True)
+        # v2.13.15 (gel-6 D16): pulih ke keadaan-dengan-data (bukan True
+        # buta — dataset bisa saja berganti selama ekspor jalan).
+        self._act_export.setEnabled(
+            self.ctx.df is not None and not self.ctx.df.empty)
         if result.get("success"):
             out = result.get("output_path", "")
             n_extra = result.get("extra_sheets_count", 0)
@@ -520,7 +564,10 @@ class MainWindow(QMainWindow):
 
     def _on_export_failed(self, err: str) -> None:
         self._exporting = False
-        self._act_export.setEnabled(True)
+        # v2.13.15 (gel-6 D16): pulih ke keadaan-dengan-data (pola
+        # _on_export_done).
+        self._act_export.setEnabled(
+            self.ctx.df is not None and not self.ctx.df.empty)
         self.ctx.set_status(f"⚠ Ekspor gagal: {err}", "error")
         self.ctx.log(f"!!! Ekspor gagal: {err}")
         QMessageBox.critical(self, "Ekspor Gagal", err)

@@ -332,11 +332,34 @@ class FollowUpView(QWidget):
                 1 for fp in rows[FP_COL].astype(str)
                 if fp in self._ctx.followup_resolved) \
                 if FP_COL in rows.columns else 0
-            done_part = (f" · selesai {fmt_id(n_done)}/{fmt_id(n)}"
-                         if self._ctx.followup_resolved else "")
+            # v2.13.15 (gel-6 C17): SCOPE LABEL DIPISAHKAN — dulu SATU
+            # kalimat mencampur n = jumlah baris TERFILTER funnel lokal
+            # (tampilan) dgn TOTAL gabungan = jumlah TAK TERFILTER
+            # (daftar/ekspor): "0 baris · TOTAL 99" saat funnel aktif =
+            # dua angka beda scope tanpa predikat (audit C17 "label info
+            # Follow Up mencampur scope filter"). Kini funnel aktif →
+            # predikat eksplisit: "N dari M baris daftar tampil (funnel
+            # lokal)" + DUA total dilabeli (tampil vs daftar penuh);
+            # tanpa funnel → kalimat tunggal seperti sebelumnya.
+            n_all = len(disp)
+            if self._hfilters:
+                t_shown = (pd.to_numeric(shown.get("TOTAL"),
+                                         errors="coerce").fillna(0).sum()
+                           if "TOTAL" in shown.columns else 0)
+                scope = (f"{fmt_id(n)} dari {fmt_id(n_all)} baris daftar "
+                         "tampil (funnel lokal — daftar & ekspor tak "
+                         "tersaring)"
+                         f" · TOTAL tampil {fmt_id(t_shown)}"
+                         f" · TOTAL daftar penuh {fmt_id(total)}")
+                done_part = (
+                    f" · selesai {fmt_id(n_done)}/{fmt_id(n_all)} daftar"
+                    if self._ctx.followup_resolved else "")
+            else:
+                scope = f"{fmt_id(n)} baris · TOTAL gabungan {fmt_id(total)}"
+                done_part = (f" · selesai {fmt_id(n_done)}/{fmt_id(n)}"
+                             if self._ctx.followup_resolved else "")
             self._lbl_info.setText(
-                f"{fmt_id(n)} baris · TOTAL gabungan {fmt_id(total)}"
-                + done_part
+                scope + done_part
                 + (f" · pembanding: {label_b}" if label_b else ""))
             self._btn_export.setEnabled(True)
             self._btn_clear.setEnabled(True)

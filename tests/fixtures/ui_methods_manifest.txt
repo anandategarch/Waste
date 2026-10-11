@@ -1,6 +1,7 @@
 app.py::MainWindow
 app.py::_qt_excepthook
 app.py::main
+app.py::_adaptive_min_height
 app.py::_build_help_html
 followup_table.py::FollowupTableMixin
 models.py::PandasTableModel

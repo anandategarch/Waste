@@ -108,10 +108,21 @@ class TestHapusLimaView:
             win.close()
 
     def test_ukuran_minimum_window_masih_1024x700(self):
+        # v2.13.15 (gel-6 D30 — ditulis ulang jujur): minimum TINGGI kini
+        # ADAPTIF layar (dulu literal 700px — MELEBIHI tinggi layar pendek:
+        # netbook 1024×600 / VM available 1366×648 → jendela tak termuat
+        # penuh, audit D30). Kontrak baru: lebar tetap 1024; tinggi =
+        # max(560, min(700, available-80)) — di layar biasa tetap 700,
+        # di layar pendek turun sampai lantai 560. Batas atas 700 dipin
+        # supaya layar tinggi TIDAK memaksa jendela raksasa.
         win = _make_window()
         try:
             assert win.minimumWidth() == 1024
-            assert win.minimumHeight() == 700
+            assert 560 <= win.minimumHeight() <= 700
+            screen = win.screen().availableGeometry() if win.screen() else None
+            if screen is not None:
+                expect = max(560, min(700, screen.height() - 80))
+                assert win.minimumHeight() == expect
         finally:
             win.close()
 

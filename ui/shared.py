@@ -43,8 +43,19 @@ def bundle_res_dir() -> Path:
     return _bundle_dir()
 
 
-APP_VERSION = "2.13.14"
+APP_VERSION = "2.13.15"
 APP_TITLE = "Waste Anomaly Detection"
+
+# v2.13.15 (gel-6 D11) — SATU AMBANG BARIS LOG RUN untuk SEMUA penampang
+# (panel log tab Pipeline, memori ctx.log_lines, sheet "Log Run" ekspor).
+# Dulu TIGA nilai beda-beda tanpa nama: panel 2000 blok (view_pipeline
+# setMaximumBlockCount), memori 500 (state.py AppContext.log), ekspor 200
+# baris terakhir (app.py slice [-200:]) — baris yang TERLIHAT di panel
+# bisa tak ikut terekspor + ambang-ambang itu tak pernah bisa dijumlah
+# (audit D11: "tiga ambang log beda 2000/500/200"). Rotasi FILE log
+# (logs/waste_anomaly.log, 1 MB × 3 — logging_setup) TETAP terpisah:
+# level sadar berbeda (byte-based file app-error log, bukan baris run).
+LOG_RUN_LINES = 2000
 
 
 # ============================================================

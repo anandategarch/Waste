@@ -23,7 +23,7 @@ from pathlib import Path
 import pandas as pd
 from PySide6.QtCore import QObject, Signal
 
-from .shared import _apply_filters
+from .shared import LOG_RUN_LINES, _apply_filters
 from waste_anomaly.followup import (
     fingerprint_series,
     load_followup_keys,
@@ -460,8 +460,11 @@ class AppContext(QObject):
     # ------------------------------------------------------------
     def log(self, msg: str) -> None:
         self.log_lines.append(str(msg))
-        if len(self.log_lines) > 500:
-            del self.log_lines[: len(self.log_lines) - 500]
+        # v2.13.15 (gel-6 D11): SATU konstanta ambang lintas penampang log
+        # run (panel / memori / ekspor) — dulu angka 500 lokal di sini vs
+        # 2000 panel vs 200 ekspor (audit D11: tiga ambang beda).
+        if len(self.log_lines) > LOG_RUN_LINES:
+            del self.log_lines[: len(self.log_lines) - LOG_RUN_LINES]
         self.log_line.emit(str(msg))
 
     def set_status(self, text: str, kind: str = "running") -> None:

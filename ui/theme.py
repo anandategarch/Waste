@@ -13,6 +13,14 @@ C_TEXT_MUTED = "#64748b"    # teks sekunder
 C_ACCENT = "#0f766e"         # teal — tombol aksi utama
 C_ACCENT_HOVER = "#115e59"
 
+# v2.13.15 (gel-6 C21): teks TAB NON-AKTIF — dulu C_TEXT_MUTED (#64748b,
+# slate-500) di atas latar tab #e2e8f0 = kontras 3,1:1 < WCAG AA 4,5:1
+# (label tab terbaca kabur di layar kecil/low-vision). slate-600 #475569
+# = kontras ±6,1:1 (≥ AA; dihitung fungsi luminance relatif di
+# test_v21315). Konstanta bernama supaya perubahan kontras terlihat
+# sebagai keputusan a11y, bukan warna ajaib.
+C_TAB_IDLE_FG = "#475569"   # slate-600 — teks tab non-aktif (WCAG AA)
+
 # Status colors (match charts.py + shared.py lama) — (fg, bg tint)
 STATUS_COLORS: dict[str, tuple[str, str]] = {
     "Prioritas Tinggi": ("#dc2626", "#fef2f2"),
@@ -126,7 +134,7 @@ QTableView::item {{ padding: 3px 8px; }}
 QTabWidget::pane {{ border: 1px solid {C_BORDER}; border-radius: 6px; background: {C_BG}; top: -1px; }}
 QTabBar::tab {{
     background: #e2e8f0;
-    color: {C_TEXT_MUTED};
+    color: {C_TAB_IDLE_FG};
     padding: 7px 10px;
     margin-right: 2px;
     border-top-left-radius: 6px;

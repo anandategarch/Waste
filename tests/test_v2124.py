@@ -32,7 +32,6 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pandas as pd
-import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel
 
@@ -366,7 +365,19 @@ class TestHariFunnelLokal:
     def _view(self):
         from ui.view_hari import HariView
         app = _qapp()
-        ctx = _ctx_dataset(_df_bandung())
+        # v2.13.15 (gel-6 C12 — ditulis ulang jujur): _df_bandung TIDAK
+        # memiliki kolom BUKTI HARI — dulu tabel Hari merender 0 baris +
+        # pesan menyesatkan "0 anomali lolos filter" (persis audit C12:
+        # kolom bukti absen disalahkan ke filter); test lama tetap hijau
+        # karena hanya membaca HEADER model dari frame kosong. Kini
+        # dataset tanpa BUKTI HARI = pesan jujur + tabel None
+        # (early-return) → fixture ini memakai salinan ber-BUKTI HARI
+        # supaya premis aslinya (SEMUA kolom tampak ber-funnel) teruji
+        # pada tabel yang benar-benar merender baris (2 anomali ber-bukti).
+        df = _df_bandung().assign(**{
+            "BUKTI HARI": ["YES", "YES", "NO", "NO"],
+        })
+        ctx = _ctx_dataset(df)
         view = HariView(ctx)
         view.show()
         view.refresh()
@@ -588,7 +599,6 @@ class TestPeriodeFunnelHalaman:
 
 class TestUiBersihTanpaKalimatPenjelas:
     def _all_views(self):
-        from ui.state import AppContext
         from ui.view_anomali import AnomaliView
         from ui.view_hari import HariView
         from ui.view_followup import FollowUpView
@@ -608,7 +618,6 @@ class TestUiBersihTanpaKalimatPenjelas:
     def test_popup_fullscreen_tanpa_hint(self):
         """Dialog layar penuh Anomali/Hari: hint dihapus, tombol kembali
         + judul (Esc = kembali) tetap ada."""
-        from ui.state import AppContext
         from ui.view_anomali import AnomaliView
         app = _qapp()
         ctx = _ctx_dataset(_df_bandung())

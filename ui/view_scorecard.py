@@ -340,6 +340,16 @@ class ScorecardView(QWidget):
         wl.addWidget(self._lbl_weekday)
         self._weekday_table = DataTable(wcard)
         self._weekday_table.setMinimumHeight(120)
+        # v2.13.15 (gel-6 C6): funnel kartu kalender di-AKTIFKAN — dulu
+        # plumbing funnel weekday ADA di _lfilters/_page_apply/_apply_local
+        # tapi setup_header_filters TAK PERNAH dipanggil utk tabel ini:
+        # tak ada ikon funnel = filter tak bisa dibuka (audit C6 "funnel
+        # kartu kalender/sistemik mati + docstring menyesatkan" — docstring
+        # modul menjanjikan "SEMUA kolom ber-funnel"). Skip () — semua
+        # kolom kecil (HARI/RATA/MEDIAN) layak difilter.
+        self._weekday_table.setup_header_filters(
+            {}, self._page_apply("weekday"), self._page_state("weekday"),
+            all_cols=True, skip=())
         wl.addWidget(self._weekday_table, 1)
         sl.addWidget(wcard, 1)
 
@@ -384,6 +394,11 @@ class ScorecardView(QWidget):
         scl.addWidget(self._lbl_sistemik)
         self._sistemik_table = DataTable(scard)
         self._sistemik_table.setMinimumHeight(80)
+        # v2.13.15 (gel-6 C6): funnel kartu sistemik di-AKTIFKAN (pasangan
+        # kartu kalender — alasan sama; plumbing sudah ada sejak v2.12.4).
+        self._sistemik_table.setup_header_filters(
+            {}, self._page_apply("sistemik"), self._page_state("sistemik"),
+            all_cols=True, skip=())
         scl.addWidget(self._sistemik_table, 1)
         sl.addWidget(scard, 1)
         rl.addWidget(side, 2)
@@ -457,6 +472,17 @@ class ScorecardView(QWidget):
     # ------------------------------------------------------------
 
     def _on_data_ready(self) -> None:
+        # v2.13.15 (gel-6 C19): tutup pop-up drill rincian cabang yang
+        # masih terbuka — drill menampilkan salinan dataset LAMA; tanpa
+        # ini angka lama terpampang di atas tabel dataset baru sampai
+        # user membuka drill lain (pola pop-up Anomali yang di-hide saat
+        # render; drill Banding Periode ditutup sejak gel-1 — audit C19
+        # "drill Scorecard basi saat re-run dataset"). Cache drill ikut
+        # dikosongkan (kunci memuat data_version — entri lama tak bisa
+        # kena lagi; kosongkan = bebaskan memori, pola _memo_ver=None).
+        if self._drill is not None and self._drill.isVisible():
+            self._drill.hide()
+        self._drill_cache.clear()
         self._dirty = True
         self._memo_ver = None
         if self.isVisible():
@@ -591,11 +617,13 @@ class ScorecardView(QWidget):
         if wk is None or wk.empty:
             self._lbl_weekday.setText(
                 "Nama bulan file tidak terbaca — pola hari kalender butuh "
-                "bulan+tahun di nama file (mis. WASTE_SEPTEMBER_2026).")
+                "bulan+tahun di nama file (mis. WASTE_SEPTEMBER_2026)."
+                + self._filtered_suffix("weekday", wk))
         else:
             self._lbl_weekday.setText(
                 f"Bulan berjalan: {label} — hari dengan rata-rata waste "
-                "terbesar otomatis terlihat (klik judul utk sort).")
+                "terbesar otomatis terlihat (klik judul utk sort)."
+                + self._filtered_suffix("weekday", wk))
 
         sysd = self._apply_local("sistemik", m["sistemik"])
         self._sistemik_table.model().set_tooltip_map(
@@ -605,7 +633,17 @@ class ScorecardView(QWidget):
             self._lbl_sistemik.setText(
                 "0 hari sistemik bulan ini — semua lonjakan bersifat "
                 "lokal per cabang (itu sendiri informasi: tidak ada "
-                "kejadian bersama).")
+                "kejadian bersama)."
+                + self._filtered_suffix("sistemik", sysd))
+        else:
+            # v2.13.15 (gel-6 C6): jumlah hari sistemik dinyatakan EKSPLISIT
+            # — dulu label dibiarkan KOSONG saat ada hari sistemik (tanpa
+            # hitungan, kartu hanya tabel); hitungan membuat efek funnel
+            # kartu ini TERBACA (pola label kartu money).
+            self._lbl_sistemik.setText(
+                f"{fmt_id(len(sysd))} hari sistemik — naik serentak di "
+                "banyak cabang (klik judul utk sort)."
+                + self._filtered_suffix("sistemik", sysd))
 
         dq = self._apply_local("dq", m.get("dq"))
         self._dq_table.model().set_tooltip_map(
@@ -712,7 +750,12 @@ class ScorecardView(QWidget):
 
     def _on_page_filter(self, page: str, col: str, values) -> None:
         """Menu funnel header tabel halaman `page` → saring TAMPILAN tabel
-        itu saja (bahan memo tersimpan — tanpa hitung ulang)."""
+        itu saja (bahan memo tersimpan — tanpa hitung ulang).
+
+        v2.13.15 (gel-6 C6): kartu kalender/sistemik kini ber-funnel —
+        label kartu diperbarui LANGSUNG pasca apply (suffix jumlah
+        tampil) supaya efek filter terbaca tanpa menunggu refresh
+        berikutnya (pola suffix label kartu money)."""
         f = self._lfilters.setdefault(page, {})
         if values:
             f[col] = list(values)
@@ -725,10 +768,55 @@ class ScorecardView(QWidget):
                  "dq": self._dq_table,
                  "trend": self._trend_table}[page]
         if isinstance(src, pd.DataFrame) and not src.empty:
-            table.set_dataframe(self._apply_local(page, src))
+            shown = self._apply_local(page, src)
+            table.set_dataframe(shown)
+            if page in ("weekday", "sistemik"):
+                self._refresh_card_count_label(page, shown)
         self._ctx.set_status(
             "⧩ Filter tampilan diterapkan di kartu ini — angka analisa "
             "tak berubah", "done")
+
+    def _filtered_suffix(self, page: str, shown) -> str:
+        """v2.13.15 (gel-6 C6): suffix label kartu weekday/sistemik saat
+        funnel lokal aktif — "tersaring: N dari M tampil" (pola label
+        kartu money; M = bahan memo TAK tersaring supaya pengguna tahu
+        berapa yang disembunyikan)."""
+        if not self._lfilters.get(page):
+            return ""
+        src = self._memo.get(page)
+        total = len(src) if isinstance(src, pd.DataFrame) else 0
+        n = len(shown) if shown is not None else 0
+        return f" · tersaring: {fmt_id(n)} dari {fmt_id(total)} tampil."
+
+    def _refresh_card_count_label(self, page: str, shown) -> None:
+        """v2.13.15 (gel-6 C6): perbarui label kartu pasca apply funnel
+        (jalur menu — tanpa menunggu _refresh penuh)."""
+        m = self._memo
+        if page == "weekday":
+            label = m.get("label") or ""
+            if shown is None or shown.empty:
+                self._lbl_weekday.setText(
+                    "Nama bulan file tidak terbaca — pola hari kalender "
+                    "butuh bulan+tahun di nama file (mis. "
+                    "WASTE_SEPTEMBER_2026)."
+                    + self._filtered_suffix("weekday", shown))
+            else:
+                self._lbl_weekday.setText(
+                    f"Bulan berjalan: {label} — hari dengan rata-rata "
+                    "waste terbesar otomatis terlihat (klik judul utk "
+                    "sort)." + self._filtered_suffix("weekday", shown))
+        elif page == "sistemik":
+            if shown is None or shown.empty:
+                self._lbl_sistemik.setText(
+                    "0 hari sistemik bulan ini — semua lonjakan bersifat "
+                    "lokal per cabang (itu sendiri informasi: tidak ada "
+                    "kejadian bersama)."
+                    + self._filtered_suffix("sistemik", shown))
+            else:
+                self._lbl_sistemik.setText(
+                    f"{fmt_id(len(shown))} hari sistemik — naik serentak "
+                    "di banyak cabang (klik judul utk sort)."
+                    + self._filtered_suffix("sistemik", shown))
 
     def _lfilters_state(self, page: str, col: str):
         v = self._lfilters.get(page, {}).get(col)

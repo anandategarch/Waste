@@ -195,7 +195,16 @@ def _run_pipeline(
     _log(f"=== Waste Anomaly Pipeline START ===", 0)
     _log(f"Workbook: {workbook_path}", 1)
     _log(f"Key Akhir: {key_akhir} (hanya hari 1..{key_akhir} dipakai)", 2)
-    _log(f"Output: {output_path} (in-memory result — file tidak ditulis otomatis)", 3)
+    # v2.13.15 (gel-6 D21): baris Output JUJUR — dulu saat caller TIDAK
+    # memberi output_path (jalur UI), placeholder Path("output")/default
+    # ikut dicetak: "Output: output/Waste_Anomaly_Report.xlsx (in-memory
+    # result — file tidak ditulis otomatis)" — path yang TIDAK pernah
+    # ditulis; user mencari file yang tak ada (audit D21: "baris Output
+    # membingungkan"). Kini tanpa param → "—" (tidak ada tujuan file);
+    # dgn param → path eksplisit itu (folder tetap dibuat, hasil tetap
+    # in-memory — pipeline tidak menulis file Excel sejak v2.2).
+    _out_shown = str(output_path) if output_path_provided else "—"
+    _log(f"Output: {_out_shown} (in-memory result — file tidak ditulis otomatis)", 3)
 
     # Hindari side-effect: folder output hanya dibuat bila caller eksplisit
     # memberikan output_path (pipeline sendiri tidak menulis file apa pun).

@@ -200,7 +200,13 @@ _SUMMARY_SPECS: list[tuple[str, tuple[str, ...], object]] = [
     ("Total waste sebulan", ("TOTAL",), "_num0"),
     ("Puncak sehari", ("MAX",), "_peak"),
     ("vs penjualan (BOM)", ("% to BOM",), "_pct"),
-    ("vs cabang lain (median)", ("TOTAL / PEER MEDIAN",), "_ratio"),
+    # v2.13.15 (gel-6 A18): label SPESIFIK "(sebulan)" — pop-up ini
+    # memuat DUA median pembanding beda definisi: rasio ini dihitung vs
+    # PEER MEDIAN TOTAL (median TOTAL sebulan cabang lain) sementara
+    # daftar lengkap menampilkan PEER MEDIAN MAX (median puncak PER
+    # HARI cabang lain); label generik "vs cabang lain (median)"
+    # membuat keduanya dibaca sebagai angka sama (audit A18).
+    ("vs median cabang lain (sebulan)", ("TOTAL / PEER MEDIAN",), "_ratio"),
     ("vs bulan lalu", ("PERUBAHAN %",), "_delta"),
     ("Peringkat waste cabang", ("RANGKING WASTE",), "_raw"),
 ]
@@ -267,7 +273,8 @@ def _summary_rows(rec: pd.Series) -> list[tuple[str, str, str]]:
                 n = _rec_val(rec, "PEER COUNT")
                 if n is not None:
                     try:
-                        shown += f" (median {fmt_id(int(float(n)))} cabang)"
+                        shown += (f" (median sebulan "
+                                  f"{fmt_id(int(float(n)))} cabang)")
                     except (TypeError, ValueError):
                         pass
         elif how == "_delta":
@@ -536,6 +543,18 @@ class DetailPanel(Card):
         # (audit A17: box kosong + potensi window liar bila ter-show).
         _FULL_SKIP = ("ANOMALY SCORE", "ANOMALY STATUS", "NAMA RESTO",
                       "NAMA BARANG", "ANOMALY REASONS")
+        # v2.13.15 (gel-6 A18): sufiks scope kolom median pembanding di
+        # daftar lengkap — "PEER MEDIAN MAX" (median puncak PER HARI
+        # cabang lain) vs "PEER MEDIAN TOTAL" (median TOTAL SEBULAN)
+        # tampil bersebelahan dgn nama mirip; tanpa pembeda dua baris
+        # dibaca sebagai angka sama sekadar beda nama (audit A18: dua
+        # "median cabang lain" beda definisi dalam satu pop-up).
+        _FULL_SCOPE: dict[str, str] = {
+            "PEER MEDIAN TOTAL": " — median cabang lain sebulan",
+            "PEER MEDIAN MAX": " — median cabang lain per hari (puncak)",
+            "PEER MEDIAN (AKTIF)": " — median cabang lain sebulan "
+            "(hanya cabang yang punya waste)",
+        }
         full_cols = [col for col in DETAIL_COLS
                      if col not in _FULL_SKIP and col in rec.index]
         n_full = len(full_cols)
@@ -552,7 +571,8 @@ class DetailPanel(Card):
             fl.setSpacing(4)
             fl.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
             for col in full_cols:
-                key = QLabel(f"{col}:", metrics)
+                key = QLabel(
+                    f"{col}{_FULL_SCOPE.get(col, '')}:", metrics)
                 key.setStyleSheet("color:#64748b;")
                 # v2.9.0: label metrik + nilai dapat tooltip kamus istilah
                 tip = COLUMN_TOOLTIPS.get(col)

@@ -291,7 +291,11 @@ class TestStaleResultMarker:
             summary = {"key_akhir": 31, "total_rows": 1}
             win.ctx.set_dataset(df, summary)
             pv._has_result = True
-            pv._result_version = win.ctx.data_version
+            # v2.13.15 (gel-6 B13 — baris dihapus jujur): penugasan
+            # pv._result_version pernah ada di sini untuk meniru state
+            # sesuai-lama; field itu dead state (ditulis, tak pernah
+            # dibaca) dan dihapus dari view_periode — penanda stale
+            # tinggal _dirty + data_version (kontrak v2.10.0 utuh).
             pv._lbl_status.setText("✓ 2 bulan pembanding aktif.")
             # ganti tab → data sama → tanpa warning palsu
             pv.on_shown()

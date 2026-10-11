@@ -262,7 +262,12 @@ class PeriodeView(QWidget):
         # Kontrak lazy-render + stale-result (pola lama dipertahankan).
         self._dirty = True
         self._has_result = False
-        self._result_version: tuple[int, int] | None = None
+        # v2.13.15 (gel-6 B13): field _result_version DIHAPUS — dead
+        # state pola v2.13.8: ditulis tiap _refresh_result tapi TIDAK
+        # PERNAH dibaca konsumen mana pun (stale-result ditangani
+        # _has_result + data_version/history_version via _dirty &
+        # _combo_version; grep seluruh repo = 0 pembacaan). Kunci
+        # ketiadaan: test_v21315 (pola test_v2138 dead-field).
         # Daftar file (persisten): [{"path":…, "label":…|None}]
         self._entries: list[dict] = []
         # Cache hasil muat per path (hanya entri SUKSES — entri error
@@ -1239,8 +1244,8 @@ class PeriodeView(QWidget):
                            f"Banding {a.get('label')} vs {b.get('label')}"):
             res = compare_quantity(a, b, top_n=100)
         self._has_result = True
-        self._result_version = (self._ctx.data_version,
-                                self._ctx.history_version)
+        # v2.13.15 (gel-6 B13): penulisan _result_version dihapus bersama
+        # fieldnya (dead state — tak pernah dibaca; lihat komentar __init__).
         # v2.10.2: bahan drill-down pop-up — A/B/hasil TERAKHIR dirender.
         self._a, self._b, self._res = a, b, res
         # v2.10.2: bagikan pilihan baseline ke view lain (tabel Anomali —

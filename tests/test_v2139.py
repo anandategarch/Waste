@@ -214,15 +214,20 @@ class TestPopupRingkas:
         panel = _panel(_full_df().iloc[0])
         texts = _labels(panel)
         assert "Ringkasan" in texts
+        # v2.13.15 (gel-6 A18 — ditulis ulang jujur): label "vs cabang
+        # lain (median)" kini "vs median cabang lain (sebulan)" — pop-up
+        # memuat dua median pembanding beda definisi (TOTAL sebulan vs
+        # puncak per hari); label lama generik = ambigu.
         for lbl in ("Total waste sebulan:", "Puncak sehari:",
-                    "vs penjualan (BOM):", "vs cabang lain (median):",
+                    "vs penjualan (BOM):",
+                    "vs median cabang lain (sebulan):",
                     "vs bulan lalu:", "Peringkat waste cabang:",
                     "Jenis & alasan catatan:"):
             assert lbl in texts, f"label ringkasan hilang: {lbl}"
         assert "12.470 GR" in texts
         assert "8.000 di tanggal 17" in texts
         assert "1,34%" in texts
-        assert "2,4× (median 9 cabang)" in texts
+        assert "2,4× (median sebulan 9 cabang)" in texts
         assert "+35,2% — bulan lalu 9.220" in texts
         assert "WASTE · Kualitas Internal" in texts
 
@@ -314,7 +319,7 @@ class TestPopupRingkas:
         assert "100 GR" in texts
         assert "50 di tanggal 3" in texts
         assert "vs penjualan (BOM):" not in texts
-        assert "vs cabang lain (median):" not in texts
+        assert "vs median cabang lain (sebulan):" not in texts
         assert "vs bulan lalu:" not in texts
 
     def test_peta_hari_dan_tindak_lanjut_tetap_ada(self):
@@ -381,4 +386,4 @@ class TestVersi:
         from waste_anomaly.utils import load_config
         from ui.shared import APP_VERSION
         cfg = load_config()
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.13.14"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.13.15"
