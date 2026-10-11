@@ -43,7 +43,7 @@ def bundle_res_dir() -> Path:
     return _bundle_dir()
 
 
-APP_VERSION = "2.13.9"
+APP_VERSION = "2.13.10"
 APP_TITLE = "Waste Anomaly Detection"
 
 

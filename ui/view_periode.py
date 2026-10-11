@@ -1020,21 +1020,43 @@ class PeriodeView(QWidget):
         """Bahan halaman + mask isin funnel lokal → SIAP set_dataframe.
 
         FU page: bahan (df, vis) → kembalikan (masked, vis); halaman lain:
-        kembalikan df masked. Tabel banding ≤ ratusan baris — mask murah."""
+        kembalikan df masked. Tabel banding ≤ ratusan baris — mask murah.
+
+        v2.13.10 (gel-1 B1+B12): kolom ✓ CHECK_COL SELALU di-re-komputasi
+        dari ctx.followup_set() + __FPS pada SEMUA jalur (masked maupun
+        tidak) — SATU TITIK KEBENARAN. Dulu hanya _on_followup_changed
+        yang memutasi df model (salinan mask) sementara sumber _page_src
+        tak diupdate → ganti/lepas funnel = re-mask dari sumber BASI →
+        ✓ tampil tercentang padahal baris sudah dikeluarkan dari follow-
+        up (kebalikan kebenaran; audit B1). df[m].copy() eksplisit: hasil
+        slice membawa _is_copy — assignment kolom ✓ di salinan memicu
+        SettingWithCopyWarning (audit B12; model df kini selalu salinan
+        bersih)."""
         src = self._page_src.get(page)
         fu = page in _FU_PAGES
         if fu and isinstance(src, tuple):
             df, vis = src[0], src[1]
         else:
             df, vis = src, None
-        pf = self._pfilters.get(page) or {}
-        if not isinstance(df, pd.DataFrame) or not pf:
+        if not isinstance(df, pd.DataFrame):
             return (df, vis) if fu else df
-        m = pd.Series(True, index=df.index)
-        for col, vals in pf.items():
-            if col in df.columns and vals:
-                m &= df[col].isin(vals)
-        out = df[m]
+        pf = self._pfilters.get(page) or {}
+        if pf:
+            m = pd.Series(True, index=df.index)
+            for col, vals in pf.items():
+                if col in df.columns and vals:
+                    m &= df[col].isin(vals)
+            # .copy() eksplisit — hasil slice dgn _is_copy terpasang;
+            # re-komputasi CHECK_COL di bawah = assignment kolom yang
+            # memicu SettingWithCopyWarning tanpa ini (audit B12).
+            out = df[m].copy()
+        else:
+            out = df
+        if (fu and not out.empty and CHECK_COL in out.columns
+                and _FPS_COL in out.columns):
+            fset = self._ctx.followup_set()
+            out[CHECK_COL] = [bool(fs) and all(f in fset for f in fs)
+                              for fs in out[_FPS_COL]]
         return (out, vis) if fu else out
 
     # ------------------------------------------------------------
@@ -1212,7 +1234,13 @@ class PeriodeView(QWidget):
     def _on_followup_changed(self) -> None:
         """✓ berubah di mana pun (tab Anomali / banding / massal) →
         segarkan kolom ✓ banding IN-PLACE (dataChanged satu kolom —
-        pola AnomaliView._on_followup_changed; cache fit tak tersentuh)."""
+        pola AnomaliView._on_followup_changed; cache fit tak tersentuh).
+
+        v2.13.10 (gel-1 B1): pemutasiannya kini kosmetik belaka —
+        _page_mask SELALU re-komputasi CHECK_COL dari state saat
+        me-render (satu titik kebenaran); model df selalu salinan
+        bersih (bukan slice ber-_is_copy — tanpa
+        SettingWithCopyWarning)."""
         fset = self._ctx.followup_set()
         for page in _FU_PAGES:
             m = self._tables[page].model()
@@ -1233,6 +1261,14 @@ class PeriodeView(QWidget):
         self._has_result = False
         # v2.10.2: bahan drill ikut dikosongkan (pop-up tak membuka data basi).
         self._a, self._b, self._res = None, None, None
+        # v2.13.10 (gel-1 B2): baseline pembanding ikut DIBERSIHKAN (dua
+        # cabang pemanggil: 'not months' & 'a is None'). Dulu: semua file
+        # pembanding dihapus → tabel banding jujur "Belum ada file
+        # pembanding" TAPI ctx.banding_baseline masih memegang bulan lama
+        # → tab Anomali terus menghitung BULAN LALU/PERUBAHAN vs bulan
+        # yang sudah tidak ada (angka vs hantu; audit B2). Emit
+        # baseline_changed → view pemakai baseline render ulang jujur.
+        self._ctx.set_banding_baseline(None)
         # v2.10.3 (audit): pop-up yang masih terbuka menampilkan tabel data
         # lama — ditutup (drill sudah di-guard _a/_b None, tapi TAMPILAN
         # tabel lamanya tetap menyesatkan bila dibiarkan).

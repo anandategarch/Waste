@@ -186,13 +186,44 @@ class AppContext(QObject):
             self.banding_baseline = b
             self.baseline_changed.emit()
 
+    def _baseline_alive(self, b) -> bool:
+        """v2.13.10 (gel-1 B2/B5) — apakah baseline masih HIDUP di data
+        pembanding saat ini (validasi umur, lapis-2 anti baseline-hantu).
+
+        Aturan IDENTITAS (bukan dict-equality penuh — nilai 'agg' berupa
+        DataFrame: bool(DataFrame) = truth-ambiguous ValueError, crash!):
+        - objek Tipikal SAAT INI (identitas objek — set_history baru
+          membuat objek Tipikal baru → objek lama dianggap usang);
+        - bulan file: 'path' masih ada di daftar bulan OK saat ini
+          (file dihapus dari daftar pembanding → baseline mati);
+        - dict suntetis TANPA 'path' (fixture test v2.12.3/v2.10.2 yang
+          menyuntik baseline langsung) → dipercaya apa adanya.
+        Bentuk tak dikenal → hidup (jangan mematikan begitu saja)."""
+        if not isinstance(b, dict):
+            return True
+        if b is self.history_typical:
+            return True
+        if "path" not in b:
+            return True  # fixture suntetis — kompatibilitas 31+ test lama
+        for m in self.history_months_ok():
+            if isinstance(m, dict) and m.get("path") == b.get("path"):
+                return True
+        return False
+
     def banding_baseline_effective(self) -> dict | None:
         """Baseline utk kolom perubahan view Anomali (v2.10.2).
 
         Prioritas: pilihan combo Banding Periode (bila user sudah membuka
-        tab itu) → Tipikal (≥ 2 bulan) → bulan pembanding TERBARU → None."""
-        if self.banding_baseline is not None:
-            return self.banding_baseline
+        tab itu) → Tipikal (≥ 2 bulan) → bulan pembanding TERBARU → None.
+        v2.13.10 (gel-1 B2/B5): baseline yang sudah MATI (bulan filenya
+        dihapus dari daftar pembanding / objek Tipikal usang pasca
+        set_history baru — mis. saat view banding tersembunyi, hanya
+        menandai dirty) diabaikan → jatuh ke fallback. Dulu baseline
+        hantu terus dipakai: tab Anomali menghitung BULAN LALU vs bulan
+        yang tak ada lagi (audit B2/B5)."""
+        b = self.banding_baseline
+        if b is not None and self._baseline_alive(b):
+            return b
         months = self.history_months_ok()
         if not months:
             return None

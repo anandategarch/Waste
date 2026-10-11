@@ -29,6 +29,13 @@ alasan + peta hari + tombol tindak lanjut; daftar ±25 kolom lengkap
 kini di balik tombol "▸ Tampilkan semua kolom data" (default sembunyi,
 per-baris). Guard funnel v2.12.5 diperluas ke TEKAN TUNGGAL replay
 (mousePressEvent — lihat widgets.py: bug "klik filter muncul pop-up").
+
+v2.13.10 (gel-1 deep audit): footer AKSI STICKY di DetailPanel —
+tombol tindak lanjut/drill/pembuka kolom lengkap pindah DI LUAR
+QScrollArea (audit V1: CTA dulunya di bawah lipatan gulir pop-up);
+hook _reset_view_controls + reset combo kategori PERUBAHAN di
+_on_clear_filters/refresh (audit A1/A2 — "Hapus SEMUA filter" kini
+benar-benar SEMUA, dataset baru tak mewarisi kategori run lama).
 """
 from __future__ import annotations
 
@@ -287,6 +294,11 @@ class DetailPanel(Card):
     v2.13.9: isi RINGKAS (permintaan user): ringkasan angka kunci →
     sinyal terpicu saja → alasan → peta hari → tindak lanjut → tombol
     pembuka daftar kolom lengkap (default tersembunyi).
+    v2.13.10 (gel-1 V1): susunan dua zona — KONTEN GULIR (ringkasan →
+    sinyal → alasan → peta hari → kolom lengkap) + FOOTER AKSI STICKY
+    di luar QScrollArea (judul seksi tindak lanjut + ☑ Masuk Follow Up
+    + drill fokus + pembuka kolom lengkap) — CTA utama selalu terlihat
+    tanpa menggulir.
     """
 
     # Prompt default — dipakai __init__ DAN clear() (V26-L12)
@@ -320,13 +332,32 @@ class DetailPanel(Card):
         self._content = QWidget()
         self._scroll.setWidget(self._content)
 
+        # v2.13.10 (gel-1 V1): footer AKSI STICKY — DI LUAR QScrollArea.
+        # Audit V1 (geometri terukur): tombol "☑ Masuk Follow Up"
+        # (y≈623) & pembuka kolom lengkap (y≈698) dulunya anak KONTEN
+        # GULIR di bawah lipatan viewport pop-up (578px) — CTA utama tak
+        # terlihat sampai user menggulir melewati peta hari (VLM: "tidak
+        # ada tombol aksi terlihat"). Footer menampung: judul seksi +
+        # tombol follow-up + baris drill fokus + pembuka kolom lengkap;
+        # yang tetap digulir: ringkasan → sinyal → alasan → peta hari →
+        # kolom lengkap (dibuka → ensureWidgetVisible menggulir otomatis).
+        # Dibangun ulang per show_record (teardown di clear()/show_record
+        # — ref mayat direset lebih dulu, pola v2.13.5).
+        self._actions = QWidget(self)
+        self._actions_lay = QVBoxLayout(self._actions)
+        self._actions_lay.setContentsMargins(4, 0, 4, 0)
+        self._actions_lay.setSpacing(6)
+        lay.addWidget(self._actions)
+
     def clear(self) -> None:
         """Kosongkan panel (V26-L12): df terfilter berubah → record yang
         sedang ditampilkan bisa jadi sudah tidak lolos filter — jangan
         biarkan panel menampilkan data basi (pola teardown show_record).
         v2.13.5: ref tombol follow-up + fp ikut direset (widgetnya
         sudah deleteLater — jangan biarkan handler menyentuh mayat).
-        v2.13.9: ref wadah/tombol kolom-lengkap ikut direset (mayat)."""
+        v2.13.9: ref wadah/tombol kolom-lengkap ikut direset (mayat).
+        v2.13.10 (gel-1 V1): footer AKSI ikut dikosongkan (pola teardown
+        _content — widget mayat tak tersisa)."""
         self._fu_btn = None
         self._cur_fp = None
         self._full_box = None
@@ -339,16 +370,32 @@ class DetailPanel(Card):
                 w = item.widget()
                 if w is not None:
                     w.deleteLater()
+        self._teardown_actions()
+
+    def _teardown_actions(self) -> None:
+        """v2.13.10 (gel-1 V1) — buang semua widget footer AKSI (dipanggil
+        clear() + awal show_record; ref _fu_btn/_more_btn sudah direset
+        PEMANGGIL sebelum panggilan ini — handler tak menyentuh mayat)."""
+        alay = self._actions.layout()
+        if alay is not None:
+            while alay.count():
+                item = alay.takeAt(0)
+                w = item.widget()
+                if w is not None:
+                    w.deleteLater()
 
     def show_record(self, rec: pd.Series) -> None:
         """Render ulang konten detail dari record baris terpilih.
 
         v2.13.9 — desain "hanya yang penting" (permintaan user: pop-up
-        lama menampilkan SEMUA kolom sekaligus — membingungkan). Susunan:
-        chip status + skor → RINGKASAN (±7 angka kunci) → sinyal TERPICU
-        saja (chip merah; jumlah di judul seksi) → alasan → peta hari
-        1-31 → tindak lanjut → tombol "Tampilkan semua kolom data"
-        (±25 baris metrik kini tersembunyi, dibuka bila mau)."""
+        lama menampilkan SEMUA kolom sekaligus — membingungkan). Susunan
+        KONTEN GULIR: chip status + skor → RINGKASAN (±7 angka kunci) →
+        sinyal TERPICU saja (chip merah; jumlah di judul seksi) → alasan
+        → peta hari 1-31 → kolom lengkap (±25 baris metrik tersembunyi,
+        di balik tombol).
+        v2.13.10 (gel-1 V1) — baris TINDAK LANJUT + drill fokus + pembuka
+        kolom lengkap pindah ke footer AKSI STICKY di luar area gulir
+        (CTA utama selalu terlihat tanpa menggulir — audit V1)."""
         # v2.13.5: reset ref tombol follow-up (konten lama dibuang —
         # tombol lama dideleteLater; nilai baru dipasang di bawah).
         self._fu_btn = None
@@ -366,10 +413,15 @@ class DetailPanel(Card):
         else:
             from PySide6.QtWidgets import QVBoxLayout as _VL
             old = _VL(self._content)
+        # v2.13.10 (gel-1 V1): footer aksi ikut dibangun ulang — widget
+        # footer lama dideleteLater (ref direset di atas, mayat tak
+        # tersentuh handler).
+        self._teardown_actions()
 
         lay = old
         lay.setContentsMargins(4, 4, 4, 4)
         lay.setSpacing(10)
+        alay = self._actions_lay   # footer STICKY (di luar scroll)
 
         cabang = fmt_cell(rec.get("NAMA RESTO"))
         item_name = fmt_cell(rec.get("NAMA BARANG"))
@@ -465,7 +517,7 @@ class DetailPanel(Card):
         # Metrik konteks LENGKAP (v2.13.9: kini di balik tombol — dulu
         # QFormLayout ±25 baris tampil SELALU, sumber "aku jadi bingung").
         # Dibangun utuh seperti v2.8.1 (format persen/rasio/teks sama),
-        # lalu disembunyikan; tombol toggle di bagian bawah pop-up.
+        # lalu disembunyikan; tombol toggle ada di footer AKSI (v2.13.10).
         full_box = QWidget()
         fbl = QVBoxLayout(full_box)
         fbl.setContentsMargins(0, 0, 0, 0)
@@ -520,9 +572,22 @@ class DetailPanel(Card):
             "= NILAI; sel merah = hari tersangka"))
         lay.addWidget(self._day_map(rec))
 
-        # Tombol tindak lanjut + drill-down (niat eksplisit — satu-satunya
-        # jalur fokus sejak v2.13.5; klik-2× baris tak lagi memfilter).
-        lay.addWidget(self._section("Tindak lanjut & drill-down dari baris ini"))
+        # v2.13.10 (gel-1 V1): kolom lengkap = item KONTEN GULIR TERAKHIR
+        # (setelah peta hari — data mentah opsional, tak menghalangi CTA).
+        # Dibuka → ensureWidgetVisible otomatis menggulir ke daftarnya.
+        if n_full:
+            lay.addWidget(full_box)
+        lay.addStretch(1)
+
+        # ----------------------------------------------------------
+        # v2.13.10 (gel-1 V1): FOOTER AKSI STICKY — tindak lanjut + drill
+        # fokus + pembuka kolom lengkap DI LUAR QScrollArea (niat
+        # eksplisit — satu-satunya jalur fokus sejak v2.13.5; klik-2×
+        # baris tak lagi memfilter). Dulu baris ini anak KONTEN GULIR di
+        # bawah lipatan viewport pop-up (y≈623-698 vs viewport 578px —
+        # CTA tak terlihat tanpa menggulir; audit V1).
+        # ----------------------------------------------------------
+        alay.addWidget(self._section("Tindak lanjut & drill-down dari baris ini"))
         fp = self._row_fingerprint(rec)
         if fp is not None:
             self._cur_fp = str(fp)
@@ -533,7 +598,7 @@ class DetailPanel(Card):
                 "(tab Follow Up — format rekap siap serah terima petugas).\n"
                 "Sama seperti mencentang kolom ✓ di tabel.")
             self._fu_btn.clicked.connect(self._on_fu_toggle)
-            lay.addWidget(self._fu_btn)
+            alay.addWidget(self._fu_btn)
         btns = QWidget()
         bl = QHBoxLayout(btns)
         bl.setContentsMargins(0, 0, 0, 0)
@@ -554,14 +619,14 @@ class DetailPanel(Card):
                               self._ctx.set_filter("keterangan", v))
             bl.addWidget(b)
         bl.addStretch(1)
-        lay.addWidget(btns)
+        alay.addWidget(btns)
 
-        # v2.13.9 — tombol pembuka kolom lengkap (di paling bawah, SETELAH
-        # tindak lanjut: aksi tetap terlihat tanpa gulir; data mentah =
-        # opsional). Kolom lengkap = semua DETAIL_COLS baris ini.
+        # v2.13.9 — tombol pembuka kolom lengkap (v2.13.10: ikut footer
+        # sticky — aksi tetap terlihat tanpa gulir; data mentah = opsional).
+        # Kolom lengkap = semua DETAIL_COLS baris ini.
         if n_full:
             more = QPushButton(
-                f"▸ Tampilkan semua kolom data ({n_full})", self._content)
+                f"▸ Tampilkan semua kolom data ({n_full})", self._actions)
             more.setToolTip(
                 "Buka / tutup daftar lengkap semua kolom data baris ini.\n"
                 "Dulu daftar ini selalu tampil (±25 baris) — kini "
@@ -574,14 +639,16 @@ class DetailPanel(Card):
             more.setCursor(Qt.CursorShape.PointingHandCursor)
             more.clicked.connect(self._toggle_full)
             self._more_btn = more
-            lay.addWidget(more)
-            lay.addWidget(full_box)
-        lay.addStretch(1)
+            alay.addWidget(more)
 
     def _toggle_full(self) -> None:
         """v2.13.9 — buka/tutup daftar kolom lengkap (teks tombol ikut).
         Baris baru (show_record) selalu mulai TERSEMBUNYI — pop-up "hanya
-        yang penting" adalah keadaan default."""
+        yang penting" adalah keadaan default.
+        v2.13.10 (gel-1 V1): tombol kini di footer sticky — daftar
+        lengkap membuka DI AREA GULIR (bagian bawah konten, setelah peta
+        hari); ensureWidgetVisible menggulir otomatis supaya daftar
+        langsung terlihat begitu dibuka."""
         box = self._full_box
         if box is None:
             return
@@ -596,6 +663,13 @@ class DetailPanel(Card):
                     "Klik utk menyembunyikan kembali daftar kolom lengkap."
                     if show else
                     "Buka / tutup daftar lengkap semua kolom data baris ini.")
+            except RuntimeError:
+                pass
+        if show:
+            # auto-gulir ke daftar yang baru dibuka (tombol di footer —
+            # daftarnya sendiri jauh di bawah lipatan konten).
+            try:
+                self._scroll.ensureWidgetVisible(box)
             except RuntimeError:
                 pass
 
@@ -730,6 +804,8 @@ class DetailDialog(QDialog):
 
     v2.13.9: isi panel RINGKAS (lihat DetailPanel) — kolom lengkap
     di balik tombol "▸ Tampilkan semua kolom data".
+    v2.13.10 (gel-1 V1): tombol aksi di footer sticky panel (selalu
+    terlihat tanpa menggulir).
     """
 
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
@@ -1016,6 +1092,22 @@ class AnomaliView(FollowupTableMixin, QWidget):
         (Pola _on_score_changed — aksi kontrol = refresh langsung.)"""
         self._refresh_table()
 
+    def _reset_view_controls(self) -> None:
+        """v2.13.10 (gel-1 A1+A2) — override hook mixin: reset combo
+        'Kategori PERUBAHAN' ke 'Semua' (index 0).
+
+        Combo itu filter LOKAL view yang di-apply ulang di
+        _refresh_table_impl lewat currentData() — tanpa reset ini:
+        (A1) tombol '✕ Hapus Filter' menjanjikan 'SEMUA' tapi kategori
+        tetap aktif; (A2) dataset baru mewarisi kategori run lama.
+        blockSignals: index berganti memicu currentIndexChanged →
+        _on_change_filter → render — pemanggil (_on_clear_filters /
+        refresh) sudah me-render SETELAH ini; tanpa blok = render ganda
+        (pola _cb_mode HariView.refresh)."""
+        self._cb_change.blockSignals(True)
+        self._cb_change.setCurrentIndex(0)
+        self._cb_change.blockSignals(False)
+
     def on_shown(self) -> None:
         """Kontrak lazy-render: view dibuka setelah data baru / filter basi."""
         if self._dirty:
@@ -1029,6 +1121,11 @@ class AnomaliView(FollowupTableMixin, QWidget):
         self._spin_score.setValue(0)
         self._ctx.score_min = 0
         self._spin_score.blockSignals(False)
+        # v2.13.10 (gel-1 A2): combo 'Kategori PERUBAHAN' ikut direset —
+        # kategori dataset lama bisa tak ada lagi di data baru (tabel
+        # diam-diah hanya menampilkan subset). Pola _cb_mode HariView
+        # — dulu asimetri antar view kembar (HariView reset, ini tidak).
+        self._reset_view_controls()
         self._refresh_kpi()
         self._refresh_table()
 

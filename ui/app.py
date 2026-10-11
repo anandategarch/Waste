@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QIcon
+from PySide6.QtGui import QAction, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -191,6 +191,13 @@ class MainWindow(QMainWindow):
 
         act_help = QAction("❓ Bantuan", self)
         act_help.triggered.connect(self._show_help)
+        # v2.13.10 (gel-1 D1): shortcut F1 — didokumentasikan di README,
+        # banner .bat, dan Bantuan sendiri, tapi TIDAK pernah terpasang
+        # (grep setShortcut|QKeySequence seluruh repo = 0 match; audit
+        # D1: QTest keyClick F1 tidak membuka apa pun). Enum PySide6 =
+        # QKeySequence.StandardKey.HelpContents — nested class, DENGAN
+        # 's' (bukan konstanta modul QtGui.HelpContent).
+        act_help.setShortcut(QKeySequence(QKeySequence.StandardKey.HelpContents))
         bar.addAction(act_help)
 
     def _build_body(self) -> None:

@@ -221,8 +221,18 @@ class FollowupTableMixin:
         (funnel global ctx + funnel lokal view + ambang skor) — pengganti
         tombol 'Hapus Semua Filter' sidebar yang dihapus.
         v2.13.8 (gel-C): klausa day_min/search dihapus — field sudah tak
-        ada (fitur mati sejak v2.12.4; audit D11)."""
+        ada (fitur mati sejak v2.12.4; audit D11).
+        v2.13.10 (gel-1 A1): kontrol filter MILIK VIEW (combo 'Kategori
+        PERUBAHAN' AnomaliView — re-apply via currentData() di
+        _refresh_table_impl) ikut direset PRA-render lewat hook
+        _reset_view_controls() — dulu tooltip menjanjikan 'Hapus SEMUA
+        filter' tapi combo tetap aktif → tabel diam-diah hanya menampilkan
+        satu kategori (tooltip menipu; audit A1)."""
         self._hfilters.clear()
+        # PRA-render: reset kontrol view dulu — nilai combo baru terbaca
+        # benar oleh _refresh_table_impl di bawah (blockSignals di override
+        # mencegah currentIndexChanged memicu render ganda).
+        self._reset_view_controls()
         had_global = bool(self._ctx.active_filters and any(
             v for v in self._ctx.active_filters.values())) \
             or self._ctx.score_min > 0
@@ -232,3 +242,16 @@ class FollowupTableMixin:
         else:
             self._refresh_table()
         self._ctx.set_status("✓ Semua filter dihapus", "done")
+
+    def _reset_view_controls(self) -> None:
+        """v2.13.10 (gel-1 A1) — reset kontrol filter MILIK VIEW (bukan
+        funnel global/lokal); dipanggil _on_clear_filters PRA-render.
+
+        Default NO-OP: mixin dipakai AnomaliView & HariView — hanya
+        AnomaliView punya kontrol filter ekstra (combo 'Kategori
+        PERUBAHAN', filter LOKAL view yang di-apply ulang di
+        _refresh_table_impl). HariView tak terdampak: _cb_mode-nya bukan
+        filter (mode tampilan bukti-hari — reset-nya di refresh()).
+        View pemakai mixin yang menambah kontrol filter cukup override
+        hook ini (pola _cb_mode view_hari)."""
+        return None

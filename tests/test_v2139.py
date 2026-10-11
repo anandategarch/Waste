@@ -319,16 +319,22 @@ class TestPopupRingkas:
 
     def test_peta_hari_dan_tindak_lanjut_tetap_ada(self):
         """Regression: peta hari 1-31, tombol follow-up + drill fokus
-        tetap dirender (tidak ikut 'dirampingkan' hilang)."""
+        tetap dirender (tidak ikut 'dirampingkan' hilang).
+
+        v2.13.10 (gel-1 V1): pencarian tombol diperluas dari _content ke
+        SELURUH panel — tombol tindak lanjut kini tinggal di footer AKSI
+        STICKY di luar QScrollArea (di bawah konten gulir; audit V1:
+        CTA dulunya di bawah lipatan scroll). Maksud test tak berubah:
+        'tombol ter-render di panel pop-up' (peta hari tetap di konten
+        gulir — scope findChildren-nya tetap _content)."""
         panel = _panel(_full_df().iloc[0])
-        from PySide6.QtWidgets import QPushButton
-        day_cells = [l for l in panel._content.findChildren(
-            __import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel)
-            if l.toolTip().startswith("Hari ")]
+        from PySide6.QtWidgets import QLabel, QPushButton
+        day_cells = [l for l in panel._content.findChildren(QLabel)
+                     if l.toolTip().startswith("Hari ")]
         assert len(day_cells) >= 30, "peta hari 1-31 harus utuh"
         red = [l for l in day_cells if "#dc2626" in (l.styleSheet() or "")]
         assert red, "hari tersangka harus disorot merah"
-        btns = [b.text() for b in panel._content.findChildren(QPushButton)]
+        btns = [b.text() for b in panel.findChildren(QPushButton)]
         assert any("Masuk Follow Up" in t for t in btns)
         assert any("Fokus cabang" in t for t in btns)
         assert any("Fokus item" in t for t in btns)
@@ -375,4 +381,4 @@ class TestVersi:
         from waste_anomaly.utils import load_config
         from ui.shared import APP_VERSION
         cfg = load_config()
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.13.9"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.13.10"

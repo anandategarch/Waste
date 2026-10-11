@@ -713,7 +713,7 @@ class TestConfigV2102:
 
     def test_versi_naik(self):
         from ui.shared import APP_VERSION
-        assert APP_VERSION == "2.13.9"  # v2.13.8: gel-C bersih-bersih dead code + mixin
+        assert APP_VERSION == "2.13.10"  # v2.13.10: gel-1 kejujuran interaksi inti
 
 
 # ============================================================
