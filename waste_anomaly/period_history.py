@@ -77,6 +77,51 @@ _MONTH_RE = re.compile(
     re.IGNORECASE,
 )
 
+# v2.13.14 (gel-5 B23) — pola nama file NUMERIK utk deteksi bulan:
+# "REKAP_2026_09.xlsx" (YYYY[_-]MM), "REKAP_202609.xlsx" (YYYYMM), dan
+# "REKAP_09_2026.xlsx" (MM[_-]YYYY — bulan-dulu). Dipakai HANYA bila nama
+# bulan (AGUSTUS/dst.) tidak ditemukan — pola nama-bulan tetap utama.
+# Validasi: bulan 1..12 + tahun wajar 1980..2099 (menolak run digit
+# acak "123456" → bulan 45, atau "REKAP_1430" tahun tak wajar).
+_YM_RE = re.compile(r"(?<!\d)(\d{4})[ \-_.]?(\d{1,2})(?!\d)")
+_MY_RE = re.compile(r"(?<!\d)(\d{1,2})[ \-_.]?(\d{4})(?!\d)")
+_YEAR4_RE = re.compile(r"(?<!\d)(\d{4})(?!\d)")
+
+# Nama bulan Indonesia per nomor (utk label hasil parse numerik).
+_MONTH_NAMES_ID = {
+    1: "Januari", 2: "Februari", 3: "Maret", 4: "April", 5: "Mei",
+    6: "Juni", 7: "Juli", 8: "Agustus", 9: "September", 10: "Oktober",
+    11: "November", 12: "Desember",
+}
+
+
+def _plausible_year(year: int) -> bool:
+    """Tahun wajar utk workbook rekap (1980..2099) — menolak run digit
+    acak yang kebetulan terbaca sebagai tahun (B23, defensif)."""
+    return 1980 <= int(year) <= 2099
+
+
+def _parse_month_numeric(text: str) -> tuple[int, int] | None:
+    """Cari pola (tahun, bulan) NUMERIK di teks — fallback setelah nama
+    bulan tidak ditemukan (v2.13.14 gel-5 B23).
+
+    Urutan percobaan: YYYY-MM ("REKAP_2026_09" / "REKAP202609") lalu
+    MM-YYYY ("REKAP_09_2026"). Return None bila tak ada pola valid
+    (bulan 1..12 + tahun wajar)."""
+    s = str(text or "")
+    m = _YM_RE.search(s)
+    if m is not None:
+        year, month = int(m.group(1)), int(m.group(2))
+        if 1 <= month <= 12 and _plausible_year(year):
+            return (year, month)
+    m = _MY_RE.search(s)
+    if m is not None:
+        month, year = int(m.group(1)), int(m.group(2))
+        if 1 <= month <= 12 and _plausible_year(year):
+            return (year, month)
+    return None
+
+
 # Kontrak kolom agregat pembanding (dipakai UI + test).
 AGG_COLS = ["NAMA RESTO", "NAMA BARANG", "TOTAL", "HARI AKTIF"]
 JENIS_TOTALS_COLS = ["JENIS", "TOTAL"]
@@ -136,22 +181,48 @@ def _parse_month(text: str) -> tuple[int, int] | None:
 
     Return (tahun, bulan) — tahun 0 bila tidak ada. None bila teks tidak
     memuat nama bulan yang dikenal.
+    v2.13.14 (gel-5 B23): tahun yang MENDEDAHI nama bulan ("REKAP 2025
+    SEPTEMBER" — tahun di depan, regex lama hanya menangkap tahun yang
+    MENGIKUTI nama bulan) kini ditangkap lewat scan 4-digit terpisah —
+    dulu (0, 9): label September tapi urutan sort kehilangkan 2025,
+    bulan bertahun tercampur dengan bulan tanpa tahun.
     """
-    m = _MONTH_RE.search(str(text or ""))
+    s = str(text or "")
+    m = _MONTH_RE.search(s)
     if m is None:
         return None
     year = int(m.group(2)) if m.group(2) else 0
+    if year == 0:
+        # Tahun mengejar nama bulan tak ada → cari 4-digit berdiri
+        # sendiri di teks (posisi mana pun, termasuk sebelum nama).
+        for ym in _YEAR4_RE.finditer(s):
+            cand = int(ym.group(1))
+            if _plausible_year(cand):
+                year = cand
+                break
     return (year, _MONTHS[m.group(1).upper()])
 
 
 def month_sort_key(label: str) -> tuple[int, int]:
     """Kunci urut kronologis dari label bulan ("Agustus 2026" → (2026, 8)).
 
-    Label tak terparse → (0, 0) — ditempatkan sebelum bulan yang diketahui
-    (urutan combo stabil; tidak memengaruhi bulan yang valid).
+    v2.13.14 (gel-5 B23): label tak terparse → sentinel (9999, 0) —
+    ditempatkan TERAKHIR (dulu (0, 0) = PERTAMA: satu file bernama
+    aneh "DATA.xlsx" melompat ke atas combo & menggeser semua bulan
+    valid ke bawah — urutan rusak justru oleh data paling tidak
+    informatif; audit B23). 9999 > tahun manusia mana pun — usulan
+    "(99, 0)" di catatan audit KURANG besar (99 < 2025 masih menempatkan
+    label aneh sebelum bulan bertahun). Label numerik tanpa nama bulan
+    ("2026-09") ikut terparse lewat _parse_month_numeric.
     """
-    parsed = _parse_month(label or "")
-    return parsed if parsed is not None else (0, 0)
+    s = str(label or "")
+    parsed = _parse_month(s)
+    if parsed is not None:
+        return parsed
+    num = _parse_month_numeric(s)
+    if num is not None:
+        return num
+    return (9999, 0)
 
 
 def detect_month_label(path: str | os.PathLike) -> str | None:
@@ -160,14 +231,23 @@ def detect_month_label(path: str | os.PathLike) -> str | None:
     Contoh: "REKAP MENTAH_01-31 AGUSTUS 2026_TEGAR.xlsx" → "Agustus 2026";
     "rekap juli 2025.xlsx" → "Juli 2025"; "DATA.xlsx" → None (UI memakai
     nama file sebagai fallback & boleh dikoreksi manual).
+    v2.13.14 (gel-5 B23): nama file NUMERIK kini terdeteksi —
+    "REKAP_2026_09.xlsx" / "REKAP_202609.xlsx" / "REKAP_09_2026.xlsx" →
+    "September 2026" (dulu None → baris "(klik 2× utk beri nama)" +
+    urutan combo rusak oleh label kosong; audit B23).
     """
-    parsed = _parse_month(Path(path).stem)
-    if parsed is None:
-        return None
-    year, month = parsed
-    m = _MONTH_RE.search(Path(path).stem)
-    name = m.group(1).capitalize()
-    return f"{name} {year}" if year else name
+    stem = Path(path).stem
+    parsed = _parse_month(stem)
+    if parsed is not None:
+        year, month = parsed
+        m = _MONTH_RE.search(stem)
+        name = m.group(1).capitalize()
+        return f"{name} {year}" if year else name
+    num = _parse_month_numeric(stem)
+    if num is not None:
+        year, month = num
+        return f"{_MONTH_NAMES_ID[month]} {year}"
+    return None
 
 
 # ============================================================

@@ -43,12 +43,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .shared import fmt_id
+from .shared import baseline_label, fmt_id
 from .state import AppContext
 from .followup_table import FollowupTableMixin
+from .models import COLUMN_TOOLTIPS
 from .view_anomali import DetailDialog, _HF_COLS
 from .widgets import Card, DataTable, KpiCard, WLabel, busy_feedback
-from waste_anomaly.period_history import day_evidence_vs_history
+from waste_anomaly.period_history import (
+    day_evidence_vs_history,
+    month_sort_key,
+)
 from waste_anomaly.followup import CHECK_COL, FP_COL
 
 # Kolom tabel hari-mencurigakan (ramping — detail lengkap di pop-up).
@@ -246,6 +250,10 @@ class HariView(FollowupTableMixin, QWidget):
 
         # Reaksi state — pola lazy H2 (sama dengan AnomaliView).
         self._dirty = True
+        # v2.13.14 (gel-5 A7): flag anti render-ganda set_dataset — pola
+        # AnomaliView (data_ready + filters_changed berpasangan dari
+        # state.set_dataset; render data_ready sudah final).
+        self._skip_filters_once = False
         ctx.data_ready.connect(self._on_data_ready)
         ctx.filters_changed.connect(self._on_filters_changed)
         # v2.10.0: pembanding bulan lalu selesai dimuat → render ulang
@@ -270,10 +278,17 @@ class HariView(FollowupTableMixin, QWidget):
         self._fps_src, self._fps = None, None
         if self.isVisible():
             self.refresh()
+            # A7 (gel-5): render di atas sudah final utk dataset baru —
+            # pasangan filters_changed dari set_dataset tak perlu render.
+            self._skip_filters_once = True
         else:
             self._dirty = True
 
     def _on_filters_changed(self) -> None:
+        if self._skip_filters_once:
+            # A7 (gel-5): konsumsi flag — emit pasangan set_dataset.
+            self._skip_filters_once = False
+            return
         if self.isVisible():
             self._refresh_table()
         else:
@@ -352,6 +367,29 @@ class HariView(FollowupTableMixin, QWidget):
         # v2.10.0: bukti tambahan vs bulan lalu (tanggal sama) — hanya bila
         # pembanding dimuat; memo objek per (id, len, versi history).
         months = self._ctx.history_months_ok()
+        # v2.13.14 (gel-5 C15): judul kolom NILAI BULAN LALU + tooltip
+        # menyebut SUMBER — di tab Hari sumbernya = bulan pembanding
+        # TERBARU yang termuat (BEDA dgn tab Anomali yang mengikuti combo
+        # Banding Periode; dulu kedua tab memakai nama kolom sama tanpa
+        # label bulan — audit C15). Alias headerData saja: data/sort/
+        # record tetap nama kanonik (pola view_periode 'Pembanding').
+        lbl_b = None
+        if months:
+            newest = max(months,
+                         key=lambda m: month_sort_key(m.get("label")))
+            lbl_b = baseline_label(newest)
+        if lbl_b:
+            self._table.model().set_header_map(
+                {"NILAI BULAN LALU": f"NILAI BULAN LALU ({lbl_b})"})
+            self._table.model().set_tooltip_map({
+                "NILAI BULAN LALU":
+                    COLUMN_TOOLTIPS.get("NILAI BULAN LALU", "")
+                    + f"\nSumber saat ini: {lbl_b} (bulan pembanding "
+                    "TERBARU yang termuat — beda dgn tab Anomali yang "
+                    "mengikuti pilihan combo Banding Periode)"})
+        else:
+            self._table.model().set_header_map(None)
+            self._table.model().set_tooltip_map(None)
         if months:
             df_show = self._with_history(df_show)
         cols = [c for c in TABLE_COLS if c in df_show.columns]

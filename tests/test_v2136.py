@@ -181,7 +181,7 @@ class TestTeksJujur:
 class TestBannerBat:
     def test_mulai_bat_versi_dan_6_tab(self):
         b = (REPO / "MULAI.bat").read_bytes().decode("utf-8")
-        assert "v2.13.13" in b
+        assert "v2.13.14" in b
         assert "6 tab" in b
         assert "Scorecard" in b, "banner harus menyebut tab baru"
 
@@ -193,7 +193,7 @@ class TestBannerBat:
 
     def test_setup_bat_versi_baru(self):
         b = (REPO / "SETUP.bat").read_bytes().decode("utf-8")
-        assert "v2.13.13" in b
+        assert "v2.13.14" in b
         assert "v2.12.5" not in b
 
     def test_crlf_utuh(self):
@@ -213,17 +213,17 @@ class TestBannerBat:
 class TestVersi:
     def test_app_version(self):
         from ui.shared import APP_VERSION
-        assert APP_VERSION == "2.13.13"
+        assert APP_VERSION == "2.13.14"
 
     def test_engine_version_sinkron(self):
         from waste_anomaly import __version__
         cfg = json.loads(
             (REPO / "waste_anomaly" / "config.json").read_text(
                 encoding="utf-8"))
-        assert __version__ == "2.13.13"
-        assert cfg.get("version") == "2.13.13"
+        assert __version__ == "2.13.14"
+        assert cfg.get("version") == "2.13.14"
 
     def test_docstring_init_tidak_basi(self):
         src = (REPO / "waste_anomaly" / "__init__.py").read_text(
             encoding="utf-8")
-        assert "Versi: 2.13.13" in src
+        assert "Versi: 2.13.14" in src

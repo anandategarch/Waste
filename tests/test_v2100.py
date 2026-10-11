@@ -107,10 +107,16 @@ class TestDetectMonthLabel:
         assert detect_month_label("REKAP 123.xlsx") is None
 
     def test_sort_key_kronologis(self):
+        # v2.13.14 (gel-5 B23) — DITULIS ULANG JUJUR: assertion lama
+        # mem-PIN perilaku lama di mana label tak-terparse "??" sort
+        # PERTAMA [(0, 0) terkecil] — itu justru bug audit B23 (satu file
+        # bernama aneh menggeser semua bulan valid ke bawah di combo).
+        # Kini "??" sort TERAKHIR (sentinel 9999) — bulan valid tetap
+        # kronologis di depan.
         from waste_anomaly.period_history import month_sort_key
         keys = ["Agustus 2026", "Juli 2026", "Desember 2025", "??"]
-        assert sorted(keys, key=month_sort_key)[:3] == [
-            "??", "Desember 2025", "Juli 2026"]
+        assert sorted(keys, key=month_sort_key) == [
+            "Desember 2025", "Juli 2026", "Agustus 2026", "??"]
         assert max(["Juli 2026", "Agustus 2026", "Juni 2026"],
                    key=month_sort_key) == "Agustus 2026"
 

@@ -13,6 +13,7 @@ models.py::fmt_pct
 models.py::fmt_ratio_x
 shared.py::_apply_filters
 shared.py::app_dir
+shared.py::baseline_label
 shared.py::bundle_res_dir
 shared.py::fmt_id
 shared.py::friendly_file_error

@@ -460,13 +460,15 @@ class PipelineView(QWidget):
             f"✓ Pipeline selesai — {fmt_id(rows)} baris • "
             f"{fmt_id(summary.get('anomali_count', 0))} anomali "
             "(prioritas+potensi)", "done")
-        if df is not None and not df.empty:
-            QMessageBox.information(
-                self, "Pipeline Selesai",
-                f"Pipeline selesai!\n\nTotal baris: {fmt_id(rows)}\n"
-                f"Anomali prioritas: {fmt_id(summary.get('prioritas_count', 0))}\n"
-                f"Potensi anomali: {fmt_id(summary.get('potensi_count', 0))}\n\n"
-                "Buka tab 'Anomali' untuk mulai memburu anomali.")
+        # v2.13.14 (gel-5 D27): modal "Pipeline Selesai" DIHAPUS dari
+        # jalur sukses — status bar jendela utama (pesan hasil run 2
+        # angka, gel-4 D6) + kartu "Ringkasan Run" (fmt_id, gel-3 D13)
+        # + tab follow-up badge sudah menyampaikan hasilnya; modal tiap
+        # run memaksa user menutup dialog SEBELUM bisa melihat data
+        # (audit D27: "modal 'Pipeline Selesai' tiap run"). Jalur GAGAL
+        # TETAP modal (QMessageBox.critical di _on_failed — error butuh
+        # atensi eksplisit + saran perbaikan). Tombol tab kini juga
+        # terjangkau Ctrl+1 (gel-5 D24).
 
     def _on_failed(self, err: str, tb: str) -> None:
         self._finish_run()
@@ -555,7 +557,17 @@ class PipelineView(QWidget):
                 self._ctx.config.setdefault("thresholds", {})[key] = val
             tmp_path = target.with_suffix(".json.tmp")
             with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(self._ctx.config, f, ensure_ascii=False, indent=2)
+                # v2.13.14 (gel-5 D26): kunci RUNTIME dikecualikan saat
+                # menulis — load_config() menaruh "_config_load_error" di
+                # dict config saat config.json korup (jalur fallback
+                # default; v2.3.1 H5). Dulu json.dump menulis kunci itu
+                # ke disk → config "diperbaiki" user malah membawa error
+                # lama permanen + key aneh di file yang user edit manual
+                # (audit D26). Salinan difilter — ctx.config tak termutasi
+                # (pesan error tetap hidup di sesi ini utk _on_done).
+                out_cfg = {k: v for k, v in self._ctx.config.items()
+                           if k != "_config_load_error"}
+                json.dump(out_cfg, f, ensure_ascii=False, indent=2)
             tmp_path.replace(target)  # F2: atomic save
             self._ctx.set_status(f"✓ config.json tersimpan: {target}", "done")
             self._ctx.log(f"=== Threshold disimpan → {target} (berlaku mulai run berikutnya) ===")

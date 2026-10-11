@@ -21,6 +21,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pandas as pd
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -115,20 +116,38 @@ class BandTableDialog(QDialog):
     """Pop-up tabel banding (v2.10.2) — layar penuh & rantai drill-down.
 
     Satu kelas untuk dua pemakaian (tabel + judul + rute klik-2× sama):
-    - 'Layar Penuh' : salinan tabel tab aktif, jendela maximized (Esc balik).
+    - 'Layar Penuh' : salinan tabel tab aktif — v2.13.14 (gel-5 B11)
+      BENAR-BENAR salinan: halaman ber-✓ memakai frame tabel tab aktif
+      (kolom ✓ massal + funnel halaman ikut; dulu df mentah → kolom ✓
+      hilang, kontradiksi docstring). Jendela maximized (Esc balik);
+      drill dari jendela ini berlanjut DI SINI (gel-5 B22).
     - Drill-down    : rantai rincian Total → resto → item → hari (klik 2×
       baris = turun satu level; tabel diganti, breadcrumb di judul jendela).
     Tabel = DataTable biasa (render ≤ ratusan baris = milidetik — aman
     anti-lambat); df di-clone-render, tabel asli di view tak tersentuh.
     """
 
-    def __init__(self, ctx: AppContext, drill_cb, parent=None) -> None:
+    def __init__(self, ctx: AppContext, drill_cb, parent=None,
+                 check_cb=None) -> None:
         super().__init__(parent)
         self._ctx = ctx
-        self._drill_cb = drill_cb  # (level, payload, rec) → dikonsumsi view
+        self._drill_cb = drill_cb  # (level, payload, rec, source) → view
+        # v2.13.14 (gel-5 B22): drill_cb kini menerima DIALOG SUMBER —
+        # drill dari jendela ⛶ layar penuh berlanjut di jendela itu
+        # (dulu tiap klik-2× dari ⛶ membuka dialog kecil TERPISAH yang
+        # menumpuk di atas jendela maximized; audit B22).
         self._level: str | None = None
         self._payload: dict = {}
         self._path: list[str] = []
+        # v2.13.14 (gel-5 B11): dialog boleh ber-kolom ✓ follow-up
+        # (jendela ⛶ tab banding memakai frame tabel tab aktif).
+        # check_cb(row, checked, level, payload) dipanggil saat ✓ diklik.
+        self._check_enabled = check_cb is not None
+        # v2.13.14 (gel-5 B22): mode jendela — dialog yang pernah
+        # showMaximized TETAP maximized sepanjang rantai drill-nya
+        # (resize(1040, 640) tiap show_table akan mengecilkan jendela
+        # penuh saat drill berlanjut di dalamnya).
+        self._max_mode = False
         self.setWindowTitle("Banding Periode")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 10, 14, 10)
@@ -142,6 +161,11 @@ class BandTableDialog(QDialog):
         lay.addWidget(self._lbl_sub)
         self._table = DataTable(self)
         self._table.double_clicked.connect(self._on_double)
+        if self._check_enabled:
+            self._table.model().set_check_column(CHECK_COL)
+            self._table.model().check_toggled.connect(
+                lambda row, checked, _cb=check_cb: _cb(
+                    self, row, checked, self._level, self._payload))
         lay.addWidget(self._table, 1)
         btn = QPushButton("Tutup (Esc)", self)
         btn.clicked.connect(self.close)
@@ -153,16 +177,45 @@ class BandTableDialog(QDialog):
         lay.addWidget(row)
 
     # ------------------------------------------------------------
+    def table_model(self):
+        """Model tabel dialog (akses publik — view memakai utk routing ✓
+        dari dialog layar penuh ke handler tabel tab; gel-5 B11)."""
+        return self._table.model()
+
+    def refresh_followup_checks(self, fset) -> None:
+        """v2.13.14 (gel-5 B11) — segarkan kolom ✓ dialog IN-PLACE dari
+        state follow-up (dipanggil _on_followup_changed: ✓ di-toggle di
+        mana pun — tab lain / tombol massal / dialog ini — jendela layar
+        penuh ikut jujur). No-op bila dialog tak ber-✓ / frame tak
+        memuat kolomnya (drill level dalam)."""
+        if not self._check_enabled:
+            return
+        m = self._table.model()
+        mdf = m.dataframe
+        if (mdf is not None and len(mdf) > 0
+                and CHECK_COL in mdf.columns and _FPS_COL in mdf.columns):
+            mdf[CHECK_COL] = [
+                bool(fs) and all(f in fset for f in fs)
+                for fs in mdf[_FPS_COL]]
+            m.notify_column_changed(CHECK_COL)
+
     def show_table(self, title: str, subtitle: str,
                    df: pd.DataFrame | None, level: str | None = None,
                    payload: dict | None = None, root: bool = False,
                    sort_desc: str | None = None,
                    maximized: bool = False,
-                   header_map: dict | None = None) -> None:
+                   header_map: dict | None = None,
+                   visible_cols: list[str] | None = None) -> None:
         """Tampilkan satu level tabel (root=True = mulai rantai baru).
 
         header_map (v2.12.2): alias judul kolom tampilan (mis. 'Pembanding'
-        → nama bulan) — data tetap nama kanonik."""
+        → nama bulan) — data tetap nama kanonik.
+        visible_cols (v2.13.14 gel-5 B11): kolom tampak (pola DataTable —
+        model memegang df penuh; dipakai jendela ⛶ supaya kolom sidik
+        jari __FPS tersembunyi persis seperti tabel tab aslinya).
+        maximized (v2.13.14 gel-5 B22): sekali True → dialog TETAP
+        maximized utk show_table berikutnya (rantai drill dari ⛶ tak
+        mengecilkan jendelanya sendiri)."""
         self._level = level
         self._payload = dict(payload or {})
         if root or not self._path:
@@ -173,11 +226,14 @@ class BandTableDialog(QDialog):
         self._table.model().set_header_map(header_map)
         with busy_feedback(self._ctx.set_status,
                            "Menampilkan tabel banding"):
-            self._table.set_dataframe(df, sort_desc=sort_desc)
+            self._table.set_dataframe(df, sort_desc=sort_desc,
+                                      visible_cols=visible_cols)
         # Breadcrumb jendela (maks 3 segmen + elipsis) — konteks tak hilang.
         crumbs = " › ".join(self._path[-3:])
         self.setWindowTitle(f"Banding Periode — {crumbs}")
         if maximized:
+            self._max_mode = True
+        if self._max_mode:
             self.showMaximized()
         else:
             self.resize(1040, 640)
@@ -186,9 +242,13 @@ class BandTableDialog(QDialog):
         self.activateWindow()
 
     def _on_double(self, rec: pd.Series) -> None:
-        """Klik 2× baris → serahkan ke view (turun level / buka rantai)."""
+        """Klik 2× baris → serahkan ke view (turun level / buka rantai).
+
+        v2.13.14 (gel-5 B22): dialog SUMBER ikut dikirim — drill dari
+        jendela ⛶ layar penuh berlanjut di jendela itu, bukan membuka
+        dialog kecil baru di atasnya."""
         if self._drill_cb is not None and self._level is not None:
-            self._drill_cb(self._level, self._payload, rec)
+            self._drill_cb(self._level, self._payload, rec, self)
 
 
 class PeriodeView(QWidget):
@@ -258,8 +318,12 @@ class PeriodeView(QWidget):
 
         # v2.10.2 — pop-up rantai drill-down + jendela layar penuh (satu
         # instance dipakai ulang; parent=self → tetap di atas jendela utama).
+        # v2.13.14 (gel-5 B11): jendela ⛶ memakai frame tabel tab aktif →
+        # kolom ✓ follow-up ikut & interaktif (check_cb — routing ke
+        # handler yang sama dengan tabel tab).
         self._drill = BandTableDialog(ctx, self._drill_dispatch, self)
-        self._full = BandTableDialog(ctx, self._drill_dispatch, self)
+        self._full = BandTableDialog(ctx, self._drill_dispatch, self,
+                                     check_cb=self._on_full_check)
         # Bulan A/B terakhir yang dirender — bahan semua drill-down.
         self._a: dict | None = None
         self._b: dict | None = None
@@ -317,8 +381,13 @@ class PeriodeView(QWidget):
         self._tbl_files.setMinimumHeight(120)
         self._tbl_files.setToolTip(
             "Daftar file pembanding (diingat antar sesi).\n"
-            "Klik 2× kolom Bulan untuk memberi/koreksi nama bulan.")
+            "Klik 2× kolom Bulan — atau pilih baris lalu tekan Enter/F2 "
+            "(v2.13.14) — untuk memberi/koreksi nama bulan.")
         self._tbl_files.doubleClicked.connect(self._on_double)
+        # v2.13.14 (gel-5 B19): rename via KEYBOARD — Enter/F2 di baris
+        # terpilih memicu dialog rename (padanan klik-2×; pola eventFilter
+        # Enter drill Scorecard gel-4 C7 — dulu rename cuma bisa mouse).
+        self._tbl_files.installEventFilter(self)
         rl.addWidget(self._tbl_files, 1)
 
         btns = QWidget(row)
@@ -537,7 +606,12 @@ class PeriodeView(QWidget):
 
     def _on_double(self, index) -> None:
         """Klik 2× baris: koreksi nama bulan (persisten)."""
-        r = index.row()
+        self._rename_row(index.row())
+
+    def _rename_row(self, r: int) -> None:
+        """Koreksi nama bulan baris r (persisten) — dipanggil KLIK-2×
+        (mouse) dan Enter/F2 (keyboard — v2.13.14 gel-5 B19: satu badan
+        dua pintu, dialog QInputDialog sama persis)."""
         if not (0 <= r < len(self._entries)):
             return
         ent = self._entries[r]
@@ -555,6 +629,22 @@ class PeriodeView(QWidget):
             save_history_entries(self._entries)
             self._render_file_list()
             self._finalize()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 — Qt API
+        """v2.13.14 (gel-5 B19) — Enter/F2 di daftar file pembanding =
+        RENAME nama bulan baris terpilih (padanan keyboard klik-2×;
+        audit B19: rename hanya via mouse double-click — pengguna
+        keyboard tak punya jalur). Dikonsumsi (return True) supaya
+        QTableWidget tak menjadikannya edit/activated ganda."""
+        if (obj is self._tbl_files
+                and event.type() == QEvent.Type.KeyPress
+                and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter,
+                                    Qt.Key.Key_F2)):
+            row = self._tbl_files.currentRow()
+            if 0 <= row < len(self._entries):
+                self._rename_row(row)
+                return True
+        return super().eventFilter(obj, event)
 
     def _render_file_list(self) -> None:
         """Sinkronkan tabel daftar dgn self._entries + status termuat."""
@@ -787,7 +877,14 @@ class PeriodeView(QWidget):
             else "⤢ Daftar file ditampilkan kembali", "done")
 
     def _on_fullscreen(self) -> None:
-        """Pop-out tabel tab AKTIF di jendela maximized (Esc = kembali)."""
+        """Pop-out tabel tab AKTIF di jendela maximized (Esc = kembali).
+
+        v2.13.14 (gel-5 B11): frame = SALINAN TABEL TAB AKTIF — halaman
+        Cabang/Item/Baru memakai bahan _page_mask (kolom ✓ follow-up +
+        funnel halaman aktif ikut; dulu df mentah `res` → kolom ✓ massal
+        HILANG padahal docstring menjanjikan 'salinan tabel tab aktif';
+        audit B11). __FPS disembunyikan via visible_cols (pola tabel
+        tab)."""
         if self._res is None or self._a is None or self._b is None:
             self._ctx.set_status(
                 "Belum ada hasil banding utk dibesarkan — jalankan pipeline "
@@ -797,26 +894,52 @@ class PeriodeView(QWidget):
         if not (0 <= i < len(_PAGES)):
             return
         key, title = _PAGES[i]
-        df = self._res.get(_RESULT_KEYS.get(key, ""))
+        # B11: halaman ber-✓ → frame hasil funnel halaman + kolom ✓
+        # (frame yang sama yang dirender tabel tab); halaman lain tetap
+        # df hasil banding apa adanya (tak punya ✓).
+        if key in _FU_PAGES:
+            m_df, m_vis = self._page_mask(key)
+        else:
+            m_df, m_vis = self._page_mask(key), None
         sub = (f"{self._a.get('label')} vs {self._b.get('label')} — "
                f"jendela penuh; klik 2× baris = rincian; Esc = kembali")
-        self._full.show_table(title, sub, df, level="tab",
+        self._full.show_table(title, sub, m_df, level="tab",
                               payload={"tab_key": key}, root=True,
                               maximized=True,
-                              header_map={"Pembanding": self._label_b_disp})
+                              header_map={"Pembanding": self._label_b_disp},
+                              visible_cols=m_vis)
 
-    def _on_tab_double(self, key: str, rec: pd.Series) -> None:
-        """Klik 2× baris tabel tab → buka rantai drill yang sesuai."""
+    def _on_full_check(self, dlg, row: int, checked: bool,
+                       level: str | None, payload: dict) -> None:
+        """v2.13.14 (gel-5 B11) — ✓ diklik di jendela ⛶ layar penuh:
+        route ke handler tabel tab (frame sama → baris sama, urutan
+        sama). Level bukan 'tab' (drill level dalam) tak punya kolom ✓ —
+        guard defensif."""
+        if dlg is not self._full or level != "tab":
+            return
+        key = str(payload.get("tab_key") or "")
+        if key in _FU_PAGES:
+            self._on_fu_check(key, row, checked, m=dlg.table_model())
+
+    def _on_tab_double(self, key: str, rec: pd.Series,
+                        target=None) -> None:
+        """Klik 2× baris tabel tab → buka rantai drill yang sesuai.
+
+        target (v2.13.14 gel-5 B22): dialog tujuan render — None = dialog
+        kecil _drill (jalur tabel tab utama, perilaku lama); dialog ⛶ =
+        drill dari jendela layar penuh berlanjut di jendela itu."""
         if self._a is None or self._b is None:
             return  # tanpa hasil banding tak ada yang bisa dirinci
         if key == "summary":
             metrik = str(rec.get("Metrik") or "").strip()
             if metrik == "Total Waste":
                 self._open_resto(
-                    "🏬 Resto penyumbang Total Waste", per_day=False)
+                    "🏬 Resto penyumbang Total Waste", per_day=False,
+                    target=target)
             elif metrik == "Waste per Hari":
                 self._open_resto(
-                    "🏬 Resto penyumbang Waste per Hari", per_day=True)
+                    "🏬 Resto penyumbang Waste per Hari", per_day=True,
+                    target=target)
             else:
                 self._ctx.set_status(
                     f"Metrik '{metrik}' tidak punya rincian per resto "
@@ -825,36 +948,46 @@ class PeriodeView(QWidget):
             jenis = str(rec.get("JENIS") or "").strip()
             if jenis:
                 self._open_resto(
-                    f"🏬 Resto penyumbang {jenis} (per jenis)", jenis=jenis)
+                    f"🏬 Resto penyumbang {jenis} (per jenis)", jenis=jenis,
+                    target=target)
         elif key == "branch":
             resto = str(rec.get("NAMA RESTO") or "").strip()
             # v2.12.2: baris cabang kini ber-JENIS → drill item langsung
             # ter-filter jenis itu (banding fokus 'jenis apa yang naik').
             jenis = str(rec.get("JENIS") or "").strip() or None
             if resto:
-                self._open_items(resto, jenis=jenis, root=True)
+                self._open_items(resto, jenis=jenis, root=True, target=target)
         elif key in ("items", "new_items", "gone_items"):
             resto = str(rec.get("NAMA RESTO") or "").strip()
             barang = str(rec.get("NAMA BARANG") or "").strip()
             if resto and barang:
-                self._open_day(resto, barang, root=True)
+                self._open_day(resto, barang, root=True, target=target)
 
     def _drill_dispatch(self, level: str, payload: dict,
-                        rec: pd.Series) -> None:
-        """Rute klik-2× dari dalam pop-up (turun level / buka dari full)."""
+                        rec: pd.Series, source=None) -> None:
+        """Rute klik-2× dari dalam pop-up (turun level / buka dari full).
+
+        v2.13.14 (gel-5 B22): hasil drill dirender ke DIALOG SUMBER —
+        dialog yang memicu drill melanjutkan rantainya sendiri (drill
+        dari jendela ⛶ layar penuh TIDAK lagi membuka dialog kecil
+        terpisah yang menumpuk di atas jendela maximized; audit B22).
+        source tak dikenal/None → dialog kecil _drill (perilaku lama)."""
         if self._a is None or self._b is None:
             return
+        target = source if source is self._full else self._drill
         if level == "tab":
-            self._on_tab_double(str(payload.get("tab_key") or ""), rec)
+            self._on_tab_double(str(payload.get("tab_key") or ""), rec,
+                                target=target)
         elif level == "resto":
             resto = str(rec.get("NAMA RESTO") or "").strip()
             if resto:
-                self._open_items(resto, jenis=payload.get("jenis"))
+                self._open_items(resto, jenis=payload.get("jenis"),
+                                 target=target)
         elif level == "item":
             resto = str(rec.get("NAMA RESTO") or "").strip()
             barang = str(rec.get("NAMA BARANG") or "").strip()
             if resto and barang:
-                self._open_day(resto, barang)
+                self._open_day(resto, barang, target=target)
         # level "day" = paling dalam — tidak ada rincian lanjutan.
 
     def _labels_sub(self, extra: str = "") -> str:
@@ -868,8 +1001,10 @@ class PeriodeView(QWidget):
         return s
 
     def _open_resto(self, title: str, jenis: str | None = None,
-                    per_day: bool = False) -> None:
-        """Level RESTO: siapa yang menaikkan / menurunkan angka."""
+                    per_day: bool = False, target=None) -> None:
+        """Level RESTO: siapa yang menaikkan / menurunkan angka.
+
+        target (gel-5 B22): dialog tujuan render (default = _drill)."""
         with busy_feedback(self._ctx.set_status,
                            "Menghitung rincian per resto"):
             df = compare_level(self._a, self._b, ["NAMA RESTO"],
@@ -880,13 +1015,16 @@ class PeriodeView(QWidget):
             note += f"; hanya JENIS {jenis}"
         sub = self._labels_sub(
             f"{note} • klik 2× resto = rincian itemnya")
-        self._drill.show_table(title, sub, df, level="resto",
-                               payload={"jenis": jenis}, root=True,
-                               header_map={"Pembanding": self._label_b_disp})
+        dlg = target or self._drill
+        dlg.show_table(title, sub, df, level="resto",
+                       payload={"jenis": jenis}, root=True,
+                       header_map={"Pembanding": self._label_b_disp})
 
     def _open_items(self, resto: str, jenis: str | None,
-                    root: bool = False) -> None:
-        """Level ITEM: item apa saja di satu resto (naik/turun terbesar)."""
+                    root: bool = False, target=None) -> None:
+        """Level ITEM: item apa saja di satu resto (naik/turun terbesar).
+
+        target (gel-5 B22): dialog tujuan render (default = _drill)."""
         with busy_feedback(self._ctx.set_status,
                            f"Menghitung rincian item di {resto}"):
             df = compare_level(self._a, self._b,
@@ -896,14 +1034,17 @@ class PeriodeView(QWidget):
         note = f"hanya JENIS {jenis}" if jenis else "semua jenis digabung"
         sub = self._labels_sub(
             f"{note} • klik 2× item = rincian per hari")
-        self._drill.show_table(f"📦 Item di {resto}", sub, df, level="item",
-                               payload={"resto": resto, "jenis": jenis},
-                               root=root,
-                               header_map={"Pembanding": self._label_b_disp})
+        dlg = target or self._drill
+        dlg.show_table(f"📦 Item di {resto}", sub, df, level="item",
+                       payload={"resto": resto, "jenis": jenis},
+                       root=root,
+                       header_map={"Pembanding": self._label_b_disp})
 
     def _open_day(self, resto: str, barang: str,
-                  root: bool = False) -> None:
-        """Level HARI: tanggal berapa yang naik (jawaban 'hari apa?')."""
+                  root: bool = False, target=None) -> None:
+        """Level HARI: tanggal berapa yang naik (jawaban 'hari apa?').
+
+        target (gel-5 B22): dialog tujuan render (default = _drill)."""
         with busy_feedback(self._ctx.set_status,
                            "Menghitung rincian per hari"):
             df = drill_day_detail(self._a, self._b, resto, barang)
@@ -915,7 +1056,8 @@ class PeriodeView(QWidget):
         sub = self._labels_sub(
             f"total {fmt_id(tot_a)} vs {fmt_id(tot_b)} • semua jenis "
             "digabung • baris = tanggal")
-        self._drill.show_table(
+        dlg = target or self._drill
+        dlg.show_table(
             f"📅 Hari 1–{n} — {barang} @ {resto}", sub, df, level="day",
             root=root, header_map={"Pembanding": self._label_b_disp})
 
@@ -1352,13 +1494,19 @@ class PeriodeView(QWidget):
                               if c not in (CHECK_COL, _FPS_COL)]
         return out, vis
 
-    def _on_fu_check(self, page: str, row: int, checked: bool) -> None:
+    def _on_fu_check(self, page: str, row: int, checked: bool,
+                     m=None) -> None:
         """Klik ✓ baris banding → (v2.12.3 Opsi A) CENTANG = masukkan
         SEMUA baris ANOMALI terkait (jenis, resto[, barang]) — baris
         Normal TOTAL=0 tidak ikut; LEPAS = keluarkan SEMUA baris item
         itu (anomali + fps noise warisan v2.12.2) sekaligus — satu
-        broadcast, satu tulis disk."""
-        m = self._tables[page].model()
+        broadcast, satu tulis disk.
+
+        m (v2.13.14 gel-5 B11): model SUMBER klik — tabel tab (default)
+        atau jendela ⛶ layar penuh; frame sama → baris sama, urutan
+        sama (record/fps identik antar dua model)."""
+        if m is None:
+            m = self._tables[page].model()
         rec = m.record(row)
         fps = rec.get(_FPS_COL) if rec is not None else None
         if not fps:
@@ -1430,6 +1578,15 @@ class PeriodeView(QWidget):
                     bool(fs) and all(f in fset for f in fs)
                     for fs in mdf[_FPS_COL]]
                 m.notify_column_changed(CHECK_COL)
+        # v2.13.14 (gel-5 B11): jendela ⛶ layar penuh (frame tabel tab
+        # aktif ber-kolom ✓) ikut disegarkan IN-PLACE — ✓ di-toggle dari
+        # mana pun (tab lain / tombol massal / dialog itu sendiri)
+        # jendela penuh tetap jujur. Defensif RuntimeError (dialog
+        # di-destroy Qt — pola _close_popups).
+        try:
+            self._full.refresh_followup_checks(fset)
+        except RuntimeError:
+            pass
 
     def _clear_tables(self, msg: str) -> None:
         for table in self._tables.values():

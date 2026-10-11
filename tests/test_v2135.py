@@ -449,12 +449,21 @@ class TestPopupTombolFollowup:
         ctx.clear_followup()
 
     def test_record_sig_dari_fp(self):
+        # v2.13.14 (gel-5 A16) — DITULIS ULANG JUJUR: assertion lama
+        # mem-PIN bentuk fallback sig LAMA (index 1 = NAMA RESTO) — bentuk
+        # yang memungkinkan bug A16: 2 record BEDA yang sama di 6 kolom
+        # kunci dianggap SAMA oleh guard idempoten (pop-up tak rebuild).
+        # Bentuk baru: (None, posisi baris rec.name, RESTO, BARANG, JENIS,
+        # KETERANGAN, SOURCE, TOTAL, nilai hari 1-31).
         _ctx, dlg = self._popup()
         df = _anomali_df()
         rec = df.iloc[1]
         sig = dlg._record_sig(rec)
         assert sig[0] is None  # tanpa __FP → None (fallback identitas)
-        assert sig[1] == "RESTO 1"
+        assert sig[1] == 1  # posisi baris (rec.name) — identitas fallback
+        assert sig[2] == "RESTO 1"
+        assert dlg._record_sig(df.iloc[2]) != sig, (
+            "baris beda (posisi/hari beda) ≠ sig sama (A16)")
 
 
 # ============================================================

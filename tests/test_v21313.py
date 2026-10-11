@@ -701,7 +701,14 @@ class TestD5D6StatusRun:
             "pesan TERAKHIR pasca-run = hasil run, bukan busy render")
         assert not any("Menyaring" in t for t in texts), (
             "klaim 'Menyaring… selesai' tak boleh jadi pesan akhir (D6)")
-        assert any(c[0] == "information" for c in _MBStub.calls)
+        # v2.13.14 (gel-5 D27) — DITULIS ULANG JUJUR: assertion lama
+        # mem-PIN modal "Pipeline Selesai" (QMessageBox.information) yang
+        # muncul TIAP run sukses. Audit D27: status bar jendela utama +
+        # kartu Ringkasan Run sudah menyampaikan hasil — modal sukses
+        # dihapus (jalur GAGAL tetap modal critical); run sukses kini
+        # TANPA dialog apa pun.
+        assert not any(c[0] == "information" for c in _MBStub.calls), (
+            "run sukses tak boleh lagi memunculkan modal (D27)")
 
     def test_first_run_tanpa_klaim_menyaring(self):
         """D6 (first-run): render TANPA dataset TIDAK dibungkus
@@ -986,6 +993,19 @@ class TestD28DefaultNo:
         assert captured["args"][-1] == QMessageBox.StandardButton.No, (
             "tombol default harus NO (Enter salah = aman batal — D28)")
         assert not ev.isAccepted(), "jawaban No → keluar ditolak"
+        # v2.13.14 (D24-fix, higienis test): pulihkan flag _running/_worker
+        # SEBELUM teardown — dulu window bocor (lambda D24 menangkap self)
+        # bertahan sampai _dispose_orphan_widgets conftest → close() →
+        # closeEvent melihat _running → QMessageBox.question ASLI (monkeypatch
+        # sudah dibuka) → modal exec() MENUNGGU KLIK yang tak pernah datang
+        # di offscreen → full suite HANG. Kini lambda diganti bound method
+        # (receiver lemah) window mati saat refcount turun; reset ini =
+        # pertahanan kedua bila kelak ada kebocoran lain.
+        for _name, v in win._views:
+            if getattr(v, "_btn_run", None) is not None:
+                v._running = False
+                v._worker = None
+        win.close()
 
 
 # ============================================================
@@ -1134,4 +1154,4 @@ class TestSweepD25QssFocus:
         # keyboard-visible: rule fokus tombol LEBIH BANYAK dari era lama
         assert QSS.count(":focus") >= 4
         from ui.shared import APP_VERSION
-        assert APP_VERSION == "2.13.13"  # pin versi file test ke-5 (gel-4)
+        assert APP_VERSION == "2.13.14"  # pin versi file test ke-5 (gel-4; dinaikkan gel-5)

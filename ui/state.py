@@ -150,12 +150,16 @@ class AppContext(QObject):
         self.reset_filters()  # juga meng-invalidasi memo filtered_df
         self.data_ready.emit()
         # v2.7.0 (V26-H2): siarkan reset filter SEKALI SETELAH data_ready —
-        # views pendengar filters_changed (Anomali/Banding Periode) menandai dirty
+        # views pendengar filters_changed (Anomali/Hari) menandai dirty
         # secara konsisten. Urutan setelah data_ready dipilih karena pada
         # alur tipikal re-run user ada di tab Pipeline (view tidak terlihat
         # → kedua handler hanya menandai dirty, TANPA render ganda); bila
-        # kebetulan terlihat, handler filters_changed hanya partial refresh
-        # (bukan refresh penuh ganda).
+        # kebetulan terlihat, pasangan emit ini kini DIKONSUMSI SEKALI oleh
+        # flag _skip_filters_once di view (v2.13.14 gel-5 A7) — dulu
+        # _on_filters_changed menjalankan render PENUH kedua yang identik
+        # (docstring lama menjanjikan 'partial refresh' — tidak jujur;
+        # audit A7). set_filter/drill user tetap render normal (flag hanya
+        # dikonsumsi oleh emit pasangan set_dataset).
         self.filters_changed.emit()
 
     # ------------------------------------------------------------

@@ -710,7 +710,7 @@ class TestConfigV2102:
 
     def test_versi_naik(self):
         from ui.shared import APP_VERSION
-        assert APP_VERSION == "2.13.13"  # v2.13.13: gel-4 perf/fokus/polish
+        assert APP_VERSION == "2.13.14"  # v2.13.14: gel-5 P3 sulit
 
 
 # ============================================================
@@ -736,7 +736,12 @@ class TestV2103RegexBulan:
             detect_month_label, month_sort_key)
         assert detect_month_label("XSEPTEMBER2026.xlsx") is None
         assert detect_month_label("SEPTEMBERS.xlsx") is None
-        assert month_sort_key("XJULI") == (0, 0)
+        # v2.13.14 (gel-5 B23) — DITULIS ULANG JUJUR: assertion lama
+        # mem-PIN month_sort_key("XJULI") == (0, 0) — nilai sentinel lama
+        # yang justru menempatkan label tak-terparse sort PERTAMA (bug
+        # audit B23). Kini sentinel (9999, 0) = TERAKHIR; nama bulan yang
+        # menempel huruf tetap DITOLAK (parse None — bukan fallback).
+        assert month_sort_key("XJULI") == (9999, 0)
 
     def test_bulan_dipisah_digit_kini_diterima(self):
         # "31SEPTEMBER" — digit langsung sebelum bulan: dulu \b menolak,

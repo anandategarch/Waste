@@ -79,7 +79,7 @@ from .models import (
     fmt_pct,
     fmt_ratio_x,
 )
-from .shared import fmt_id
+from .shared import baseline_label, fmt_id
 from .state import AppContext
 from .widgets import (
     Card,
@@ -529,22 +529,29 @@ class DetailPanel(Card):
         # QFormLayout ±25 baris tampil SELALU, sumber "aku jadi bingung").
         # Dibangun utuh seperti v2.8.1 (format persen/rasio/teks sama),
         # lalu disembunyikan; tombol toggle ada di footer AKSI (v2.13.10).
-        full_box = QWidget()
-        fbl = QVBoxLayout(full_box)
-        fbl.setContentsMargins(0, 0, 0, 0)
-        fbl.setSpacing(4)
-        fbl.addWidget(self._section("Konteks & pembanding — semua kolom"))
-        metrics = QWidget()
-        fl = QFormLayout(metrics)
-        fl.setContentsMargins(0, 0, 0, 0)
-        fl.setSpacing(4)
-        fl.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        n_full = 0
-        for col in DETAIL_COLS:
-            if col in ("ANOMALY SCORE", "ANOMALY STATUS", "NAMA RESTO",
-                       "NAMA BARANG", "ANOMALY REASONS"):
-                continue
-            if col in rec.index:
+        # v2.13.14 (gel-5 A17): widget DIBANGUN HANYA bila ada kolomnya —
+        # dulu full_box + label seksi dibuat duluan lalu tak ditambahkan
+        # ke layout mana pun saat n_full==0 → QWidget TANPA PARENT
+        # ("yatim") dipegang self._full_box sampai show_record berikutnya
+        # (audit A17: box kosong + potensi window liar bila ter-show).
+        _FULL_SKIP = ("ANOMALY SCORE", "ANOMALY STATUS", "NAMA RESTO",
+                      "NAMA BARANG", "ANOMALY REASONS")
+        full_cols = [col for col in DETAIL_COLS
+                     if col not in _FULL_SKIP and col in rec.index]
+        n_full = len(full_cols)
+        full_box: QWidget | None = None
+        if n_full:
+            full_box = QWidget()
+            fbl = QVBoxLayout(full_box)
+            fbl.setContentsMargins(0, 0, 0, 0)
+            fbl.setSpacing(4)
+            fbl.addWidget(self._section("Konteks & pembanding — semua kolom"))
+            metrics = QWidget()
+            fl = QFormLayout(metrics)
+            fl.setContentsMargins(0, 0, 0, 0)
+            fl.setSpacing(4)
+            fl.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+            for col in full_cols:
                 key = QLabel(f"{col}:", metrics)
                 key.setStyleSheet("color:#64748b;")
                 # v2.9.0: label metrik + nilai dapat tooltip kamus istilah
@@ -563,10 +570,13 @@ class DetailPanel(Card):
                 if tip:
                     val_lbl.setToolTip(tip)
                 fl.addRow(key, val_lbl)
-                n_full += 1
-        fbl.addWidget(metrics)
-        full_box.setVisible(False)
-        self._full_box = full_box
+            fbl.addWidget(metrics)
+            full_box.setVisible(False)
+            self._full_box = full_box
+        else:
+            # A17: tanpa kolom tambahan → TIDAK ada tombol, TIDAK ada box
+            # (ref None = _toggle_full no-op guard lama tetap benar).
+            self._full_box = None
         # v2.13.12 (gel-3 A11): simpan jumlah kolom lengkap utk siklus
         # toggle berikutnya (teks tombol mempertahankan '(N)').
         self._n_full = n_full
@@ -859,13 +869,34 @@ class DetailDialog(QDialog):
 
     def _record_sig(self, rec: pd.Series) -> tuple:
         """Identitas record utk guard idempoten (fp utama, identitas
-        kunci sbg cadangan — membedakan klik-baris-sama dari klik-berganti)."""
+        kunci sbg cadangan — membedakan klik-baris-sama dari klik-berganti).
+
+        v2.13.14 (gel-5 A16): jalur FALLBACK (record tanpa __FP — fixture
+        sintetis / jalur test) kini memuat IDENTITAS BARIS: posisi baris
+        (rec.name) + nilai hari 1-31 — dulu sig hanya 6 kolom kunci: dua
+        record BEDA yang kebetulan sama di 6 kolom itu (mis. item sama,
+        hari beda) dianggap SAMA → show_record ke-2 di-skip SENYAP,
+        pop-up menampilkan record LAMA (audit A16: guard idempoten salah
+        anggap record beda = sama). Jalur __FP tetap persis seperti lama
+        (fp = md5 baris penuh — identitas sudah unik; menambah posisi
+        justru memicu rebuild sia-sia saat sort menggeser baris)."""
         fp = rec.get(FP_COL)
+        if fp is not None:
+            return (
+                str(fp),
+                str(rec.get("NAMA RESTO")), str(rec.get("NAMA BARANG")),
+                str(rec.get("JENIS")), str(rec.get("KETERANGAN")),
+                str(rec.get("SOURCE DATA")), str(rec.get("TOTAL")),
+            )
+        days = tuple(
+            str(rec.get(c))
+            for c in (str(i) for i in range(1, 32)) if c in rec.index)
         return (
-            str(fp) if fp is not None else None,
+            None, rec.name if rec.name is not None else -1,
             str(rec.get("NAMA RESTO")), str(rec.get("NAMA BARANG")),
             str(rec.get("JENIS")), str(rec.get("KETERANGAN")),
             str(rec.get("SOURCE DATA")), str(rec.get("TOTAL")),
+            days,
         )
 
     def show_record(self, rec: pd.Series) -> None:
@@ -1059,6 +1090,16 @@ class AnomaliView(FollowupTableMixin, QWidget):
         # render saat dibuka (on_shown). View default biasanya terlihat saat
         # pipeline selesai → render langsung.
         self._dirty = True
+        # v2.13.14 (gel-5 A7): set_dataset memancarkan data_ready LALU
+        # filters_changed BERPASANGAN (state.py) — render penuh di
+        # _on_data_ready sudah memakai state filter yang di-reset;
+        # filters_changed yang menyusul = render penuh KEDUA yang identik
+        # (dulu full-render ×2 tiap run saat view terlihat — audit A7:
+        # docstring state.py menjanjikan 'partial refresh', kenyataannya
+        # _refresh_table penuh dua kali). Flag konsumsi-sekali: skip
+        # TEPAT pasangan emit itu; set_filter/drill user (filters_changed
+        # yang TIDAK didahului data_ready) tetap render normal.
+        self._skip_filters_once = False
         # v2.10.2: versi cache enrich (df + baseline + data/history) —
         # kombinasi sama → salinan berkolom sama dipakai ulang.
         # v2.12.1: satu slot → LRU weakref (bolak-balik antar state filter
@@ -1111,10 +1152,17 @@ class AnomaliView(FollowupTableMixin, QWidget):
         self._mask_cache.clear()
         if self.isVisible():
             self.refresh()
+            # A7 (gel-5): render di atas sudah final utk dataset baru —
+            # pasangan filters_changed dari set_dataset tak perlu render.
+            self._skip_filters_once = True
         else:
             self._dirty = True
 
     def _on_filters_changed(self) -> None:
+        if self._skip_filters_once:
+            # A7 (gel-5): konsumsi flag — emit pasangan set_dataset.
+            self._skip_filters_once = False
+            return
         if self.isVisible():
             self._refresh_table()
         else:
@@ -1252,6 +1300,24 @@ class AnomaliView(FollowupTableMixin, QWidget):
         self._cb_change.setEnabled(baseline is not None)
         if cat and "PERUBAHAN" in df.columns:
             df = df[df["PERUBAHAN"] == cat]
+        # v2.13.14 (gel-5 C15): judul kolom BULAN LALU + tooltip menyebut
+        # SUMBER pembandingnya (bulan pilihan combo Banding Periode /
+        # Tipikal) — dulu label polos di SEMUA tab padahal "bulan lalu"
+        # beda sumber antar tab (Anomali = combo; Hari = bulan terbaru
+        # termuat) — dua angka tak terbandingkan tanpa konteks (audit
+        # C15). Alias headerData saja (pola 'Pembanding' → nama bulan di
+        # view_periode): data/sort/record tetap nama kanonik.
+        lbl_b = baseline_label(baseline)
+        if lbl_b:
+            self._table.model().set_header_map(
+                {"BULAN LALU": f"BULAN LALU ({lbl_b})"})
+            self._table.model().set_tooltip_map({
+                "BULAN LALU": COLUMN_TOOLTIPS.get("BULAN LALU", "")
+                + f"\nSumber saat ini: {lbl_b} (mengikuti combo tab "
+                "'Banding Periode')"})
+        else:
+            self._table.model().set_header_map(None)
+            self._table.model().set_tooltip_map(None)
         cols = [c for c in TABLE_COLS if c in df.columns]
         # v2.7.0 (V26-C1): model memegang df PENUH (bukan irisan TABLE_COLS
         # lagi) — kolom non-tabel disembunyikan via visible_cols. Record

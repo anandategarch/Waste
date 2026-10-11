@@ -43,7 +43,7 @@ def bundle_res_dir() -> Path:
     return _bundle_dir()
 
 
-APP_VERSION = "2.13.13"
+APP_VERSION = "2.13.14"
 APP_TITLE = "Waste Anomaly Detection"
 
 
@@ -68,6 +68,31 @@ def fmt_id(value: float, decimals: int = 0) -> str:
         return ""
     s = f"{f:,.{decimals}f}"  # EN sementara: '9,333,117.5'
     return s.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+# ============================================================
+# v2.13.14 (gel-5 C15) — LABEL SUMBER PEMBANDING "BULAN LALU"
+# ============================================================
+# Audit C15: kolom "BULAN LALU" berarti SUMBER BERBEDA antar tab (Anomali
+# = bulan pilihan combo Banding Periode; Hari = bulan pembanding TERBARU
+# yang termuat) tanpa label bulan — dua angka "bulan lalu" yang tak
+# bisa dibandingkan antar tab. Helper satu sumber utk label dinamis.
+
+
+def baseline_label(b) -> str | None:
+    """Label tampilan pembanding utk judul/tooltip kolom (gel-5 C15).
+
+    - dict Tipikal (months_count) → 'Tipikal (median N bulan)';
+    - dict bulan file → label tampilannya (disp/label);
+    - None/bentuk tak dikenal → None (pemanggil memakai label statis).
+    """
+    if not isinstance(b, dict):
+        return None
+    n = b.get("months_count")
+    if n:
+        return f"Tipikal (median {int(n)} bulan)"
+    lbl = str(b.get("disp") or b.get("label") or "").strip()
+    return lbl or None
 
 
 # ============================================================

@@ -17,6 +17,7 @@ jendela.
 """
 from __future__ import annotations
 
+import logging
 import sys
 import traceback
 from datetime import datetime
@@ -76,6 +77,8 @@ def _build_help_html(config: dict | None = None) -> str:
 <h2>Panduan Singkat</h2>
 <p><b>Alur kerja:</b> tab <b>Pipeline</b> → pilih workbook → <b>Mulai Pipeline</b>
 → buka tab <b>Anomali</b> untuk mulai memburu anomali.</p>
+<p><b>Shortcut:</b> <b>Ctrl+1..Ctrl+6</b> pindah tab (sesuai urutan) ·
+<b>Ctrl+E</b> ekspor Excel · <b>F1</b> bantuan ini.</p>
 <h3>Tab Pipeline (tempat semua dimulai)</h3>
 <ul>
 <li>Isi <b>Input Workbook</b>: tombol <b>Telusuri…</b> memilih file Excel rekap
@@ -142,6 +145,8 @@ potensi, jumlah cabang/item, dst. — hasil siap di tab lain.</li>
 <li><b>Banding Periode</b> — bulan berjalan vs <b>daftar file bulan lalu</b>
 (1 file = 1 bulan, format REKAP MENTAH — kuantiti tanpa BOM). Nama bulan dibaca
 otomatis dari nama file; daftar <b>diingat</b> antar sesi; dimuat di latar belakang.
+Nama bulan bisa dikoreksi: <b>klik 2×</b> barisnya atau pilih baris lalu tekan
+<b>Enter/F2</b>.
 Banding per bulan atau vs <b>Tipikal</b> (median beberapa bulan): ringkasan,
 cabang/item bergerak, item baru/hilang — semua murni kuantiti.</li>
 <li><b>Tabel &amp; pop-up rincian</b> — tombol <b>⤢ Perbesar Tabel</b>
@@ -234,6 +239,10 @@ class MainWindow(QMainWindow):
         act_export = QAction("💾 Ekspor Excel", self)
         act_export.setToolTip("Simpan laporan Excel (6 sheet inti + sheet analisa)")
         act_export.triggered.connect(self._export_excel)
+        # v2.13.14 (gel-5 D24): Ctrl+E = ekspor — padanan keyboard tombol
+        # toolbar (tetap aktif walau toolbar disembunyikan; QKeySequence
+        # literal aman — pola act_help F1 gel-1).
+        act_export.setShortcut(QKeySequence("Ctrl+E"))
         bar.addAction(act_export)
         self._act_export = act_export
 
@@ -291,6 +300,43 @@ class MainWindow(QMainWindow):
         self._tabs.setElideMode(Qt.TextElideMode.ElideRight)
         self._tabs.setUsesScrollButtons(True)
         self.setCentralWidget(self._tabs)
+        # v2.13.14 (gel-5 D24) — SHORTCUT GLOBAL pindah tab Ctrl+1..Ctrl+6:
+        # navigasi antar tab dulunya HANYA via mouse (audit D24: nol
+        # shortcut global; pengguna keyboard harus klik tab bar).
+        # QAction tanpa tombol fisik — addAction(window) memasang shortcut
+        # aktif selama jendela fokus (konteks default WindowShortcut).
+        # QKeySequence("Ctrl+N") literal: StandardKey tak punya padanan
+        # angka (satu-satunya angka: StandardKey.Undo/Redo dsb. — aman).
+        self._tab_actions: list[QAction] = []
+        for i, (name, _view) in enumerate(self._views):
+            act = QAction(f"Pindah ke tab {name}", self)
+            act.setToolTip(f"Pindah ke tab {name} (Ctrl+{i + 1})")
+            act.setShortcut(QKeySequence(f"Ctrl+{i + 1}"))
+            # v2.13.14 (gel-5 D24-fix): koneksi ke BOUND METHOD self.
+            # _on_tab_shortcut — BUKAN lambda yang menangkap self.
+            # PySide6 memegang callable koneksi secara KUAT: lambda
+            # dgn closure `self` = rantai kuat QAction(parent=window) →
+            # sinyal → lambda → window yang TAK BISA dipecahkan gc
+            # (siklus lintas C++/Python; window bocor selamanya —
+            # terbukti empirik: window bertahan gc.collect(); teardown
+            # conftest lalu memanggil close() → closeEvent melihat
+            # _running → QMessageBox.question ASLI → full-suite hang
+            # offscreen). Bound method = receiver LEMAH (PySide melacak
+            # lemah objek penerima; koneksi mati sendiri saat window
+            # hancur); index disimpan di property action + dibaca via
+            # self.sender() — idiomatik Qt (pola QSignalMapper modern).
+            act.setProperty("tab_index", i)
+            act.triggered.connect(self._on_tab_shortcut)
+            self.addAction(act)
+            self._tab_actions.append(act)
+
+    def _on_tab_shortcut(self, _checked: bool = False) -> None:
+        """Slot Ctrl+1..Ctrl+6 — pindah tab sesuai action pengirim
+        (index lewat property 'tab_index'; receiver lemah — D24-fix)."""
+        act = self.sender()
+        idx = act.property("tab_index") if act is not None else None
+        if isinstance(idx, int) and 0 <= idx < self._tabs.count():
+            self._tabs.setCurrentIndex(idx)
 
     def _build_statusbar(self) -> None:
         sb = QStatusBar()
@@ -383,6 +429,16 @@ class MainWindow(QMainWindow):
             try:
                 on_shown()
             except Exception as e:  # noqa: BLE001 — render 1 tab ≠ crash app
+                # v2.13.14 (gel-5 C16): traceback UTUH ke log — dulu hanya
+                # pesan singkat status bar: baris/panggilan mana yang meledak
+                # TIDAK PERNAH terekam (audit C16: "exception render tab
+                # ditelan tanpa traceback") — mustahil didiagnosis dari
+                # log. logging.exception → file log (pola _qt_excepthook);
+                # ctx.log → panel log Pipeline + sheet Log Run ekspor.
+                tb = traceback.format_exc()
+                logging.getLogger("waste_anomaly.ui").exception(
+                    "Render tab '%s' gagal", self._tabs.tabText(_index))
+                self.ctx.log(f"⚠ Render tab gagal: {e}\n{tb}")
                 self.ctx.set_status(f"⚠ Render tab gagal: {e}", "error")
 
     # ------------------------------------------------------------

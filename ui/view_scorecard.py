@@ -805,8 +805,15 @@ class ScorecardView(QWidget):
                                f"Menghitung rincian {resto}"):
                 money = money_ranking(df, top_n=10_000)
                 if not money.empty:
+                    # v2.13.14 (gel-5 C20): lookup nama cabang di-STRIP di
+                    # BATAS UI — scorecard() meng-output NAMA RESTO hasil
+                    # strip, tapi money_ranking memuat nilai RAW df; nama
+                    # dgn whitespace ekstra (" 1042.KWGGAL") tak pernah
+                    # cocok == → drill uang KOSONG senyap (audit C20:
+                    # pembanding raw vs stripped). Insigts tidak tersentuh
+                    # (outputnya dipin test kontrak lama).
                     money = money[
-                        money["NAMA RESTO"].astype(str) == resto]
+                        money["NAMA RESTO"].astype(str).str.strip() == resto]
                 share = reason_share(df, resto)
                 if share is not None and not share.empty:
                     share_df = pd.DataFrame({
@@ -818,7 +825,10 @@ class ScorecardView(QWidget):
                         columns=["ALASAN", "SHARE %"])
                 cov = coverage_report(df, self._ctx.history_months)
                 if not cov.empty:
-                    c = cov[cov["NAMA RESTO"].astype(str) == resto]
+                    # C20: strip dua sisi (cov sudah stripped — no-op utk
+                    # data bersih, pelindung drift antar sumber).
+                    c = cov[cov["NAMA RESTO"].astype(str).str.strip()
+                            == resto]
                     if not c.empty:
                         row = c.iloc[0]
                         n = int(row["ITEM UMUM TAK INPUT"])
@@ -902,14 +912,23 @@ class ScorecardView(QWidget):
         idx = self._tcl.indexOf(self._table)
         self._fs_idx = idx if idx >= 0 else 2
         self._tcl.removeWidget(self._table)
-        self._fs_dlg.layout().insertWidget(1, self._table)
-        self._fs_dlg.show()
+        # v2.13.14 (gel-5 C14): pola PERSIS 2 tab lain (view_anomali /
+        # view_hari) — tabel di index 0 dgn stretch (baris tombol di bawah,
+        # tak menelan ruang tabel) + showMaximized + raise_ +
+        # activateWindow (dulu insert-bawah-tombol TANPA raise/activate:
+        # jendela ⛶ kadang tersembunyi di belakang jendela lain — audit
+        # C14: menyimpang dari pola yang sudah teruji round-trip-nya).
+        self._fs_dlg.layout().insertWidget(0, self._table, 1)
         self._fs_dlg.showMaximized()
+        self._fs_dlg.raise_()
+        self._fs_dlg.activateWindow()
         self._ctx.set_status("⛶ Scorecard dibesarkan — Esc = kembali",
                              "done")
 
     def _restore_table_from_fs(self) -> None:
         if self._fs_dlg is not None and self._table.parent() is self._fs_dlg:
             self._fs_dlg.layout().removeWidget(self._table)
-            self._tcl.insertWidget(self._fs_idx, self._table)
+            # v2.13.14 (gel-5 C14): stretch=1 seperti anomali/hari —
+            # tabel kembali memakan sisa tinggi kartu.
+            self._tcl.insertWidget(self._fs_idx, self._table, 1)
         self._ctx.set_status("⤡ Kembali ke tab scorecard", "done")
