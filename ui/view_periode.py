@@ -456,13 +456,26 @@ class PeriodeView(QWidget):
         if not paths:
             return
         added = 0
+        dups: list[str] = []
         for p in paths:
             known = {e["path"] for e in self._entries}
             if p in known:
+                dups.append(p)
                 continue
             self._entries.append(
                 {"path": p, "label": detect_month_label(p)})
             added += 1
+        # v2.13.11 (gel-2 B20): duplikat ditolak dgn PESAN — dulu ditolak
+        # senyap (file "tidak masuk" tanpa feedback apa pun; user bingung
+        # apakah dialog batal atau file salah format). Dedup batch
+        # multi-pilih tetap benar via set `known` yang di-recompute per
+        # iterasi (path sama 2× dalam satu batch = duplikat juga).
+        if dups:
+            names = ", ".join(Path(p).name for p in dups[:5]) \
+                + ("…" if len(dups) > 5 else "")
+            self._lbl_status.setText(
+                f"ℹ {len(dups)} file sudah ada di daftar pembanding — "
+                f"tidak ditambahkan dua kali: {names}")
         if added:
             save_history_entries(self._entries)
             self._render_file_list()
@@ -483,6 +496,10 @@ class PeriodeView(QWidget):
         save_history_entries(self._entries)
         self._render_file_list()
         self._finalize()  # render ulang dgn sisa bulan (tanpa worker bila semua termuat)
+        # v2.13.11 (gel-2 B7): label jumlah bulan dihitung ulang dari
+        # sisa _last_results (dulu label basi '✓ 2 bulan aktif' menempel
+        # pasca-delete — hitungan tak pernah di-refresh).
+        self._render_load_status()
 
     def _on_reload(self) -> None:
         self._auto_load = False  # v2.12.2: kelola file manual → jangan auto-ciut
@@ -636,17 +653,10 @@ class PeriodeView(QWidget):
                 else:  # file menghilang setelah termuat — jangan cache
                     self._loaded.pop(p, None)
                     self._loaded_sig.pop(p, None)
-        ok = [m for m in self._last_results.values()
-              if not m.get("error")]
-        err = [m for m in self._last_results.values() if m.get("error")]
-        # v2.10.1: notif jujur — '✓ aktif' hanya bila ada bulan aktif;
-        # semua gagal → '⚠' (dulu '✓ 0 bulan aktif' menyesatkan).
-        parts = [f"✓ {len(ok)} bulan pembanding aktif"] if ok else []
-        if err:
-            parts.append(f"⚠ {len(err)} file gagal (lihat kolom Status)")
-        if not parts:
-            parts = ["Belum ada file pembanding."]
-        self._lbl_status.setText(" — ".join(parts) + ".")
+        # v2.13.11 (gel-2 B7): logika label jumlah bulan diekstrak ke
+        # _render_load_status() (hitung dari _last_results — SATU tempat,
+        # dipanggil juga _on_delete pasca-_finalize).
+        ok, err = self._render_load_status()
         if ok:
             self._ctx.set_status("✓ Pembanding periode siap", "done")
         else:
@@ -664,12 +674,35 @@ class PeriodeView(QWidget):
         self._auto_load = False
         self._finalize()
 
+    def _render_load_status(self) -> tuple[list, list]:
+        """v2.13.11 (gel-2 B7): label jumlah bulan pembanding dihitung
+        ulang dari _last_results — SATU tempat, dipanggil _on_done &
+        _on_delete pasca-_finalize (dulu hanya _on_done: label basi
+        '✓ 2 bulan aktif' menempel setelah file dihapus — audit B7).
+        v2.10.1 (semantik dipertahankan): '✓ aktif' hanya bila ada bulan
+        aktif; semua gagal → '⚠'; kosong → 'Belum ada file'."""
+        ok = [m for m in self._last_results.values() if not m.get("error")]
+        err = [m for m in self._last_results.values() if m.get("error")]
+        parts = [f"✓ {len(ok)} bulan pembanding aktif"] if ok else []
+        if err:
+            parts.append(f"⚠ {len(err)} file gagal (lihat kolom Status)")
+        if not parts:
+            parts = ["Belum ada file pembanding."]
+        self._lbl_status.setText(" — ".join(parts) + ".")
+        return ok, err
+
     def _on_failed(self, err: str, tb: str) -> None:
         self._finish()
         cancelled = "dibatalkan" in err.lower()
         if cancelled:
             self._lbl_status.setText("⏹ Pemuatan pembanding dibatalkan.")
             self._ctx.set_status("⏹ Pemuatan pembanding dibatalkan", "error")
+            # v2.13.11 (gel-2 B6): refresh baris status file — file yang
+            # tak sempat termuat kembali jujur '⏳ belum dimuat' (dulu:
+            # '⏳ memuat…' menempel SELAMANYA karena _render_file_list tak
+            # pernah dipanggil di jalur cancel; _finish sudah menurunkan
+            # _running → status baris dihitung ulang benar).
+            self._render_file_list()
             return
         self._lbl_status.setText(f"⚠ Gagal: {err}")
         self._ctx.set_status(f"⚠ Pembanding gagal: {err}", "error")
@@ -874,8 +907,23 @@ class PeriodeView(QWidget):
     def _rebuild_combo(self, months: list[dict]) -> None:
         """Isi ulang combo (Tipikal + bulan kronologis) tanpa trigger render
         (setCurrentIndex di dalam blok sinyal — klik user tetap memicu
-        render lewat _on_combo_changed)."""
+        render lewat _on_combo_changed).
+
+        v2.13.11 (gel-2 B4): pilihan user di-RESTORE bila bulannya masih
+        ada — identitas PATH file bulan (kunci identitas SAMA dgn
+        state._baseline_alive gel-1 → satu makna "bulan masih hidup" di
+        dua tempat, bukan dua sumber kebenaran). Dulu: daftar file berganti
+        sedikit pun (tambah/hapus file LAIN) → _finalize menaikkan versi →
+        rebuild me-reset ke default Tipikal → baseline yang dipakai tab
+        Anomali (set_banding_baseline di _refresh_result) ikut berganti
+        SENYAP. Fallback default HANYA bila pilihan tak bisa dipulihkan
+        (bulan terhapus / Tipikal tak tersedia lagi / combo pertama)."""
         self._combo_version = self._ctx.history_version
+        # B4: pilihan user dibaca SEBELUM clear (currentData = _TYPICAL_KEY
+        # atau dict bulan bermuatan 'path').
+        prev = self._cb_b.currentData()
+        prev_typical = prev == _TYPICAL_KEY
+        prev_path = prev.get("path") if isinstance(prev, dict) else None
         self._cb_b.blockSignals(True)
         self._cb_b.clear()
         typ = self._ctx.history_typical
@@ -887,10 +935,24 @@ class PeriodeView(QWidget):
         if self._cb_b.count() == 0:
             self._cb_b.blockSignals(False)
             return
-        # Default: Tipikal (deteksi perubahan) bila ada, else bulan TERBARU.
-        idx = 0
-        if typ is None and months:
-            idx = self._cb_b.count() - 1  # bulan terakhir = terbaru
+        # B4: restore — Tipikal → Tipikal tetap; bulan → cari path sama
+        # (match-any: entri pertama yang menang, konsisten _baseline_alive;
+        # duplikat path dari history pra-B20 tak memuncak dua pilihan).
+        idx = None
+        if prev_typical and typ is not None:
+            idx = 0
+        elif prev_path:
+            for i in range(self._cb_b.count()):
+                d = self._cb_b.itemData(i)
+                if isinstance(d, dict) and d.get("path") == prev_path:
+                    idx = i
+                    break
+        if idx is None:
+            # Default: Tipikal (deteksi perubahan) bila ada, else bulan
+            # TERBARU — hanya saat pilihan user tak bisa dipulihkan.
+            idx = 0
+            if typ is None and months:
+                idx = self._cb_b.count() - 1  # bulan terakhir = terbaru
         self._cb_b.setCurrentIndex(idx)
         self._cb_b.blockSignals(False)
 
@@ -926,9 +988,25 @@ class PeriodeView(QWidget):
                 "bulan berjalan.")
             return
         if not months:
-            self._clear_tables(
-                "Belum ada file pembanding — tambahkan file bulan lalu di atas "
-                "(1 file = 1 bulan).")
+            # v2.13.11 (gel-2 B3): bedakan "belum ada file" vs "file ADA
+            # tapi GAGAL dimuat" — dulu keduanya "Belum ada file pembanding",
+            # instruksi salah arah saat semua file gagal (suruh menambah
+            # file, padahal masalahnya gagal dibaca — audit B3).
+            failed = [
+                Path(ent["path"]).name
+                for ent in self._entries
+                if (res := self._last_results.get(ent["path"])) is not None
+                and res.get("error")]
+            if failed:
+                shown = ", ".join(failed[:5]) + ("…" if len(failed) > 5 else "")
+                self._clear_tables(
+                    f"⚠ {len(failed)} file pembanding gagal dimuat: "
+                    f"{shown} — periksa kolom Status di daftar file / "
+                    "Muat Ulang.")
+            else:
+                self._clear_tables(
+                    "Belum ada file pembanding — tambahkan file bulan lalu "
+                    "di atas (1 file = 1 bulan).")
             return
         data = self._cb_b.currentData()
         if data == _TYPICAL_KEY:

@@ -34,7 +34,11 @@ from .workers import PipelineWorker
 
 _SUMMARY_LABELS = {
     "total_rows": "Total baris",
-    "anomali_count": "Total anomali",
+    # v2.13.11 (gel-2 D3): dua definisi anomali dilabeli — angka ini =
+    # prioritas + potensi (semantik build_summary pipeline.py), BUKAN
+    # semua baris non-Normal yang ditampilkan status bar. Dulu kartu
+    # "399" vs status bar "797" tanpa pembeda (audit D3).
+    "anomali_count": "Total anomali (prioritas+potensi)",
     "prioritas_count": "Prioritas tinggi",
     "potensi_count": "Potensi anomali",
     "review_count": "Perlu review",
@@ -334,13 +338,20 @@ class PipelineView(QWidget):
 
     def _on_failed(self, err: str, tb: str) -> None:
         self._finish_run()
+        # v2.13.11 (gel-2 D23): progress + label direset JUJUR pasca
+        # cancel/gagal — dulu sisa % terakhir menempel selamanya (bar 40%
+        # + pesan stage terakhir padahal run sudah tidak berjalan).
+        self._progress.setValue(0)
         cancelled = (err == "Run dibatalkan pengguna")
         if cancelled:
+            self._lbl_status.setText(
+                "⏹ Dibatalkan — tidak ada hasil; progres direset.")
             self._ctx.set_status("⏹ Run dibatalkan pengguna", "error")
             self._ctx.log("=== Run dibatalkan — hasil tidak dirender ===")
             QMessageBox.information(self, "Run Dibatalkan",
                                     "Run dibatalkan — hasil tidak dirender.")
         else:
+            self._lbl_status.setText(f"⚠ Gagal: {err}")
             self._ctx.set_status(f"ERROR: {err}", "error")
             self._ctx.log(f"!!! ERROR: {err}")
             if tb:

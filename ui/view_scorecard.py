@@ -341,6 +341,23 @@ class ScorecardView(QWidget):
         if self._dirty:
             self._refresh()
 
+    def _reset_kpis(self) -> None:
+        """v2.13.11 (gel-2 C1): dataset kosong/None → SEMUA KPI di-reset
+        JUJUR — hitungan '0', agregat/nama '—' (konvensi C11: 0 = jumlah,
+        '—' = tak bisa dihitung/ditampilkan). Dulu cabang ini setengah
+        jalan: tabel utama dikosongkan tapi KPI hemat/intensitas/CABANG #1
+        + label kartu pendukung + tabel DQ/Tren membiarkan angka dataset
+        LAMA terpampang di atas tabel kosong (klaim tanpa data)."""
+        wait = "menunggu data pipeline"
+        self._kpi_hemat.set_value("—")
+        self._kpi_hemat.set_context(wait)
+        self._kpi_intens.set_value("—")
+        self._kpi_intens.set_context(wait)
+        self._kpi_top.set_value("—")
+        self._kpi_top.set_context(wait)
+        self._kpi_sistemik.set_value("0")
+        self._kpi_sistemik.set_context("hari naik serentak (≥ 3 cabang)")
+
     def _refresh(self) -> None:
         """Hitung (sekali per data/pembanding) + render semua tabel."""
         self._dirty = False
@@ -349,10 +366,21 @@ class ScorecardView(QWidget):
             self._lbl_count.setText(
                 "Jalankan pipeline dulu (tab Pipeline) — scorecard "
                 "menunggu data bulan berjalan.")
+            # v2.13.11 (gel-2 C1+C5): reset MENYELURUH — dulu DQ/Tren tak
+            # di-nol-kan & KPI/label kartu membiarkan angka dataset lama
+            # menempel (audit C1: setengah-cabang reset).
+            self._reset_kpis()
+            self._lbl_money.setText("")
+            self._lbl_weekday.setText("")
+            self._lbl_sistemik.setText("")
+            self._lbl_dq.setText("")
+            self._lbl_trend.setText("")
             self._table.set_dataframe(None)
             self._money_table.set_dataframe(None)
             self._weekday_table.set_dataframe(None)
             self._sistemik_table.set_dataframe(None)
+            self._dq_table.set_dataframe(None)
+            self._trend_table.set_dataframe(None)
             return
 
         ver = (self._ctx.data_version, self._ctx.history_version)
@@ -392,9 +420,29 @@ class ScorecardView(QWidget):
 
         money = self._apply_local("money", m["money"])
         self._money_table.set_dataframe(money, sort_desc="KELEBIHAN")
-        self._lbl_money.setText(
-            f"{len(money)} baris ber-kelebihan (dari baris aktif yang "
-            f"punya ≥ 3 pembanding) — urut kelebihan terbesar.")
+        # v2.13.11 (gel-2 C4): total NYATA dihitung dari df (KELEBIHAN > 0;
+        # kontrak kolom: terisi hanya bila peer ≥ 3 & TOTAL > 0) — dulu
+        # label "200 baris ber-kelebihan…" menampilkan KAP top_n=200,
+        # bukan total nyata (928) — dibaca sebagai jumlah temuan audit.
+        # Kap aktif (total > 200) → "Top 200 dari N…" jujur; funnel lokal
+        # aktif → suffix jumlah baris yang TAMPIL.
+        kelebihan = pd.to_numeric(
+            df["KELEBIHAN"], errors="coerce") \
+            if "KELEBIHAN" in df.columns else None
+        n_total = int((kelebihan.fillna(0) > 0).sum()) \
+            if kelebihan is not None else 0
+        n_all = len(m["money"])
+        if n_total > n_all:
+            base = (f"Top 200 dari {fmt_id(n_total)} baris ber-kelebihan "
+                    "(dari baris aktif yang punya ≥ 3 pembanding) — hanya "
+                    "teratas yang ditampilkan.")
+        else:
+            base = (f"{fmt_id(n_all)} baris ber-kelebihan (dari baris "
+                    "aktif yang punya ≥ 3 pembanding) — urut kelebihan "
+                    "terbesar.")
+        if self._lfilters.get("money"):
+            base += f" · tersaring: {fmt_id(len(money))} tampil."
+        self._lbl_money.setText(base)
 
         wk = self._apply_local("weekday", m["weekday"])
         self._weekday_table.set_dataframe(wk)
@@ -461,6 +509,18 @@ class ScorecardView(QWidget):
                 f"hemat ± {fmt_id(top['KELEBIHAN'])} · intensitas "
                 + (f"{top['INTENSITAS %']:.3f}".replace(".", ",") + "%"
                    if pd.notna(top["INTENSITAS %"]) else "Cek"))
+        else:
+            # v2.13.11 (gel-2 C5): dataset ADA tapi tanpa kolom penjualan
+            # (TOTAL BOM) → resto_intensity kosong → KPI hemat/intensitas/
+            # CABANG #1 jujur '—' — dulu angka + nama cabang dataset LAMA
+            # terus terpampang di atas tabel dataset baru (audit C5).
+            no_bom = "dataset tanpa penjualan (BOM) — tak bisa dihitung"
+            self._kpi_hemat.set_value("—")
+            self._kpi_hemat.set_context(no_bom)
+            self._kpi_intens.set_value("—")
+            self._kpi_intens.set_context(no_bom)
+            self._kpi_top.set_value("—")
+            self._kpi_top.set_context(no_bom)
         n_sys = 0 if sysd is None else len(sysd)
         self._kpi_sistemik.set_value(str(n_sys))
         self._kpi_sistemik.set_context(

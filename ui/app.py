@@ -6,7 +6,9 @@ Struktur:
   Follow Up · Hari Mencurigakan · Scorecard Cabang · Banding Periode ·
   Pipeline — render lazy per-view (H2). Tab Scorecard & Pipeline dibungkus
   QScrollArea (v2.13.6) — konten panjang tetap terjangkau di layar kecil.
-- Status bar: pesan status + hitungan baris/anomali permanen
+- Status bar: pesan status + hitungan permanen — total baris + DUA
+  definisi anomali dilabeli (non-Normal vs prioritas+potensi,
+  v2.13.11 gel-2 D3) + waktu run
 
 v2.12.4: sidebar filter kiri (v2.8.0) DIHAPUS — filter kini lewat
 funnel di judul kolom tabel (SEMUA kolom, v2.12.4) + tombol
@@ -228,6 +230,14 @@ class MainWindow(QMainWindow):
         self._fu_view = self._views[1][1]
         self._update_followup_badge()
         self._tabs.currentChanged.connect(self._on_tab_changed)
+        # v2.13.11 (gel-2 D4): first-run — currentChanged terpasang SETELAH
+        # addTab, jadi tab 0 (Anomali) TIDAK PERNAH memicu on_shown: tabel +
+        # label arah kosong tanpa CTA ke Pipeline (terlihat seperti hang;
+        # audit D4 + VLM QA konfirmasi layar first-run tanpa empty-state).
+        # Picu SEKALI pasca-wiring → AnomaliView.refresh() terjadi → label
+        # "Belum ada data — buka tab Pipeline…" ter-render sejak awal.
+        # (Kontrak lazy-render tetap: pindah tab → on_shown per-view.)
+        self._on_tab_changed(self._tabs.currentIndex())
         # Anti-terpotong: bila tab bar sempit, teks di-elide dengan '…'
         # (konvensi jelas) + tombol panah scroll — TIDAK pernah dipotong
         # mentah mid-character. 4 tab (v2.9.0) masih muat di jendela
@@ -273,16 +283,25 @@ class MainWindow(QMainWindow):
             return
         # v2.12.4: sidebar filter dihapus — tidak ada combo/search yang
         # perlu diisi/disinkronkan; state filter direset oleh set_dataset.
-        # Permanent status: baris + anomali + waktu run
+        # Permanent status: baris + anomali + waktu run.
+        # v2.13.11 (gel-2 D3): DUA definisi "anomali" kini DILABELI — dulu
+        # status bar "797 anomali" (= semua non-Normal) vs kartu Ringkasan
+        # Run "399" (= prioritas+potensi saja) beda 398 tanpa pembeda.
+        # Angka prioritas+potensi dihitung dari df dgn semantik SAMA dgn
+        # pipeline.py build_summary (anomali_count = prioritas+potensi;
+        # engine TIDAK diubah).
         total = len(df)
+        n_non = n_pp = 0
         if "ANOMALY STATUS" in df.columns:
-            n_anom = int((df["ANOMALY STATUS"] != "Normal").sum())
-        else:
-            n_anom = 0
+            status = df["ANOMALY STATUS"]
+            n_non = int((status != "Normal").sum())
+            n_pp = int(status.isin(
+                ["Prioritas Tinggi", "Potensi Anomali"]).sum())
         run_t = self.ctx.last_run_time
         tstr = run_t.strftime("%H:%M:%S") if run_t else "—"
         self._lbl_perm.setText(
-            f"{fmt_id(total)} baris • {fmt_id(n_anom)} anomali • run {tstr}")
+            f"{fmt_id(total)} baris • {fmt_id(n_non)} berstatus non-Normal"
+            f" • {fmt_id(n_pp)} prioritas+potensi • run {tstr}")
         self._act_export.setEnabled(True)
         # v2.12.0: dataset baru — pangkas centangan follow-up yang
         # barisnya tak ada lagi (pipeline ulang / file berganti). Stale
@@ -323,6 +342,16 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------
     # EXPORT
     # ------------------------------------------------------------
+    def _pipeline_busy(self) -> bool:
+        """v2.13.11 (gel-2 D2): apakah pipeline sedang berjalan? Iterasi
+        _views nama 'Pipeline' cek _running. HistoryWorker (banding)
+        sengaja TIDAK dicek — worker banding tidak mengganti ctx.df,
+        export saat banding berjalan tetap sah."""
+        for name, view in self._views:
+            if name == "Pipeline" and getattr(view, "_running", False):
+                return True
+        return False
+
     def _export_excel(self) -> None:
         if self._exporting:
             return
@@ -331,6 +360,23 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Export",
                                     "Belum ada data. Jalankan pipeline dulu.")
             return
+        # v2.13.11 (gel-2 D2): export saat pipeline SEDANG berjalan → yang
+        # diekspor = hasil run SEBELUMNYA — konfirmasi jujur sebelum dialog
+        # file (default No, pola closeEvent; Enter salah = aman batal).
+        # Dulu: tombol Export tampak siap & klik langsung menyimpan data
+        # lama tanpa keterangan run mana (audit D2).
+        if self._pipeline_busy():
+            ans = QMessageBox.question(
+                self, "Pipeline sedang berjalan",
+                "Pipeline sedang berjalan — data yang diekspor adalah "
+                "hasil run SEBELUMNYA. Lanjutkan?",
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if ans != QMessageBox.StandardButton.Yes:
+                self.ctx.set_status(
+                    "Export ditunda — pipeline masih berjalan", "running")
+                return
         from PySide6.QtWidgets import QFileDialog
         initialdir = Path.home() / "Documents"
         if not initialdir.exists():

@@ -193,6 +193,11 @@ class FollowUpView(QWidget):
     # REAKSI STATE
     # ------------------------------------------------------------
     def _on_data_ready(self) -> None:
+        # v2.13.11 (gel-2 C2): dataset baru → funnel lokal _hfilters direset
+        # (pola AnomaliView/HariView — dulu view ini TERLEWAT: nilai filter
+        # dataset lama menyangkut → apply_hfilter di atas data baru →
+        # tabel 0 baris SENYAP pasca ganti dataset; audit C2).
+        self._hfilters.clear()
         if self.isVisible():
             self.refresh()
         else:
