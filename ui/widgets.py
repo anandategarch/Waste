@@ -161,6 +161,23 @@ def _menu_value_fmt(col: str):
     return fmt_cell
 
 
+def _counts_has(counts: dict, v) -> bool:
+    """v2.13.13 (gel-4 A6) — keanggotaan nilai di kamus counts funnel
+    yang NaN-AWARE, dipakai UNION nilai state ke menu (_open_menu).
+
+    ``v in counts`` polos bisa meleset utk nilai kosong: kunci
+    value_counts(dropna=False) adalah NaN float, sedangkan state bisa
+    memegang None / objek NaN lain — None ≠ NaN, dan dua NaN objek
+    berbeda tak pernah saling == (hash NaN id-based sejak Python 3.10).
+    None dan NaN apa pun dianggap SAMA kunci kosong."""
+    if v is None or (isinstance(v, float) and v != v):
+        for k in counts:
+            if k is None or (isinstance(k, float) and k != k):
+                return True
+        return False
+    return v in counts
+
+
 class _HeaderFilterMenu(QMenu):
     """Menu filter per kolom (v2.12.3) — filter nilai + opsi sort.
 
@@ -276,11 +293,21 @@ class _HeaderFilterMenu(QMenu):
             it = QListWidgetItem()
             if len(disp) > 48:
                 disp = disp[:45] + "…"
-            it.setText(f"{disp}   ({fmt_id(n)})")
+            # v2.13.13 (gel-4 A6): nilai milik STATE funnel tapi 0 baris
+            # tampak (disembunyikan filter lain) ditawarkan dgn penanda
+            # jujur — bukan angka baris ("(0)" menipu: nilai tampak tak
+            # ada padahal bagian filter aktif).
+            if n > 0:
+                it.setText(f"{disp}   ({fmt_id(n)})")
+                it.setToolTip(f"{disp} — {fmt_id(n)} baris")
+            else:
+                it.setText(f"{disp}   (tersembunyi — lepas filter lain)")
+                it.setToolTip(
+                    f"{disp} — 0 baris tampak: nilai ini bagian filter "
+                    "kolom tapi sedang disembunyikan filter kolom lain")
             # UserRole = nilai MENTAH (None dipertahankan sebagai kunci
             # isin — round-trip teruji di test_v21312).
             it.setData(Qt.ItemDataRole.UserRole, v)
-            it.setToolTip(f"{disp} — {fmt_id(n)} baris")
             it.setFlags(Qt.ItemFlag.ItemIsUserCheckable
                         | Qt.ItemFlag.ItemIsEnabled)
             it.setCheckState(
@@ -473,6 +500,19 @@ class FilterHeader(QHeaderView):
                 state = t._hf_state(name)
         except Exception:  # noqa: BLE001
             state = None
+        # v2.13.13 (gel-4 A6): UNION nilai STATE ke daftar — menu dibangun
+        # dari df TERFILTER: nilai yang sedang dipilih tapi disembunyikan
+        # filter lain dijatuhkan SENYAP saat apply (filter jadi "bolong":
+        # lepas filter lain → baris hilang tanpa jejak; audit A6).
+        # Nilai state yang tak ada di counts ditambahkan dgn jumlah 0 —
+        # _populate menandainya "tersembunyi — lepas filter lain";
+        # _apply_now ikut mempertahankannya (filter tak bolong).
+        # _counts_has NaN-aware: None di state tetap menyatu dgn kunci
+        # NaN counts (tak dobel entri "(kosong)").
+        if state:
+            for v in state:
+                if not _counts_has(counts, v):
+                    counts[v] = 0
         key = t._hf_cols.get(name, name)
         menu = _HeaderFilterMenu(t, name, key, counts, state,
                                   t._hf_apply, self,
@@ -589,6 +629,12 @@ class DataTable(QTableView):
         # view memeriksa suppress_row_popup() supaya klik sel ✓ pada baris
         # BARU pun tak membuka pop-up detail — alur centang massal murni).
         self._press_check = False
+        # v2.13.13 (gel-4 A4): state centang + baris saat TEKAN di sel ✓ —
+        # pembanding utk mouseReleaseEvent (anti-dobel: state pra-super di
+        # TEKAN dibaca ulang di LEpas — sama = delegate tak menyentuhnya
+        # → toggle manual; beda = delegate sudah men-toggle, jangan dobel).
+        self._press_check_state = None
+        self._press_check_row = -1
         # v2.12.5: (waktu, rect-global menu funnel terakhir tertutup)
         # — sumber guard klik-ganda artefak (lihat mouseDoubleClickEvent)
         self._hf_hide: tuple[float, QRect | None] = (-1e9, None)
@@ -749,10 +795,57 @@ class DataTable(QTableView):
         idx = self.indexAt(e.position().toPoint())
         self._press_check = bool(
             idx.isValid() and not self._relay_row_click_ok(idx))
+        # v2.13.13 (gel-4 A4): catat state centang + baris saat TEKAN
+        # (dibaca mouseReleaseEvent; guard menu-funnel di atas sudah
+        # menelan tekanan artefak → state ini tak terisi utk klik itu).
+        self._press_check_state = (
+            self._model.data(idx, Qt.ItemDataRole.CheckStateRole)
+            if self._press_check and idx.isValid() else None)
+        self._press_check_row = idx.row() if self._press_check else -1
         try:
             super().mousePressEvent(e)
         finally:
             self._press_check = False
+
+    def mouseReleaseEvent(self, e) -> None:
+        """v2.13.13 (gel-4 A4) — SELURUH sel kolom ✓ = area centang.
+
+        Delegate Qt hanya men-toggle bila klik jatuh PADA indikator
+        centang (x ±4-16 dari sel ±36px — audit A4: klik tengah/kanan
+        sel = TANPA efek + pop-up tertekan = "centang kadang tidak
+        mau"). Kini: lepas-tekan kiri di sel ✓ yang TIDAK mengubah
+        state centang (state saat TEKAN == state sesudah lepas —
+        anti-dobel apa pun jalur delegate-nya) → toggle manual lewat
+        model.setData (jalur dataChanged satu sel + sinyal
+        check_toggled — sama persis dgn klik indikator). Baris harus
+        sama dgn tekanan (drag antar sel = bukan klik centang).
+
+        Guard klik pasca-menu-funnel (v2.12.5/2.13.9) tetap utuh:
+        tekanan artefak ditelan mousePressEvent → _press_check_state
+        tak pernah terisi → lepas-tekannya tak memicu toggle apa pun
+        (tanpa ini, fix ini justru me-reintroduksi artefak tutup-menu
+        → toggle senyap)."""
+        if (e.button() == Qt.MouseButton.LeftButton
+                and self._press_check_state is not None):
+            idx = self.indexAt(e.position().toPoint())
+            super().mouseReleaseEvent(e)
+            if (idx.isValid() and not self._relay_row_click_ok(idx)
+                    and idx.row() == self._press_check_row):
+                after = self._model.data(
+                    idx, Qt.ItemDataRole.CheckStateRole)
+                if after == self._press_check_state:
+                    # delegate tak men-toggle (klik di luar indikator) →
+                    # seluruh sel bernilai centang: toggle manual.
+                    self._model.setData(
+                        idx,
+                        (Qt.CheckState.Unchecked
+                         if after == Qt.CheckState.Checked
+                         else Qt.CheckState.Checked),
+                        Qt.ItemDataRole.CheckStateRole)
+            self._press_check_state = None
+            self._press_check_row = -1
+            return
+        super().mouseReleaseEvent(e)
 
     def suppress_row_popup(self) -> bool:
         """True bila tekanan mouse yang sedang diproses ada di sel ✓ —

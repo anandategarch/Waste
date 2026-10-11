@@ -381,4 +381,4 @@ class TestVersi:
         from waste_anomaly.utils import load_config
         from ui.shared import APP_VERSION
         cfg = load_config()
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.13.12"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.13.13"

@@ -192,13 +192,25 @@ class FollowupTableMixin:
         Memo LRU per (id objek display, tanda tangan filter) supaya objek
         hasil STABIL per state → cache fit DataTable tetap kena (pola
         _disp_cache). Kolom ✓ disegarkan tiap pemakaian (state follow-up
-        bisa berganti saat objek ini tak sedang jadi model)."""
+        bisa berganti saat objek ini tak sedang jadi model).
+
+        v2.13.13 (gel-4 A5+C10): entri kini (weakref, hasil) dgn
+        VALIDASI IDENTITAS ``entry[0]() is disp`` — dulu kunci id()
+        TANPA strong-ref/validasi: id bisa DIPAKAI ULANG objek lain
+        pasca-GC → tabrakan id mengembalikan mask baris STATE LAMA
+        (data salah, jarang tapi nyata — audit A5; komentar lama
+        "strong ref" yang menutupi celah ini dihapus jujur — audit
+        C10). Pola = _disp_cache/_change_cache (weakref + identity)."""
         if not self._hfilters:
             return disp
         sig = tuple(sorted((c, tuple(v)) for c, v in self._hfilters.items()))
         key = (id(disp), sig)
-        out = self._mask_cache.get(key)
-        if out is None:
+        entry = self._mask_cache.get(key)
+        if (entry is not None and entry[0]() is disp
+                and entry[1] is not None):
+            self._mask_cache.move_to_end(key)
+            out = entry[1]
+        else:
             m = pd.Series(True, index=disp.index)
             for col, vals in self._hfilters.items():
                 if col in disp.columns and vals:
@@ -207,11 +219,9 @@ class FollowupTableMixin:
             # assignment kolom ✓ di bawah memicu SettingWithCopyWarning
             # palsu (objek ini memang salinan baru milik memo).
             out = disp[m].copy()
-            self._mask_cache[key] = out
+            self._mask_cache[key] = (weakref.ref(disp), out)
             while len(self._mask_cache) > 4:
                 self._mask_cache.popitem(last=False)
-        else:
-            self._mask_cache.move_to_end(key)
         if CHECK_COL in out.columns and FP_COL in out.columns:
             out[CHECK_COL] = out[FP_COL].isin(self._ctx.followup_set())
         return out

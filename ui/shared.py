@@ -43,7 +43,7 @@ def bundle_res_dir() -> Path:
     return _bundle_dir()
 
 
-APP_VERSION = "2.13.12"
+APP_VERSION = "2.13.13"
 APP_TITLE = "Waste Anomaly Detection"
 
 
@@ -68,6 +68,57 @@ def fmt_id(value: float, decimals: int = 0) -> str:
         return ""
     s = f"{f:,.{decimals}f}"  # EN sementara: '9,333,117.5'
     return s.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+# ============================================================
+# v2.13.13 (gel-4 D7) — PESAN ERROR FILE RAMAH (BATAS UI)
+# ============================================================
+# Audit D7: error file korup dulunya tampil sebagai modal EN mentah
+# ("File is not a zip file") tanpa saran — kontras jalur validasi skema
+# yang ramah+saran. Worker/engine TETAP melempar error mentah (log &
+# traceback jujur; pola _log_id gel-3: penerjemahan dilakukan DI BATAS
+# UI saat pesan sampai ke dialog user — view_pipeline/view_periode).
+# Pola tak dikenal → teks asli APA ADANYA (jujur, bukan tebakan).
+_FILE_ERR_PATTERNS: list[tuple[str, str, str]] = [
+    ("file is not a zip file",
+     "File bukan workbook Excel (.xlsx) yang valid — isinya bukan arsip"
+     " XLSX (file rusak/terpotong saat di-copy, atau format lain yang "
+     "dinamai .xlsx).",
+     "buka file di Excel lalu simpan ulang sebagai Excel Workbook "
+     "(.xlsx), baru jalankan lagi"),
+    ("no such file or directory",
+     "File tidak ditemukan — sudah dipindah, diganti nama, atau dihapus.",
+     "pilih ulang file lewat tombol Telusuri… di tab Pipeline"),
+    ("permission denied",
+     "File tidak bisa dibaca — sedang dipakai (dikunci) program lain, "
+     "biasanya masih terbuka di Excel.",
+     "tutup file-nya di Excel dulu, lalu coba lagi"),
+    ("excel file format cannot be determined",
+     "Isi file tidak dikenali sebagai Excel — file kosong atau bukan "
+     "spreadsheet.",
+     "periksa file terbuka benar di Excel dan berisi data rekap"),
+    ("does not support the old .xls",
+     "Format .xls lama (Excel 97-2003) tidak didukung pembaca Excel "
+     "modern.",
+     "buka di Excel lalu simpan sebagai .xlsx, baru jalankan lagi"),
+]
+
+
+def friendly_file_error(err: str) -> str:
+    """v2.13.13 (gel-4 D7) — terjemahkan pesan error file EN mentah
+    (openpyxl/pandas/Python) ke Bahasa Indonesia + SARAN, dipakai di
+    BATAS UI (dialog modal view_pipeline / view_periode).
+
+    5 pola dikenal (fragment lowercase — substring match); pola tak
+    dikenal → teks asli apa adanya (bukan tebakan). Teks asli tetap
+    dilampirkan di ekor supaya bisa dicocokkan dgn log/traceback yang
+    menulis versi mentah (kontrak: worker TIDAK diubah)."""
+    s = str(err or "")
+    low = s.lower()
+    for frag, indo, saran in _FILE_ERR_PATTERNS:
+        if frag in low:
+            return f"{indo}\n\nSaran: {saran}.\n\n(Teks asli: {s})"
+    return s
 
 
 # ============================================================

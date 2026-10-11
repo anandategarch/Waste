@@ -33,6 +33,13 @@ UI_FONT_PX = 13
 UI_HEADER_WEIGHT = 600
 
 
+# v2.13.13 (gel-4 D25): rule :focus TOMBOL ditambahkan di QSS bawah —
+# tanpa itu, navigasi keyboard (Tab/Enter — jalur a11y) tak pernah
+# menunjukkan tombol mana yang aktif (audit D25: hanya :hover yang ada;
+# input QLineEdit dkk. sudah punya :focus sejak lama). Warna: aksen teal
+# utk tombol biasa; #5eead4 (teal muda) utk accent (terbaca di atas
+# latar teal gelap); merah utk danger.
+
 QSS = f"""
 * {{
     font-family: {UI_FONT_FAMILY};
@@ -65,6 +72,7 @@ QPushButton {{
     padding: 6px 14px;
 }}
 QPushButton:hover {{ border-color: #94a3b8; background: #f8fafc; }}
+QPushButton:focus {{ border-color: {C_ACCENT}; }}
 QPushButton:disabled {{ color: #94a3b8; background: #f1f5f9; }}
 
 QPushButton#accent {{
@@ -74,10 +82,12 @@ QPushButton#accent {{
     font-weight: 600;
 }}
 QPushButton#accent:hover {{ background: {C_ACCENT_HOVER}; }}
+QPushButton#accent:focus {{ border-color: #5eead4; }}
 QPushButton#accent:disabled {{ background: #94a3b8; border-color: #94a3b8; color: #e2e8f0; }}
 
 QPushButton#danger {{ background: #ffffff; color: #dc2626; border: 1px solid #fecaca; }}
 QPushButton#danger:hover {{ background: #fef2f2; }}
+QPushButton#danger:focus {{ border-color: #dc2626; }}
 
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
     background: #ffffff;

@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .shared import APP_DIR, fmt_id
+from .shared import APP_DIR, fmt_id, friendly_file_error
 from .state import AppContext
 from .widgets import Card, WLabel, busy_feedback
 from .workers import PipelineWorker
@@ -300,6 +300,14 @@ class PipelineView(QWidget):
             "(sibuk ± 1 dtk di data besar) — bukan live per ketikan.")
         b_preview.clicked.connect(self._preview_thresholds)
         bl.addWidget(b_preview)
+        # v2.13.13 (gel-4 D29): tombol disimpan sebagai ATRIBUT —
+        # _preview_thresholds menonaktifkan 3 tombol (Mulai/Simpan/
+        # Pratinjau) selama compute pratinjau berjalan (dulu lokal var:
+        # klik ganda saat compute 0,3-0,5 dtk = nested compute + UI
+        # freeze — audit D29).
+        self._btn_save = b_save
+        self._btn_preview = b_preview
+        self._btn_reset = b_reset
         bl.addStretch(1)
         inner_lay = QVBoxLayout(inner)
         inner_lay.setContentsMargins(0, 0, 0, 0)
@@ -375,6 +383,12 @@ class PipelineView(QWidget):
         self._worker.progress.connect(self._on_progress)
         self._worker.done.connect(self._on_done)
         self._worker.failed.connect(self._on_failed)
+        # v2.13.13 (gel-4 D10): worker selesai → deleteLater — tiap run
+        # membuat QThread baru; tanpa ini objek worker menumpuk seumur
+        # aplikasi (pola ExportWorker app.py / HistoryWorker view_periode;
+        # _finish_run sudah melepas ref view, deleteLater meng-amankan
+        # objek Qt sendiri pasca-sinyal selesai).
+        self._worker.finished.connect(self._worker.deleteLater)
         self._worker.start()
 
     def _cancel(self) -> None:
@@ -403,6 +417,13 @@ class PipelineView(QWidget):
         self._ctx.log(line)
         self._progress.setValue(int(pct))
         self._lbl_status.setText(line)
+        # v2.13.13 (gel-4 D5): progres ikut STATUS BAR JENDELA UTAMA —
+        # pindah tab saat run dulunya = TANPA indikator progres di
+        # jendela utama (progress bar hanya hidup di dalam tab Pipeline;
+        # audit D5). Baris stage engine kini membawa "(N%)" (gel-4 B14)
+        # → pesan status bar jujur menyertakan persen kumulatif.
+        # (Bergetar per baris stage = by design — progres hidup.)
+        self._ctx.set_status(f"⏳ {line}", "running")
 
     def _on_done(self, summary: dict) -> None:
         self._finish_run()
@@ -412,7 +433,11 @@ class PipelineView(QWidget):
         self._progress.setValue(100)
         df = summary.get("df")
         rows = summary.get("total_rows", 0)
-        self._ctx.set_status(f"✓ Pipeline selesai — {fmt_id(rows)} baris", "done")
+        # v2.13.13 (gel-4 D6): pesan "selesai" TIDAK lagi ditulis di sini
+        # (pra-render) — dulu ditimpa pesan busy render pasca-set_dataset
+        # ("✓ Menyaring & menampilkan data selesai (N ms)") sehingga user
+        # membaca pekerjaan filter sebagai hasil akhir; kini ditulis
+        # SEKALI, SETELAH render (lihat bawah).
         self._ctx.log("=== Selesai ===")
         self._ctx.log(f"Total baris: {rows}")
         self._ctx.log(f"Anomali prioritas: {summary.get('prioritas_count', 0)}")
@@ -425,6 +450,17 @@ class PipelineView(QWidget):
         self._render_summary(summary)
         if df is not None and not df.empty:
             self._ctx.set_dataset(df, summary)
+        # v2.13.13 (gel-4 D6): pesan status TERAKHIR pasca-run = HASIL
+        # RUN (2 angka), ditulis SETELAH set_dataset — seluruh render
+        # view (busy_feedback "⏳/✓ Menyaring…") selesai dulu. Dulu pesan
+        # "✓ Pipeline selesai" ditulis SEBELUM render lalu ditimpa pesan
+        # busy render ("✓ Menyaring & menampilkan data selesai (31 ms)")
+        # → user membaca pekerjaan FILTER sebagai hasil akhir (audit D6).
+        self._ctx.set_status(
+            f"✓ Pipeline selesai — {fmt_id(rows)} baris • "
+            f"{fmt_id(summary.get('anomali_count', 0))} anomali "
+            "(prioritas+potensi)", "done")
+        if df is not None and not df.empty:
             QMessageBox.information(
                 self, "Pipeline Selesai",
                 f"Pipeline selesai!\n\nTotal baris: {fmt_id(rows)}\n"
@@ -452,7 +488,12 @@ class PipelineView(QWidget):
             self._ctx.log(f"!!! ERROR: {err}")
             if tb:
                 self._ctx.log(tb)
-            QMessageBox.critical(self, "Pipeline Error", err)
+            # v2.13.13 (gel-4 D7): error file korup diterjemahkan DI
+            # BATAS UI (friendly_file_error — 5 pola EN → Indonesia +
+            # saran; worker tetap emit raw, label/log di atas tetap
+            # menulis error ASLI supaya bisa dicocokkan dgn traceback).
+            QMessageBox.critical(
+                self, "Pipeline Error", friendly_file_error(err))
 
     def _render_summary(self, summary: dict) -> None:
         """v2.13.12 (gel-3 D13): angka fmt_id (pemisah ribuan '.' koma
@@ -567,10 +608,23 @@ class PipelineView(QWidget):
                 return
             params[key] = val
         from waste_anomaly.signals import compute_signals
-        with busy_feedback(self._ctx.set_status,
-                           "Menghitung pratinjau ambang"):
-            out = compute_signals(df, self._ctx.key_akhir,
-                                  self._ctx.config, params=params)
+        # v2.13.13 (gel-4 D29): 3 tombol (Mulai/Simpan/Pratinjau)
+        # dinonaktifkan SELAMA compute pratinjau (0,3-0,5 dtk data besar)
+        # — dulu tetap aktif: klik ganda Pratinjau / klik Mulai saat
+        # compute = nested compute sinkron + freeze bertumpuk (audit
+        # D29). try/finally: exception compute apa pun tetap memulihkan
+        # tombol (tidak ada UI terkunci permanen).
+        busy = (self._btn_run, self._btn_save, self._btn_preview)
+        for b in busy:
+            b.setEnabled(False)
+        try:
+            with busy_feedback(self._ctx.set_status,
+                               "Menghitung pratinjau ambang"):
+                out = compute_signals(df, self._ctx.key_akhir,
+                                      self._ctx.config, params=params)
+        finally:
+            for b in busy:
+                b.setEnabled(True)
         order = ["Prioritas Tinggi", "Potensi Anomali",
                  "Perlu Review", "Normal"]
         def _counts(series):

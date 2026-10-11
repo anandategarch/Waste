@@ -15,6 +15,7 @@ shared.py::_apply_filters
 shared.py::app_dir
 shared.py::bundle_res_dir
 shared.py::fmt_id
+shared.py::friendly_file_error
 state.py::AppContext
 view_anomali.py::AnomaliView
 view_anomali.py::DetailDialog
@@ -26,6 +27,7 @@ view_hari.py::HariView
 view_periode.py::BandTableDialog
 view_periode.py::PeriodeView
 view_periode.py::fmt_run_label
+view_periode.py::_mlabel
 view_pipeline.py::PipelineView
 view_pipeline.py::_fmt_ts_id
 view_pipeline.py::_log_id
@@ -37,6 +39,7 @@ widgets.py::KpiStrip
 widgets.py::StatusChip
 widgets.py::WLabel
 widgets.py::_HeaderFilterMenu
+widgets.py::_counts_has
 widgets.py::_header_font
 widgets.py::_paint_funnel
 widgets.py::busy_feedback

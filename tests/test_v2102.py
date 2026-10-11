@@ -710,7 +710,7 @@ class TestConfigV2102:
 
     def test_versi_naik(self):
         from ui.shared import APP_VERSION
-        assert APP_VERSION == "2.13.12"  # v2.13.12: gel-3 bantuan & teks jujur
+        assert APP_VERSION == "2.13.13"  # v2.13.13: gel-4 perf/fokus/polish
 
 
 # ============================================================

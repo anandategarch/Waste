@@ -51,7 +51,7 @@ from waste_anomaly.period_history import (
     typical_months,
 )
 
-from .shared import fmt_id
+from .shared import fmt_id, friendly_file_error
 from .state import AppContext
 from .widgets import Card, DataTable, WLabel, busy_feedback
 from .workers import HistoryWorker
@@ -88,6 +88,27 @@ _TYPICAL_KEY = "__tipikal__"
 _FU_PAGES = ("branch", "items", "new_items")
 # Kolom identitas tersembunyi di df tampilan (list sidik jari per baris).
 _FPS_COL = "__FPS"
+
+
+def _mlabel(m: dict, used: set) -> str:
+    """v2.13.13 (gel-4 B8) — label TAMPILAN unik utk bulan combo/kolom:
+    bulan kembar (2 file label sama, mis. 2 ekspor "AGUSTUS 2026")
+    diberi akhiran " (2)", " (3)", … sesuai urutan kemunculannya.
+
+    Kunci "disp" hidup DI MEMORI _loaded/_combo_months saja — label
+    KANONIK tetap yang dipersist ke history_files.json (identitas file
+    = path; suffix hanyalah pembeda tampilan, bukan identitas data).
+    Dipakai _combo_months → combo 'Banding dengan' + judul kolom
+    pembanding (dua entri identik dulunya tak terbedakan sama sekali —
+    combo 2 baris "Agustus 2026" + Tipikal double-count; audit B8)."""
+    base = str(m.get("label") or "?").strip() or "?"
+    if base in used:
+        n = 2
+        while f"{base} ({n})" in used:
+            n += 1
+        base = f"{base} ({n})"
+    used.add(base)
+    return base
 
 
 class BandTableDialog(QDialog):
@@ -219,6 +240,10 @@ class PeriodeView(QWidget):
             k: {} for k, _ in _PAGES}
         self._page_src: dict[str, object] = {}
         self._pf_ver: int = -1
+        # v2.13.13 (gel-4 B18): identitas pembanding TERAKHIR yang dirender
+        # — perbandingannya dgn pembanding baru memicu reset funnel
+        # halaman (nilai funnel bulan lama bisa tak ada di bulan baru).
+        self._pf_b_key_cache: tuple | None = None
         # v2.12.2: muat otomatis saat buka aplikasi → boleh auto-ciut
         # kartu daftar file begitu sukses (kelola file manual = JANGAN
         # ciut sendiri — user sedang melihat daftarnya).
@@ -542,16 +567,25 @@ class PeriodeView(QWidget):
                 "Klik 2× untuk mengoreksi nama bulan ini.\n"
                 "Nama dipakai untuk urutan & pilihan pembanding.")
             self._tbl_files.setItem(r, 0, it_l)
-            self._tbl_files.setItem(r, 1, QTableWidgetItem(
-                Path(ent["path"]).name))
+            # v2.13.13 (gel-4 B16): kolom File menampilkan NAMA file saja
+            # — tooltip kini PATH PENUH (dari mana file itu dibaca;
+            # audit B16: 2 file beda folder bernama sama tak terbedakan,
+            # dan tak ada cara lain melihat lokasinya).
+            it_f = QTableWidgetItem(Path(ent["path"]).name)
+            it_f.setToolTip(f"{ent['path']}")
+            self._tbl_files.setItem(r, 1, it_f)
             res = self._last_results.get(ent["path"])
             if res is None:
                 status = "⏳ belum dimuat" if not self._running else "⏳ memuat…"
                 it_s = QTableWidgetItem(status)
             elif res.get("error"):
+                # v2.13.13 (gel-4 D7): tooltip error file diterjemahkan DI
+                # BATAS UI (friendly_file_error — penjelasan Indonesia +
+                # saran); teks sel tetap error ASLI ringkas (elide Qt,
+                # lengkap di tooltip; log/worker tak tersentuh).
                 it_s = QTableWidgetItem(f"✗ {res['error']}")
                 it_s.setForeground(QColor("#dc2626"))
-                it_s.setToolTip(str(res["error"]))
+                it_s.setToolTip(friendly_file_error(str(res["error"])))
             else:
                 n_item = fmt_id(res.get("item_count", 0))
                 ka = res.get("key_akhir", "?")
@@ -711,7 +745,11 @@ class PeriodeView(QWidget):
         self._ctx.set_status(f"⚠ Pembanding gagal: {err}", "error")
         if tb:
             self._ctx.log(f"⚠ HistoryWorker traceback: {tb}")
-        QMessageBox.critical(self, "Banding Periode", err)
+        # v2.13.13 (gel-4 D7): dialog error file diterjemahkan DI BATAS UI
+        # (friendly_file_error — 5 pola EN → Indonesia + saran; worker tetap
+        # emit raw, label/log di atas tetap error ASLI).
+        QMessageBox.critical(self, "Banding Periode",
+                             friendly_file_error(err))
 
     # ------------------------------------------------------------
     # v2.10.2 — MELEBARKAN TABEL & DRILL-DOWN POP-UP
@@ -897,7 +935,11 @@ class PeriodeView(QWidget):
         return a
 
     def _combo_months(self) -> list[dict]:
-        """Bulan valid utk combo — urut kronologis (lama → baru)."""
+        """Bulan valid utk combo — urut kronologis (lama → baru).
+
+        v2.13.13 (gel-4 B8): tiap bulan diberi label TAMPILAN unik
+        (kunci 'disp', _mlabel) — bulan kembar bersuffix " (2)";
+        label kanonik tak tersentuh (dipersist apa adanya)."""
         months = []
         for ent in self._entries:
             m = self._loaded.get(ent["path"]) \
@@ -907,6 +949,9 @@ class PeriodeView(QWidget):
                 m["label"] = ent.get("label") or m.get("label") or "?"
                 months.append(m)
         months.sort(key=lambda m: month_sort_key(m.get("label")))
+        used: set = set()
+        for m in months:
+            m["disp"] = _mlabel(m, used)
         return months
 
     def _rebuild_combo(self, months: list[dict]) -> None:
@@ -936,7 +981,9 @@ class PeriodeView(QWidget):
             n = typ.get("months_count", 0)
             self._cb_b.addItem(f"📊 Tipikal — median {n} bulan", _TYPICAL_KEY)
         for m in months:
-            self._cb_b.addItem(str(m.get("label") or "?"), m)
+            # v2.13.13 (gel-4 B8): teks combo pakai label TAMPILAN unik
+            # (disp) — bulan kembar tak lagi 2 baris identik.
+            self._cb_b.addItem(str(m.get("disp") or m.get("label") or "?"), m)
         if self._cb_b.count() == 0:
             self._cb_b.blockSignals(False)
             return
@@ -967,21 +1014,45 @@ class PeriodeView(QWidget):
         TIDAK membangun combo di sini: set_history menaikkan versi & memancar
         history_ready → _refresh_result mendeteksi versi beda → combo diisi
         ulang LALU render — satu jalur, urutan selalu benar (label hasil edit
-        pun ikut tersinkron)."""
+        pun ikut tersinkron).
+        v2.13.13 (gel-4 B8): TIPICAL UNIK PER BULAN — 2 file dgn label bulan
+        SAMA = SATU bulan utk median (dulu double-count: 2 ekspor bulan yang
+        sama dihitung 2 "bulan" → median melenceng + pengali noise; audit
+        B8). Dedupe by label kanonik (disp suffix = tampilan saja)."""
         months = self._combo_months()
         typical = None
-        if len(months) >= 2:
+        uniq: dict[str, dict] = {}
+        for m in months:
+            uniq.setdefault(str(m.get("label") or "?"), m)
+        if len(uniq) >= 2:
             with busy_feedback(self._ctx.set_status,
                                "Menghitung tipikal bulan lalu"):
-                typical = typical_months(months)
+                typical = typical_months(list(uniq.values()))
         self._ctx.set_history(months, typical)
 
     def _refresh_result(self) -> None:
         """Render hasil banding A vs pilihan combo (titik tunggal).
 
-        Combo disinkronkan LEBIH DULU (sebelum cek data A) supaya daftar
-        bulan + Tipikal terlihat seketika walau pipeline belum dijalankan —
-        tabel menunggu A, combo tidak."""
+        v2.13.13 (gel-4 B10): SELURUH badan kini dibungkus busy_feedback
+        — render pertama tab banding terukur 833 ms offscreen (~1,5-3
+        dtk di laptop) TANPA indikator (dulu hanya compare_quantity yang
+        dibungkus; sisanya — _fu_maps groupby + _fu_frame per baris +
+        render 6 tabel — beku senyap, audit B10). busy_feedback
+        nested-safe (cursor stack Qt; label nested di dalam menulis
+        pesan tahapnya lalu pesan lapisan luar menutup).
+        v2.13.13 (gel-4 D6-kelas): first-run TANPA dataset tak dibungkus
+        (tak ada hasil yang "ditampilkan" — jangan klaim selesai (0 ms);
+        combo tetap diisi, urutan kode tak berubah)."""
+        if self._ctx.df is None:
+            self._refresh_result_impl()
+            return
+        with busy_feedback(self._ctx.set_status,
+                           "Menampilkan hasil banding"):
+            self._refresh_result_impl()
+
+    def _refresh_result_impl(self) -> None:
+        """Badan render (dipanggil _refresh_result — lihat docstring
+        pembungkusnya utk kontrak busy_feedback B10)."""
         self._dirty = False
         months = self._combo_months()
         if self._combo_version != self._ctx.history_version:
@@ -1047,8 +1118,16 @@ class PeriodeView(QWidget):
         aliases = {"Pembanding": self._label_b_disp}
         # v2.12.4: dataset berganti → nilai funnel halaman bisa jadi tak ada
         # lagi di data baru — reset state lokal (pola AnomaliView).
-        if self._pf_ver != self._ctx.data_version:
+        # v2.13.13 (gel-4 B18): PEMBANDING berganti juga me-reset funnel
+        # halaman — nilai funnel bulan lama bisa tak ada di bulan baru →
+        # tabel 0 baris SENYAP (dulu hanya dataset baru yang di-reset;
+        # audit B18). Kunci identitas pembanding: path utk bulan file,
+        # (label, jumlah bulan) utk Tipikal.
+        b_key = self._pf_b_key(b)
+        if (self._pf_ver != self._ctx.data_version
+                or self._pf_b_key_cache != b_key):
             self._pf_ver = self._ctx.data_version
+            self._pf_b_key_cache = b_key
             for pf in self._pfilters.values():
                 pf.clear()
         for key, df_key in _RESULT_KEYS.items():
@@ -1072,6 +1151,19 @@ class PeriodeView(QWidget):
     # ------------------------------------------------------------
     # v2.12.4 — FUNNEL LOKAL PER HALAMAN (SEMUA kolom ber-funnel)
     # ------------------------------------------------------------
+    def _pf_b_key(self, b: dict | None) -> tuple:
+        """v2.13.13 (gel-4 B18) — identitas pembanding utk keputusan reset
+        funnel halaman: path utk bulan file; (label tipikal, jumlah bulan)
+        utk Tipikal. Bukan id() objek — _combo_months membangun dict BARU
+        tiap render (id selalu beda → reset tanpa henti)."""
+        if not isinstance(b, dict):
+            return ("", 0, "")
+        if b.get("months_count"):
+            return ("tipikal", int(b.get("months_count") or 0),
+                    str(b.get("label") or ""))
+        return (str(b.get("path") or ""), 0,
+                str(b.get("label") or ""))
+
     def _on_page_filter(self, page: str, col: str, values) -> None:
         """Menu funnel header halaman → saring TAMPILAN halaman itu saja
         (bahan _page_src tersimpan — tanpa compare ulang; ✓ / drill /
@@ -1147,13 +1239,16 @@ class PeriodeView(QWidget):
     # ------------------------------------------------------------
     def _col_header_b(self, b: dict | None) -> str:
         """Judul kolom pengganti kata 'Pembanding' — NAMA BULAN pilihan
-        (mis. 'Juli 2026'); tipikal → 'Tipikal — median N bulan'."""
+        (mis. 'Juli 2026'); tipikal → 'Tipikal — median N bulan'.
+        v2.13.13 (gel-4 B8): pakai label TAMPILAN unik (disp) — bulan
+        kembar bersuffix ' (2)' supaya dua kolom pembanding beda file
+        tetap terbedakan (label kanonik tak ada suffix)."""
         if not b:
             return "Pembanding"
         n = b.get("months_count")
         if n:
             return f"Tipikal — median {int(n)} bulan"
-        return str(b.get("label") or "Pembanding")
+        return str(b.get("disp") or b.get("label") or "Pembanding")
 
     def _fu_maps(self):
         """Peta baris banding → sidik jari baris anomali bulan berjalan.

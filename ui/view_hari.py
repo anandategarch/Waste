@@ -30,6 +30,7 @@ kali lipat", "porsi dari total bulanan" — bukan jargon statistik.
 """
 from __future__ import annotations
 
+import weakref
 from collections import OrderedDict
 
 import pandas as pd
@@ -216,17 +217,25 @@ class HariView(FollowupTableMixin, QWidget):
         self._fs_idx: int = 2  # v2.12.4: head(0)+ctrl(1)+tabel(2) — slicer/hint dihapus
         # v2.9.0 (perf): memo irisan bukti-hari — kombinasi (df dasar, mode)
         # yang sama mengembalikan objek SAMA → cache fit LRU DataTable
-        # (hit) + memo teks model tetap hidup. Strong ref ke df dasar = id
-        # tak bisa dipakai ulang selama cache hidup (kunci id() aman).
-        self._bukti_cache: tuple[int, int, pd.DataFrame] | None = None
+        # (hit) + memo teks model tetap hidup.
+        # v2.13.13 (gel-4 A5b+C10): weakref + validasi identitas — dulu
+        # kunci id() dgn komentar "strong ref ke df dasar" yang TIDAK
+        # jujur (cache hanya memegang df HASIL, bukan df dasar → id bisa
+        # dipakai ulang objek lain pasca-GC → masker basi — audit A5b;
+        # komentar palsu dilaporkan audit C10). Pola _disp_cache: entri
+        # (weakref, len, hasil), validasi ``cached[0]() is df``.
+        self._bukti_cache: tuple[weakref.ref, int, pd.DataFrame] | None = None
         # v2.10.0: memo df + bukti bulan-lalu — kunci (id df, len, versi
         # history); objek SAMA dipakai ulang antar-refresh → cache fit
-        # DataTable tetap kena (pola _bukti_cache).
-        self._hist_cache: tuple[int, int, int, pd.DataFrame] | None = None
+        # DataTable tetap kena (pola _bukti_cache; weakref+identitas
+        # sejak v2.13.13 — alasan sama di atas).
+        self._hist_cache: tuple[weakref.ref, int, int, pd.DataFrame] | None = None
         # v2.12.4: funnel LOKAL kolom non-ctx (SEMUA kolom ber-funnel) —
         # pola AnomaliView: hanya menyaring TAMPILAN tabel ini.
         self._hfilters: dict[str, list] = {}
-        self._mask_cache: "OrderedDict[tuple, pd.DataFrame]" = OrderedDict()
+        # v2.13.13 (gel-4 A5): entri mask = (weakref, hasil) dgn
+        # validasi identitas (lihat followup_table._mask_local).
+        self._mask_cache: "OrderedDict[tuple, tuple]" = OrderedDict()
         # v2.13.5: df tampilan = salinan + ✓/__FP (pola AnomaliView) —
         # LRU-4 + weakref ke df sumber supaya objek display STABIL per
         # objek df → cache fit DataTable tetap kena antar-refresh; nilai
@@ -297,7 +306,15 @@ class HariView(FollowupTableMixin, QWidget):
 
     def _refresh_table(self) -> None:
         """v2.9.0 — titik tunggal render tabel, dibungkus busy_feedback
-        (pola v2.8.3 anti-freeze: cursor sibuk + status ⏳/✓ + durasi)."""
+        (pola v2.8.3 anti-freeze: cursor sibuk + status ⏳/✓ + durasi).
+        v2.13.13 (gel-4 D6): first-run TANPA dataset TIDAK dibungkus —
+        busy_feedback akan mengklaim "✓ Menganalisa hari tersangka
+        selesai (0 ms)" padahal tak ada data yang dianalisa (residual
+        D6 gel-2; pesan sukses-menampilkan-menyaring = klaim kosong).
+        Render BERDATA tetap dibungkus utuh (kerja nyata 75-460 ms)."""
+        if self._ctx.df is None:
+            self._refresh_table_impl()
+            return
         with busy_feedback(self._ctx.set_status, "Menganalisa hari tersangka"):
             self._refresh_table_impl()
 
@@ -323,12 +340,12 @@ class HariView(FollowupTableMixin, QWidget):
             if "BUKTI HARI" in df.columns else pd.Series(False, index=df.index)
         if self._cb_mode.currentIndex() == 0:
             cached = self._bukti_cache
-            if (cached is not None and cached[0] == id(df)
+            if (cached is not None and cached[0]() is df
                     and cached[1] == len(df)):
                 df_show = cached[2]
             else:
                 df_show = df[bukti]
-                self._bukti_cache = (id(df), len(df), df_show)
+                self._bukti_cache = (weakref.ref(df), len(df), df_show)
         else:
             df_show = df
         n_bukti_all = int(bukti.sum())
@@ -350,8 +367,15 @@ class HariView(FollowupTableMixin, QWidget):
         shown = self._mask_local(disp)
         self._table.set_dataframe(
             shown, sort_desc="RASIO VS CABANG LAIN",
-            narrow_hide=["KETERANGAN", "NILAI BULAN LALU",
-                         "TIPIKAL BEBERAPA BULAN", "ALASAN HARI"],
+            # v2.13.13 (gel-4 C13): kolom PEMBANDING (ALASAN HARI, NILAI
+            # BULAN LALU) disembunyikan PALING AKHIR — narrow_hide
+            # menyembunyikan SESUAI URUTAN saat lantai header tak muat
+            # (dulu keduanya duluan: layar 1366px justru kehilangan bukti
+            # pembanding di saat pembanding AKTIF — audit C13). Kolom
+            # non-pembanding (KETERANGAN, TIPIKAL BEBERAPA BULAN) lebih
+            # dulu mundur; detail penuh tetap di pop-up.
+            narrow_hide=["KETERANGAN", "TIPIKAL BEBERAPA BULAN",
+                         "NILAI BULAN LALU", "ALASAN HARI"],
             visible_cols=[CHECK_COL] + cols)
         n_tampil = len(shown)
         if n_tampil == 0:
@@ -379,13 +403,13 @@ class HariView(FollowupTableMixin, QWidget):
         antar-refresh → cache fit DataTable tidak invalidasi ulang."""
         ver = self._ctx.history_version
         cached = self._hist_cache
-        if (cached is not None and cached[0] == id(df_show)
+        if (cached is not None and cached[0]() is df_show
                 and cached[1] == len(df_show) and cached[2] == ver):
             return cached[3]
         out = day_evidence_vs_history(
             df_show, months=self._ctx.history_months_ok(),
             typical=self._ctx.history_typical, config=self._ctx.config)
-        self._hist_cache = (id(df_show), len(df_show), ver, out)
+        self._hist_cache = (weakref.ref(df_show), len(df_show), ver, out)
         return out
 
     def _update_kpi(self, n_tampil: int, n_bukti: int, rasio) -> None:

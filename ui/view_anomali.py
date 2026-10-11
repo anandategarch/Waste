@@ -845,6 +845,13 @@ class DetailDialog(QDialog):
         self.setModal(False)
         self.resize(920, 640)
         self._shown_sig: tuple | None = None
+        # v2.13.13 (gel-4 A3): pop-up navigasi baris TAK mencuri fokus —
+        # dulu activateWindow() tiap ganti baris memindahkan fokus dari
+        # tabel: 1× panah keyboard = navigasi tabel MATI (fokus lompat ke
+        # pop-up; audit A3). WA_ShowWithoutActivating membuat show() tanpa
+        # aktivasi; drill/⛶ (niat eksplisit user) TETAP activateWindow
+        # (pemanggilan mereka di luar kelas ini tidak berubah).
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 8, 8, 8)
         self._panel = DetailPanel(ctx, self)
@@ -867,15 +874,26 @@ class DetailDialog(QDialog):
         Idempoten (v2.13.5): record SAMA & pop-up masih tampak → tidak
         dibangun ulang (klik tunggal memicu currentRowChanged + clicked;
         klik ulang baris saat pop-up terbuka tak boleh mengedipkan
-        rebuild ~70 widget)."""
+        rebuild ~70 widget).
+
+        v2.13.13 (gel-4 A3): show() TANPA aktivasi jendela (WA dipasang
+        di __init__) dan raise_() HANYA saat pop-up BARU muncul —
+        navigasi baris (panah/klik) saat pop-up sudah terbuka cukup
+        mengganti kontennya; activateWindow() dihapus dari jalur ini
+        (fokus tabel tetap milik tabel — navigasi keyboard hidup).
+        Jalur niat-eksplisit (drill banding / ⛶ layar penuh / pop-up
+        Scorecard) tidak tersentuh — mereka tetap mengaktifkan."""
         sig = self._record_sig(rec)
         if self.isVisible() and sig == self._shown_sig:
             return
         self._shown_sig = sig
         self._panel.show_record(rec)
+        was_visible = self.isVisible()
         self.show()
-        self.raise_()
-        self.activateWindow()
+        if not was_visible:
+            # pop-up BARU → pastikan terlihat di atas jendela lain
+            # (TANPA mengambil fokus dari tabel pemanggil).
+            self.raise_()
 
 
 class AnomaliView(FollowupTableMixin, QWidget):
@@ -1066,7 +1084,10 @@ class AnomaliView(FollowupTableMixin, QWidget):
         # v2.12.4: memo hasil mask per (objek display, state filter) —
         # objek mask stabil per state → cache fit DataTable tetap kena
         # (pola _disp_cache LRU; A→B→A memakai ulang objek A).
-        self._mask_cache: OrderedDict[tuple, pd.DataFrame] = OrderedDict()
+        # v2.13.13 (gel-4 A5): entri = (weakref, hasil) dgn validasi
+        # identitas (lihat followup_table._mask_local — anti tabrakan id
+        # pasca-GC, audit A5).
+        self._mask_cache: OrderedDict[tuple, tuple] = OrderedDict()
         ctx.data_ready.connect(self._on_data_ready)
         ctx.filters_changed.connect(self._on_filters_changed)
         # v2.10.2: pembanding siap / pilihan combo berganti → kolom
@@ -1168,7 +1189,15 @@ class AnomaliView(FollowupTableMixin, QWidget):
         kerja berat sinkron (auto-fit kolom + ukur tinggi baris per sel;
         diukur data asli: 75–460 ms sandbox = 1–2+ dtk di laptop user) —
         proses terlihat 'masih jalan', bukan beku senyap. Selesai → durasi
-        dilaporkan ke status bar."""
+        dilaporkan ke status bar.
+        v2.13.13 (gel-4 D6): first-run TANPA dataset TIDAK dibungkus —
+        busy_feedback akan mengklaim "✓ Menyaring & menampilkan data
+        selesai (0 ms)" padahal tak ada data yang disaring (residual D6
+        gel-2 — user membaca pekerjaan filter sebagai hasil akhir).
+        Render BERDATA tetap dibungkus utuh (kerja nyata)."""
+        if self._ctx.df is None:
+            self._refresh_table_impl()
+            return
         with busy_feedback(self._ctx.set_status, "Menyaring & menampilkan data"):
             self._refresh_table_impl()
 

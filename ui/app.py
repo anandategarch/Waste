@@ -499,9 +499,16 @@ class MainWindow(QMainWindow):
         if self._exporting and self._export_worker is not None:
             busy.append(("Ekspor Excel", self._export_worker))
         if busy:
+            # v2.13.13 (gel-4 D28): tombol default = NO (pola D2 gel-2 /
+            # konvensi repo "Enter salah = aman batal") — dulu default
+            # Yes: menekan Enter saat dialog muncul = keluar paksa
+            # padahal worker masih berjalan (audit D28).
             ans = QMessageBox.question(
                 self, "Proses masih berjalan",
-                "Pipeline/export/perbandingan masih berjalan. Tetap keluar?")
+                "Pipeline/export/perbandingan masih berjalan. Tetap keluar?",
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
             if ans != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return

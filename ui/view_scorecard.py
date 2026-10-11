@@ -23,7 +23,10 @@ tampilan, pola v2.12.4).
 """
 from __future__ import annotations
 
+from collections import OrderedDict
+
 import pandas as pd
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -274,6 +277,11 @@ class ScorecardView(QWidget):
             {}, self._page_apply("scorecard"), self._page_state("scorecard"),
             all_cols=True, skip=())
         self._table.double_clicked.connect(self._on_double)
+        # v2.13.13 (gel-4 C7): Enter = drill — eventFilter tabel utama
+        # (lihat eventFilter kelas): padanan keyboard utk klik-2× mouse
+        # (dulu hanya mouse: pengguna keyboard-only tak bisa membuka
+        # rincian cabang — audit C7). double_clicked tetap jalur mouse.
+        self._table.installEventFilter(self)
         cl.addWidget(self._table, 1)
         self._tcl = cl
         page_lay.addWidget(card, 3)
@@ -422,6 +430,15 @@ class ScorecardView(QWidget):
         # busy_feedback (terukur data asli: ±150-250 ms — aman).
         self._memo_ver: tuple[int, int] | None = None
         self._memo: dict = {}
+        # v2.13.13 (gel-4 C8): memo drill rincian cabang — LRU-8 keyed
+        # (resto, data_version, history_version). Klik-2×/Enter cabang
+        # yang sama (bolak-balik) dulunya menghitung ulang PENUH tiap
+        # klik (terukur 102-164 ms: money_ranking top-10.000 +
+        # reason_share + coverage_report — audit C8); objek sama dipakai
+        # ulang → cache fit DataTable drill ikut kena. TAK keyed config:
+        # money_ranking/reason_share/coverage_report tak membaca config
+        # (aman; data/history baru = kunci baru = hitung ulang jujur).
+        self._drill_cache: "OrderedDict[tuple, dict]" = OrderedDict()
         # funnel LOKAL per tabel tampilan (pola v2.12.4).
         self._lfilters: dict[str, dict[str, list]] = {
             "scorecard": {}, "money": {}, "weekday": {}, "sistemik": {},
@@ -664,6 +681,26 @@ class ScorecardView(QWidget):
     # FUNNEL LOKAL (pola v2.12.4 — tampilan saja)
     # ------------------------------------------------------------
 
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 — Qt API
+        """v2.13.13 (gel-4 C7) — Enter/Return di tabel utama = DRILL baris
+        terpilih (padanan keyboard utk klik-2× mouse).
+
+        Dulu rincian cabang hanya terbuka lewat mouse (double_clicked) —
+        audit C7: pengguna keyboard (a11y) tak punya jalur sama sekali.
+        Event filter dipilih BUKAN sinyal ``activated`` supaya klik-2×
+        mouse tetap SATU jalur (activated juga terpicu dbl-klik →
+        dobel-handler); Enter dikonsumsi di sini (return True) supaya
+        QTableView tak menjadikannya edit/activated ganda."""
+        if (obj is self._table
+                and event.type() == QEvent.Type.KeyPress
+                and event.key() in (Qt.Key.Key_Return,
+                                    Qt.Key.Key_Enter)):
+            rec = self._table.selected_record()
+            if rec is not None:
+                self._on_double(rec)
+                return True
+        return super().eventFilter(obj, event)
+
     def _page_apply(self, page: str):
         """Closure apply_fn funnel utk tabel halaman `page` (menu memanggil
         callable langsung — pemilahan tabel lewat closure, bukan sender)."""
@@ -711,7 +748,15 @@ class ScorecardView(QWidget):
     # RINCIAN CABANG (pop-up — klik 2×)
     # ------------------------------------------------------------
 
-    def _on_double(self, rec: pd.Series) -> None:
+    def _on_double(self, rec: pd.Series | None) -> None:
+        """Klik-2× mouse / Enter (gel-4 C7) baris scorecard → rincian cabang.
+
+        v2.13.13 (gel-4 C8): hasil hitung drill di-MEMO LRU-8 keyed
+        (resto, data_version, history_version) — lihat komentar
+        _drill_cache. Cache hit = render ulang tanpa hitung (busy
+        feedback hanya di jalur miss)."""
+        if rec is None:
+            return
         resto = str(rec.get("NAMA RESTO") or "").strip()
         if not resto or self._ctx.df is None:
             return
@@ -749,43 +794,58 @@ class ScorecardView(QWidget):
         self._drill_title.setText(
             f"🏬 {resto} — top kerugian vs tipikal & profil alasan "
             "(klik judul = sort)")
-        with busy_feedback(self._ctx.set_status,
-                           f"Menghitung rincian {resto}"):
-            money = money_ranking(df, top_n=10_000)
-            if not money.empty:
-                money = money[money["NAMA RESTO"].astype(str) == resto]
-            # v2.13.12 (gel-3 C3+C9): tabel drill ikut kamus per-view —
-            # kolom money sama makna dgn kartu 💰 (runtime ctx.config).
-            self._drill_money.model().set_tooltip_map(
-                {**build_column_tooltips(self._ctx.config),
-                 **_SC_TIPS_MONEY})
-            self._drill_money.set_dataframe(
-                money.head(15), sort_desc="KELEBIHAN")
-            share = reason_share(df, resto)
-            if share is not None and not share.empty:
-                share_df = pd.DataFrame({
-                    "ALASAN": share.index.to_numpy(),
-                    "SHARE %": share.to_numpy(),
-                })
-            else:
-                share_df = pd.DataFrame(
-                    columns=["ALASAN", "SHARE %"])
-            self._drill_share.model().set_tooltip_map(_SC_TIPS_SHARE)
-            self._drill_share.set_dataframe(share_df)
-            cov = coverage_report(df, self._ctx.history_months)
-            if not cov.empty:
-                c = cov[cov["NAMA RESTO"].astype(str) == resto]
-                if not c.empty:
-                    n = int(c.iloc[0]["ITEM UMUM TAK INPUT"])
-                    verdict = str(c.iloc[0]["STATUS INPUT"])
-                    contoh = str(c.iloc[0]["CONTOH ITEM"])
-                    self._drill_missing.setText(
-                        f"Input: {verdict} — {n} item umum tak dilaporkan"
-                        + (f" (contoh: {contoh})" if contoh else "") + ".")
+        # v2.13.13 (gel-4 C8): memo LRU-8 — hitung HANYA bila kombinasi
+        # (resto, versi data, versi history) belum pernah dihitung.
+        key = (resto, self._ctx.data_version, self._ctx.history_version)
+        hit = self._drill_cache.get(key)
+        if hit is not None:
+            self._drill_cache.move_to_end(key)
+        else:
+            with busy_feedback(self._ctx.set_status,
+                               f"Menghitung rincian {resto}"):
+                money = money_ranking(df, top_n=10_000)
+                if not money.empty:
+                    money = money[
+                        money["NAMA RESTO"].astype(str) == resto]
+                share = reason_share(df, resto)
+                if share is not None and not share.empty:
+                    share_df = pd.DataFrame({
+                        "ALASAN": share.index.to_numpy(),
+                        "SHARE %": share.to_numpy(),
+                    })
                 else:
-                    self._drill_missing.setText("Input: —")
-            else:
-                self._drill_missing.setText("")
+                    share_df = pd.DataFrame(
+                        columns=["ALASAN", "SHARE %"])
+                cov = coverage_report(df, self._ctx.history_months)
+                if not cov.empty:
+                    c = cov[cov["NAMA RESTO"].astype(str) == resto]
+                    if not c.empty:
+                        row = c.iloc[0]
+                        n = int(row["ITEM UMUM TAK INPUT"])
+                        verdict = str(row["STATUS INPUT"])
+                        contoh = str(row["CONTOH ITEM"])
+                        missing = (
+                            f"Input: {verdict} — {n} item umum tak dilaporkan"
+                            + (f" (contoh: {contoh})" if contoh else "") + ".")
+                    else:
+                        missing = "Input: —"
+                else:
+                    missing = ""
+            hit = {"money": money, "share": share_df, "missing": missing}
+            self._drill_cache[key] = hit
+            while len(self._drill_cache) > 8:
+                self._drill_cache.popitem(last=False)
+        # Render dari memo (jalur sama utk cache hit & miss):
+        # v2.13.12 (gel-3 C3+C9): tabel drill ikut kamus per-view —
+        # kolom money sama makna dgn kartu 💰 (runtime ctx.config).
+        self._drill_money.model().set_tooltip_map(
+            {**build_column_tooltips(self._ctx.config),
+             **_SC_TIPS_MONEY})
+        self._drill_money.set_dataframe(
+            hit["money"].head(15), sort_desc="KELEBIHAN")
+        self._drill_share.model().set_tooltip_map(_SC_TIPS_SHARE)
+        self._drill_share.set_dataframe(hit["share"])
+        self._drill_missing.setText(hit["missing"])
         dlg.show()
         dlg.raise_()
         dlg.activateWindow()

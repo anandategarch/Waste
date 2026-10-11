@@ -168,11 +168,27 @@ def _run_pipeline(
 
     def _gate(stage_label: str, pct: float):
         """Log awal stage + cek cancel (F9 v2.4.0). Raise PipelineCancelledError
-        bila user meminta pembatalan — efektif ANTAR STAGE, bukan setelah selesai."""
-        _log(f"{stage_label} ...", pct)
+        bila user meminta pembatalan — efektif ANTAR STAGE, bukan setelah selesai.
+        v2.13.13 (gel-4 B14): baris log stage kini membawa persen KUMULATIF
+        "(N%)" — callback (msg, pct) dulu MEMBUANG pct dari log run (audit
+        B14: baris log tak menunjukkan progres; UI menerjemahkan label via
+        _log_id prefix-match — ekor " (N%)" ikut diteruskan apa adanya)."""
+        _log(f"{stage_label} ... ({pct:.0f}%)", pct)
         if cancel_check is not None and cancel_check():
             raise PipelineCancelledError(
                 f"Run dibatalkan oleh user sebelum {stage_label}",
+                log="\n".join(log_lines),
+            )
+
+    def _cancel_gate(where: str) -> None:
+        """v2.13.13 (gel-4 D22) — cek cancel ANTAR-FILE fase LOAD (3 file:
+        DATA_WASTE/BOM/DATABASE_SATUAN) tanpa menulis baris stage palsu
+        (beda dgn _gate). Dulu fase LOAD TANPA gate: tombol ⏹ Batalkan tak
+        berefek sampai Stage 1 (terasa lama di file besar — loader =
+        openpyxl penuh; audit D22)."""
+        if cancel_check is not None and cancel_check():
+            raise PipelineCancelledError(
+                f"Run dibatalkan oleh user saat memuat file ({where})",
                 log="\n".join(log_lines),
             )
 
@@ -192,6 +208,7 @@ def _run_pipeline(
     # ---- LOAD ----
     _log("Loading DATA_WASTE ...", 5)
     df_rekap = load_rekap_mentah(workbook_path, config, logger=_log)
+    _cancel_gate("DATA_WASTE")  # v2.13.13 (gel-4 D22): gate antar-file
 
     # ---- VALIDASI SKEMA (F8 v2.4.0) ----
     # Anti degradasi senyap: header lowercase/missing dulunya diproses
@@ -211,9 +228,11 @@ def _run_pipeline(
 
     _log("Loading BOM ...", 8)
     df_bom = load_bom(workbook_path, config, logger=_log)
+    _cancel_gate("BOM")  # v2.13.13 (gel-4 D22): gate antar-file
 
     _log("Loading DATABASE_SATUAN ...", 10)
     df_satuan = load_database_satuan(workbook_path, config, logger=_log)
+    _cancel_gate("DATABASE_SATUAN")  # v2.13.13 (gel-4 D22): gate antar-file
 
     # ---- STAGE 1: SOURCE & CLEANUP ----
     _gate("Stage 1 — Source & cleanup", 15)
