@@ -42,7 +42,16 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
-from .models import PandasTableModel
+from .models import (
+    DELTA_PCT_COLS,
+    PCT_COLS,
+    RATIO_X_COLS,
+    PandasTableModel,
+    fmt_cell,
+    fmt_delta_pct,
+    fmt_pct,
+    fmt_ratio_x,
+)
 from .shared import fmt_id
 from .theme import (
     C_BORDER,
@@ -128,6 +137,30 @@ def _paint_funnel(painter: QPainter, rect: QRect, active: bool) -> None:
     painter.restore()
 
 
+# ============================================================
+# v2.13.12 (gel-3 B9) — formatter nilai MENU FUNNEL = formatter SEL
+# ============================================================
+# Audit B9: menu funnel menampilkan float MENTAH ('1505252.0235695317')
+# di samping sel tabel yang terformat ('+1.505.252,0%') — dua angka
+# "beda" untuk kolom yang sama. Nilai menu kini diformat persis
+# konvensi model _cell_text (PCT_COLS → fmt_pct, DELTA_PCT_COLS →
+# fmt_delta_pct, RATIO_X_COLS → fmt_ratio_x, lainnya fmt_cell).
+# None/NaN → '(kosong)' (fmt_* mengembalikan '' utk kosong) — dan
+# value_counts(dropna=False) menawarkannya sebagai pilihan filter.
+
+def _menu_value_fmt(col: str):
+    """Formatter nilai menu funnel utk kolom ``col`` — SAMA formatter
+    dgn sel tabelnya (konvensi model _cell_text). Return callable
+    value → teks tampilan; dipakai _HeaderFilterMenu/_open_menu."""
+    if col in PCT_COLS:
+        return fmt_pct
+    if col in DELTA_PCT_COLS:
+        return fmt_delta_pct
+    if col in RATIO_X_COLS:
+        return fmt_ratio_x
+    return fmt_cell
+
+
 class _HeaderFilterMenu(QMenu):
     """Menu filter per kolom (v2.12.3) — filter nilai + opsi sort.
 
@@ -140,13 +173,17 @@ class _HeaderFilterMenu(QMenu):
 
     def __init__(self, view: QTableView, col: str, key: str,
                  counts: "OrderedDict[object, int]",
-                 state: list | None, apply_fn, parent: QWidget) -> None:
+                 state: list | None, apply_fn, parent: QWidget,
+                 fmt=None) -> None:
         super().__init__(parent)
         self._view = view
         self._col = col
         self._key = key
         self._counts = counts
         self._apply = apply_fn
+        # v2.13.12 (gel-3 B9): formatter nilai = formatter sel tabel
+        # kolom itu (None → fmt_cell — perilaku lama utk pemanggil lama).
+        self._fmt = fmt if callable(fmt) else fmt_cell
         self._checked: dict[object, bool] = {}
         st = set(state) if state else None
         for v in counts:
@@ -223,19 +260,27 @@ class _HeaderFilterMenu(QMenu):
         shown = 0
         rest = 0
         for v, n in self._counts.items():
-            txt = "" if v is None else str(v)
-            if term and term not in txt.lower():
+            # v2.13.12 (gel-3 B9): dua wujud nilai — mentah (utk cari &
+            # UserRole round-trip) dan TERFORMAT (utk tampilan, sama
+            # dgn sel tabelnya; None/NaN → '(kosong)').
+            raw = "" if v is None else str(v)
+            disp = self._fmt(v)
+            if not disp:
+                disp = "(kosong)"
+            hay = (disp + "\n" + raw).lower()
+            if term and term not in hay:
                 continue
             if shown >= _HF_MAX_ITEMS:
                 rest += 1
                 continue
             it = QListWidgetItem()
-            disp = txt if txt else "(kosong)"
             if len(disp) > 48:
                 disp = disp[:45] + "…"
             it.setText(f"{disp}   ({fmt_id(n)})")
+            # UserRole = nilai MENTAH (None dipertahankan sebagai kunci
+            # isin — round-trip teruji di test_v21312).
             it.setData(Qt.ItemDataRole.UserRole, v)
-            it.setToolTip(f"{txt} — {fmt_id(n)} baris")
+            it.setToolTip(f"{disp} — {fmt_id(n)} baris")
             it.setFlags(Qt.ItemFlag.ItemIsUserCheckable
                         | Qt.ItemFlag.ItemIsEnabled)
             it.setCheckState(
@@ -246,6 +291,20 @@ class _HeaderFilterMenu(QMenu):
         if rest:
             note = QListWidgetItem(f"… {fmt_id(rest)} nilai lain — pakai "
                                   "kotak cari")
+            note.setFlags(Qt.ItemFlag.NoItemFlags)
+            self._lw.addItem(note)
+        # v2.13.12 (gel-3 A8): 0-baris TIDAK lagi dead-end senyap —
+        # (a) kolom tanpa nilai sama sekali karena SEMUA baris tersaring
+        #     filter lain → catatan arahan melepas filter;
+        # (b) hasil cari 0 → catatan coba kata kunci lain (bukan tutup).
+        if not self._counts:
+            note = QListWidgetItem(
+                "0 baris cocok — lepas filter lain untuk melihat semua")
+            note.setFlags(Qt.ItemFlag.NoItemFlags)
+            self._lw.addItem(note)
+        elif term and shown == 0 and rest == 0:
+            note = QListWidgetItem(
+                "0 nilai cocok — coba kata kunci lain")
             note.setFlags(Qt.ItemFlag.NoItemFlags)
             self._lw.addItem(note)
         self._lw.blockSignals(False)
@@ -397,11 +456,17 @@ class FilterHeader(QHeaderView):
         if df is None or name not in df.columns:
             return
         series = df[name]
-        vc = series.value_counts(dropna=True)
+        # v2.13.12 (gel-3 B9): dropna=False — nilai KOSONG ditawarkan
+        # sebagai pilihan ('(kosong)') alih-alih dibuang senyap (dulu:
+        # filter kolom tanpa memilih NaN = NaN ikut hilang diam-diam;
+        # uncheck nilai terakhir pun men-deselect baris kosong tanpa
+        # peringatan). None/NaN tampil '(kosong)', UserRole tetap mentah.
+        vc = series.value_counts(dropna=False)
         counts: "OrderedDict[object, int]" = OrderedDict(
             (k, int(v)) for k, v in vc.items())
-        if not counts:
-            return
+        # v2.13.12 (gel-3 A8): counts kosong (0 baris lolos filter lain)
+        # — menu TETAP dibuka dgn catatan '0 baris cocok' (dulu: return
+        # senyap = klik funnel tanpa umpan balik = dead-end).
         state = None
         try:
             if t._hf_state is not None:
@@ -410,7 +475,8 @@ class FilterHeader(QHeaderView):
             state = None
         key = t._hf_cols.get(name, name)
         menu = _HeaderFilterMenu(t, name, key, counts, state,
-                                  t._hf_apply, self)
+                                  t._hf_apply, self,
+                                  fmt=_menu_value_fmt(name))
         self._menu = menu  # deterministik (test/automation) + jaga umur
         # v2.12.5: menu tertutup → catat waktu + rect global menu di
         # tabel — mouseDoubleClickEvent menelan klik-ganda artefak yang

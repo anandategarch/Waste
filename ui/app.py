@@ -1,7 +1,7 @@
 """app.py — MainWindow + main() (v2.6.0 rebuild PySide6).
 
 Struktur:
-- Toolbar: Export Excel + Bantuan
+- Toolbar: Ekspor Excel + Bantuan
 - QTabWidget 6 tab (v2.13.1: + Scorecard Cabang): Anomali (default) ·
   Follow Up · Hari Mencurigakan · Scorecard Cabang · Banding Periode ·
   Pipeline — render lazy per-view (H2). Tab Scorecard & Pipeline dibungkus
@@ -53,85 +53,131 @@ from .view_scorecard import ScorecardView
 from .workers import ExportWorker
 from waste_anomaly.followup import followup_path
 
-_HELP_HTML = """
+def _build_help_html(config: dict | None = None) -> str:
+    """Bangun HTML Bantuan (F1) dari config aktif.
+
+    v2.13.12 (gel-3): (D8) seksi baru "Tab Pipeline (tempat semua
+    dimulai)" — tab paling operasional dulunya TAK TERDOKUMENTASIKAN
+    (threshold/pratinjau/cancel/log); (D9) fitur 📥 Impor Hasil TL
+    (v2.13.3) kini terdokumentasi; (D19) 10 token versi (v2.9.0..
+    v2.13.9) dibersihkan jadi teks fitur-deskriptif — Bantuan = panduan
+    CARA PAKAI, bukan changelog mini; (C18) angka ambang dari config
+    aktif (bukan hardcode). _HELP_HTML = snapshot import-time
+    load_config() — kompatibilitas import lama; ctx aplikasi juga
+    memuat config sekali di startup (angka startup == angka bantuan).
+    """
+    # v2.13.12 (gel-3 C18): angka ambang dari config AKTIF (fallback
+    # default engine bila korup string/None — models._th), ×100 utk
+    # persen, format int polos/float koma-ID (models._fmt_th). Dulu
+    # hardcode "≥ 50%" padahal TH_MAX_SHARE_WARN user-editable.
+    from .models import _fmt_th, _th
+    share_warn = _fmt_th(_th(config, "TH_MAX_SHARE_WARN", 0.5) * 100)
+    return f"""
 <h2>Panduan Singkat</h2>
 <p><b>Alur kerja:</b> tab <b>Pipeline</b> → pilih workbook → <b>Mulai Pipeline</b>
 → buka tab <b>Anomali</b> untuk mulai memburu anomali.</p>
+<h3>Tab Pipeline (tempat semua dimulai)</h3>
+<ul>
+<li>Isi <b>Input Workbook</b>: tombol <b>Telusuri…</b> memilih file Excel rekap
+(mis. DATA_WASTE.xlsx), atau <b>Pakai Sample</b> mengisi file contoh dari folder
+aplikasi. Menekan <b>Enter</b> di kolom workbook langsung menjalankan pipeline.</li>
+<li><b>Key Akhir (1–31)</b>: hanya hari 1..N yang dianalisa — bulan berjalan
+yang belum penuh cukup diisi sampai tanggal terakhirnya.</li>
+<li>Kartu <b>Threshold &amp; Konfigurasi</b> (config.json): nilai ambang
+pembentuk sinyal/skor. <b>👀 Pratinjau Ambang</b> menghitung dampak nilai form
+SAAT INI (jumlah baris per status) tanpa menyimpan; <b>Simpan config.json</b>
+menulis nilai baru; <b>Reset Default</b> mengembalikan form ke bawaan (belum
+disimpan). Perubahan <b>berlaku mulai run BERIKUTNYA</b>.</li>
+<li><b>▶ Mulai Pipeline ↔ ⏹ Batalkan Run</b> — satu tombol dua-mode;
+pembatalan efektif di gerbang antar-stage (tidak perlu menunggu run
+selesai).</li>
+<li>Selama run: <b>progres</b> (persentase) + <b>log proses</b> per stage
+terlihat di kartu "Ringkasan Run &amp; Log Proses".</li>
+<li>Setelah selesai: <b>Ringkasan Run</b> menampilkan total baris, prioritas,
+potensi, jumlah cabang/item, dst. — hasil siap di tab lain.</li>
+</ul>
 <h3>Tab Anomali (pemburu anomali)</h3>
 <ul>
 <li>Tabel anomali ter-ranking (skor tertinggi di atas; klik header kolom untuk sort).</li>
-<li>Klik baris → <b>pop-up detail ringkas</b> (v2.13.9): <b>Ringkasan</b> (total sebulan, puncak sehari + tanggalnya, vs penjualan, vs cabang lain, vs bulan lalu, peringkat) → <b>sinyal yang terpicu saja</b> (chip merah) → alasan → <b>peta nilai per hari 1–31</b> → tombol tindak lanjut. Seluruh kolom data tetap tersedia lewat tombol <b>▸ Tampilkan semua kolom data</b> di bawah.</li>
+<li>Klik baris → <b>pop-up detail ringkas</b>: <b>Ringkasan</b> (total sebulan, puncak sehari + tanggalnya, vs penjualan, vs cabang lain, vs bulan lalu, peringkat) → <b>sinyal yang terpicu saja</b> (chip merah) → alasan → <b>peta nilai per hari 1–31</b> → tombol tindak lanjut. Seluruh kolom data tetap tersedia lewat tombol <b>▸ Tampilkan semua kolom data</b> di bawah.</li>
 <li>Tombol drill-down di pop-up: fokus cabang / item / alasan dari baris terpilih; tombol <b>☑ Masuk Follow Up</b> mengumpulkan baris ke daftar tindak lanjut.</li>
-<li><b>Klik 2× baris TIDAK lagi memfilter</b> (v2.13.5) — fokus cabang/item hanya lewat tombol di pop-up, supaya klik 1× selalu membuka pop-up detail.</li>
+<li><b>Klik 2× baris TIDAK memfilter</b> — fokus cabang/item hanya lewat tombol di pop-up, supaya klik 1× selalu membuka pop-up detail.</li>
 <li>"Skor ≥" menyembunyikan anomali ber-skor rendah (skor maksimum = 19).</li>
 </ul>
-<h3>Tab Hari Mencurigakan (v2.9.0)</h3>
+<h3>Tab Hari Mencurigakan</h3>
 <ul>
 <li>Jawaban untuk: "potensi salah angka terjadi di <b>tanggal berapa</b> (1–31)?"</li>
-<li>Bukti hari = angka jauh di atas cabang lain di hari sama (mis. 404×), atau ≥ 50% waste sebulan di satu hari, atau pola 10× (salah ketik), atau waste cuma 1 hari.</li>
+<li>Bukti hari = angka jauh di atas cabang lain di hari sama (mis. 404×), atau ≥ {share_warn}% waste sebulan di satu hari, atau pola 10× (salah ketik), atau waste cuma 1 hari.</li>
 <li>Kolom ALASAN HARI merangkum buktinya dalam satu kalimat; klik baris = pop-up dengan peta hari.</li>
-<li><b>Centang ✓ di kolom pertama</b> (v2.13.5) atau tombol <b>☑ Masuk Follow Up</b> di pop-up detail = kumpulkan baris ini ke daftar Follow Up; tombol <b>☑ Centang yang tampil</b> = centang massal hasil filter.</li>
+<li><b>Centang ✓ di kolom pertama</b> atau tombol <b>☑ Masuk Follow Up</b> di pop-up detail = kumpulkan baris ini ke daftar Follow Up; tombol <b>☑ Centang yang tampil</b> = centang massal hasil filter.</li>
 <li><b>Bila ada file bulan lalu</b> (tab Banding Periode): muncul kolom <b>NILAI BULAN LALU</b> — nilai tanggal yang sama bulan sebelumnya + berapa kali lipatnya.</li>
 </ul>
-<h3>Tab Scorecard Cabang (v2.13.1)</h3>
+<h3>Tab Scorecard Cabang</h3>
 <ul>
 <li>Jawaban untuk pertanyaan manajemen: <b>"kunjungi cabang mana dulu, bawa bukti apa, berapa bisa dihemat?"</b> — tabel per cabang, RANK = urutan kunjungan (urut potensi hemat).</li>
 <li>Kolom penting: <b>INTENSITAS %</b> (waste vs penjualan/BOM), <b>KELEBIHAN</b> (potensi hemat vs tipikal cabang lain), <b>ALASAN DOMINAN</b>, <b>HARI TERSANGKA</b>, <b>STATUS INPUT</b> (verdict pelaporan: Lengkap / Berhenti Input / Memang Tak Pernah).</li>
 <li><b>Klik 2× baris = rincian cabang</b> (pop-up: top kerugian vs tipikal + profil alasan + verdict input).</li>
 <li>KPI: <b>POTENSI HEMAT</b> · <b>INTENSITAS TIPIKAL</b> (median) · <b>CABANG #1</b> · <b>HARI SISTEMIK</b> (hari naik serentak banyak cabang = masalah bersama).</li>
 <li>Kartu pendukung: 💰 <b>Top Kerugian vs Tipikal</b> (ranking uang per baris) · 📅 <b>Pola Hari Kalender</b> (Senin–Minggu asli dari nama bulan file) · 🧪 <b>Kualitas Data</b> (pemeriksaan otomatis — arahkan kursor ke sel PENJELASAN utk baca lengkap) · 📈 <b>Tren Bulanan</b> (butuh ≥ 2 file bulan lalu).</li>
-<li>Di layar kecil halaman ini <b>bisa digulir</b> (v2.13.6) — semua kartu tetap terjangkau; tombol ⤢ Perbesar Tabel / ⛶ Layar Penuh juga tersedia.</li>
+<li>Di layar kecil halaman ini <b>bisa digulir</b> — semua kartu tetap terjangkau; tombol ⤢ Perbesar Tabel / ⛶ Layar Penuh juga tersedia.</li>
 </ul>
-<h3>Tab Follow Up (v2.12.0)</h3>
+<h3>Tab Follow Up</h3>
 <ul>
 <li><b>Centang baris mencurigakan</b> (kolom ✓ di tab Anomali <b>atau tab Hari Mencurigakan</b>, atau tombol ☑ di pop-up detail) → baris terkumpul di tab <b>Follow Up</b> dalam format rekap: TOTAL · AVG · MAX · SOURCE DATA · JENIS · KETERANGAN · NAMA BARANG · NAMA RESTO · SATUAN · hari 1–31.</li>
-<li>Tombol <b>☑ Centang yang tampil</b> (tab Anomali & Hari Mencurigakan): centang massal hasil filter saat ini; <b>lepas centang ✓</b> (di semua tab) = keluarkan baris. Centang <b>✓ juga ada di tab Banding Periode</b> (halaman Cabang/Item/Baru): satu centang = semua baris anomali resto/item terkait masuk ke daftar Follow Up yang sama.</li>
+<li>Tombol <b>☑ Centang yang tampil</b> (tab Anomali &amp; Hari Mencurigakan): centang massal hasil filter saat ini; <b>lepas centang ✓</b> (di semua tab) = keluarkan baris. Centang <b>✓ juga ada di tab Banding Periode</b> (halaman Cabang/Item/Baru): satu centang = semua baris anomali resto/item terkait masuk ke daftar Follow Up yang sama.</li>
 <li><b>Hari mencurigakan diberi warna</b>: 🔴 merah = hari tersangka (puncak) · 🟠 amber = ≥ 2× rata-rata hari aktif.</li>
 <li>Daftar <b>menetap terhadap filter</b> dan <b>tersimpan otomatis</b> (followup.json) — aman walau aplikasi ditutup; baris yang tak ada lagi di data baru otomatis dipangkas.</li>
 <li><b>💾 Ekspor Excel</b>: format rekap + kolom kosong PIC/KATEGORI/PENYEBAB utk diisi petugas (konvensi REKAP MENTAH) — hari mencurigakan ikut berwarna.</li>
+<li><b>📥 Impor Hasil TL</b>: baca kembali file ekspor yang <b>sudah diisi petugas</b> (kolom <b>PIC / KATEGORI / PENYEBAB</b> di sheet FOLLOW UP) → baris yang cocok diberi status <b>Selesai</b> + PIC-nya tampil (kolom STATUS TL &amp; PIC di daftar). Kecocokan memakai kolom kunci + nilai hari 1–31 — <b>aman walau sheet di-sort / di-filter / urutan barisnya diubah di Excel</b>. Hasil tersimpan otomatis (followup_resolved.json); baris terisi yang belum ada di daftar saat ini <b>tetap disimpan</b> — statusnya aktif otomatis bila barisnya dicentang lagi nanti.</li>
 </ul>
 <h3>Filter (funnel di judul kolom tabel)</h3>
 <ul>
 <li>SEMUA kolom tabel punya ikon funnel di ujung kanan judulnya — klik = menu: <b>daftar nilai bercentang</b> (angka = jumlah baris), kotak cari, tombol <b>Urut Naik/Turun</b>, dan <b>☑ Pilih Semua</b> (lepas filter kolom itu).</li>
 <li>Funnel berwarna <b>merah</b> = kolom itu sedang terfilter. Berlaku di tab Anomali, Hari Mencurigakan, Follow Up (filter tampilan saja — daftar tak berubah), dan Banding Periode (per halaman).</li>
-<li>Di tab Anomali & Hari: kolom NAMA RESTO / NAMA BARANG / JENIS / KETERANGAN / STATUS berbagi state yang sama antar kedua tab (dan KPI ikut terfilter); kolom lain = filter tampilan tabel itu saja.</li>
-<li>Tombol <b>✕ Hapus Filter</b> (tab Anomali & Hari) = lepas SEMUA filter sekaligus.</li>
+<li>Di tab Anomali &amp; Hari: kolom NAMA RESTO / NAMA BARANG / JENIS / KETERANGAN / STATUS berbagi state yang sama antar kedua tab (dan KPI ikut terfilter); kolom lain = filter tampilan tabel itu saja.</li>
+<li>Tombol <b>✕ Hapus Filter</b> (tab Anomali &amp; Hari) = lepas SEMUA filter sekaligus.</li>
 </ul>
 <h3>Tab lain</h3>
 <ul>
-<li><b>Banding Periode</b> (v2.10.0) — bulan berjalan vs <b>daftar file bulan lalu</b>
+<li><b>Banding Periode</b> — bulan berjalan vs <b>daftar file bulan lalu</b>
 (1 file = 1 bulan, format REKAP MENTAH — kuantiti tanpa BOM). Nama bulan dibaca
 otomatis dari nama file; daftar <b>diingat</b> antar sesi; dimuat di latar belakang.
 Banding per bulan atau vs <b>Tipikal</b> (median beberapa bulan): ringkasan,
 cabang/item bergerak, item baru/hilang — semua murni kuantiti.</li>
-<li><b>Tabel & pop-up rincian</b> (v2.10.2) — tombol <b>⤢ Perbesar Tabel</b>
-(ciyutkan daftar file) & <b>⛶ Layar Penuh</b> (tabel tab aktif satu monitor; Esc
+<li><b>Tabel &amp; pop-up rincian</b> — tombol <b>⤢ Perbesar Tabel</b>
+(ciyutkan daftar file) &amp; <b>⛶ Layar Penuh</b> (tabel tab aktif satu monitor; Esc
 kembali). <b>Klik 2× baris</b> di semua tab banding = pop-up rantai rincian
 <b>Total → resto → item → per hari</b> ("total naik — resto mana — item apa —
 hari berapa").</li>
-<li><b>Kolom perubahan di tab Anomali</b> (v2.10.2) — bila ada pembanding:
-kolom <b>BULAN LALU</b>, <b>PERUBAHAN %</b> (+35,5% / BARU) & kategori
+<li><b>Kolom perubahan di tab Anomali</b> — bila ada pembanding:
+kolom <b>BULAN LALU</b>, <b>PERUBAHAN %</b> (+35,5% / BARU) &amp; kategori
 <b>PERUBAHAN</b> (filter "Perubahan:") — memisahkan <b>lonjakan baru</b>
 (kandidat salah input) dari <b>waste kronis</b> (tinggi tiap bulan).</li>
-<li><b>v2.12.2</b> — <b>angka minus otomatis MERAH</b> di semua tabel; kolom
+<li><b>Angka minus otomatis MERAH</b> di semua tabel; kolom
 pembanding memakai <b>NAMA BULAN</b> (bukan kata "Pembanding"); tabel banding
 menampilkan <b>JENIS</b> (SUSUT/TRIAL/WASTE) per baris cabang/item; tombol
-<b>⤢ Perbesar Tabel</b> & <b>⛶ Layar Penuh</b> kini juga ada di tab
+<b>⤢ Perbesar Tabel</b> &amp; <b>⛶ Layar Penuh</b> kini juga ada di tab
 <b>Anomali</b>; daftar file banding <b>auto-ciut</b> setelah dimuat (tabel
 hasil langsung tinggi penuh).</li>
-<li><b>v2.12.4</b> — sidebar filter kiri & slicer chip <b>dihapus</b>:
-semua filter lewat <b>funnel di judul kolom</b> (SEMUA kolom punya),
-tabel memakai lebar & tinggi penuh.</li>
+<li><b>Semua filter lewat funnel di judul kolom</b> — sidebar filter kiri &amp;
+slicer chip dihapus: SEMUA kolom punya funnel, tabel memakai lebar &amp;
+tinggi penuh.</li>
 </ul>
 <h3>💡 Bingung istilah?</h3>
-<p><b>Hover (arahkan mouse & diamkan)</b> di: judul kolom tabel, label metrik pop-up,
+<p><b>Hover (arahkan mouse &amp; diamkan)</b> di: judul kolom tabel, label metrik pop-up,
 chip sinyal S1–S12, kartu KPI, dan kontrol filter — muncul penjelasan singkat
 bahasa sehari-hari (mis. "% to BOM = waste dibanding penjualan").</p>
-<p><b>Export</b>: tombol <b>💾 Export Excel</b> di toolbar (selalu tersedia) —
+<p><b>Ekspor</b>: tombol <b>💾 Ekspor Excel</b> di toolbar (selalu tersedia) —
 laporan lengkap termasuk sheet analisa (Waste per Hari, Money View, Data Quality).</p>
 <p>Semua teks dirancang anti-terpotong: teks panjang otomatis berpindah
 baris; tabel tanpa cap baris.</p>
 """
+
+
+# Snapshot import-time (kompatibilitas import lama: test membaca
+# ui.app._HELP_HTML; angka ambang dari config saat modul dimuat —
+# sama seperti ctx aplikasi yang memuat config sekali di startup).
+_HELP_HTML = _build_help_html(load_config())
 
 
 class MainWindow(QMainWindow):
@@ -185,7 +231,7 @@ class MainWindow(QMainWindow):
         sep.setFixedWidth(12)
         bar.addWidget(sep)
 
-        act_export = QAction("💾 Export Excel", self)
+        act_export = QAction("💾 Ekspor Excel", self)
         act_export.setToolTip("Simpan laporan Excel (6 sheet inti + sheet analisa)")
         act_export.triggered.connect(self._export_excel)
         bar.addAction(act_export)
@@ -357,7 +403,7 @@ class MainWindow(QMainWindow):
             return
         df = self.ctx.df
         if df is None or df.empty:
-            QMessageBox.information(self, "Export",
+            QMessageBox.information(self, "Ekspor",
                                     "Belum ada data. Jalankan pipeline dulu.")
             return
         # v2.13.11 (gel-2 D2): export saat pipeline SEDANG berjalan → yang
@@ -383,14 +429,14 @@ class MainWindow(QMainWindow):
             initialdir = Path.home()
         suggested = f"Waste_Anomaly_Report_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export Laporan Excel", str(initialdir / suggested),
+            self, "Ekspor Laporan Excel", str(initialdir / suggested),
             "Excel files (*.xlsx);;All files (*.*)")
         if not path:
             return
         self._exporting = True
         self._act_export.setEnabled(False)
         self.ctx.set_status("Menyimpan laporan Excel…", "running")
-        self.ctx.log(f"=== Export Excel → {path} ===")
+        self.ctx.log(f"=== Ekspor Excel → {path} ===")
         self._export_worker = ExportWorker(
             df, path, dict(self.ctx.config), self.ctx.key_akhir,
             list(self.ctx.log_lines[-200:]), self)
@@ -409,9 +455,9 @@ class MainWindow(QMainWindow):
             out = result.get("output_path", "")
             n_extra = result.get("extra_sheets_count", 0)
             self.ctx.set_status(f"✓ Laporan Excel tersimpan: {out}", "done")
-            self.ctx.log(f"=== Export selesai: {out} ===")
+            self.ctx.log(f"=== Ekspor selesai: {out} ===")
             QMessageBox.information(
-                self, "Export Selesai",
+                self, "Ekspor Selesai",
                 f"Laporan Excel ({6 + n_extra} sheet) tersimpan:\n{out}")
         else:
             self._on_export_failed(result.get("error", "Unknown error"))
@@ -419,9 +465,9 @@ class MainWindow(QMainWindow):
     def _on_export_failed(self, err: str) -> None:
         self._exporting = False
         self._act_export.setEnabled(True)
-        self.ctx.set_status(f"⚠ Export gagal: {err}", "error")
-        self.ctx.log(f"!!! Export gagal: {err}")
-        QMessageBox.critical(self, "Export Gagal", err)
+        self.ctx.set_status(f"⚠ Ekspor gagal: {err}", "error")
+        self.ctx.log(f"!!! Ekspor gagal: {err}")
+        QMessageBox.critical(self, "Ekspor Gagal", err)
 
     # ------------------------------------------------------------
     # LAIN-LAIN
@@ -451,7 +497,7 @@ class MainWindow(QMainWindow):
                 if worker is not None:
                     busy.append((name, worker))
         if self._exporting and self._export_worker is not None:
-            busy.append(("Export Excel", self._export_worker))
+            busy.append(("Ekspor Excel", self._export_worker))
         if busy:
             ans = QMessageBox.question(
                 self, "Proses masih berjalan",

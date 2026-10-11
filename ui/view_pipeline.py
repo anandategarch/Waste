@@ -3,10 +3,17 @@
 
 Worker = QThread (ui tidak freeze); tombol dua-mode Mulai↔Batalkan (F9);
 log selalu terlihat (popup log lama dihapus — tidak ada tombol ganda).
+
+v2.13.12 (gel-3): D15 — jumlah stage dinamis dari pipeline.PIPELINE_N_STAGES
+(dulu hardcode "14 stage"); D17 — "Browse…" → "Telusuri…", "Input Error" →
+"Input Belum Valid"; D18 — label stage EN engine diterjemahkan di BATAS UI
+(_log_id di _on_progress; engine tetap EN); D13 — angka Ringkasan Run fmt_id
++ timestamp "12 Jan 2026 18:07"; D14 — dialog Pratinjau Ambang fmt_id.
 """
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -31,6 +38,7 @@ from .shared import APP_DIR, fmt_id
 from .state import AppContext
 from .widgets import Card, WLabel, busy_feedback
 from .workers import PipelineWorker
+from waste_anomaly.pipeline import PIPELINE_N_STAGES
 
 _SUMMARY_LABELS = {
     "total_rows": "Total baris",
@@ -48,6 +56,79 @@ _SUMMARY_LABELS = {
     "key_akhir": "Key akhir (hari)",
     "timestamp": "Waktu run",
 }
+
+
+# ============================================================
+# v2.13.12 (gel-3 D18) — TERJEMAHAN LOG STAGE di BATAS UI
+# ============================================================
+# Engine (pipeline.py/loader.py) tetap menulis log EN (nama stage &
+# istilah teknis internal) — penerjemahan dilakukan SAAT baris sampai
+# ke UI (_on_progress): label status + panel log + ctx.log_lines yang
+# ikut diekspor ke sheet "Log Run" semuanya Bahasa Indonesia. Baris
+# stage 11/15/15b memang sudah Indonesia sejak awal — tak perlu di-map.
+# Prefix-match: kunci = awalan baris log PERSIS engine, sisa baris
+# (angka dinamis) ditempel setelah terjemahan. Baris EN baru yang tak
+# di-map lolos apa adanya (drift kecil, dikunci test_v21312).
+_LOG_ID_MAP: dict[str, str] = {
+    "=== Waste Anomaly Pipeline START ===": "=== Pipeline waste dimulai ===",
+    "Loading DATA_WASTE": "Memuat DATA_WASTE",
+    "Loading BOM": "Memuat BOM",
+    "Loading DATABASE_SATUAN": "Memuat DATABASE_SATUAN",
+    "[loader] DATA_WASTE loaded: ": "[loader] DATA_WASTE termuat: ",
+    "[loader] BOM loaded: ": "[loader] BOM termuat: ",
+    "[loader] DATABASE_SATUAN loaded: ": "[loader] DATABASE_SATUAN termuat: ",
+    "Stage 1 — Source & cleanup": "Tahap 1 — sumber & pembersihan",
+    "Stage 2 — Per-row daily statistics": "Tahap 2 — statistik harian per baris",
+    "Stage 3 — Reason summary": "Tahap 3 — ringkasan alasan",
+    "Stage 4 — Group totals": "Tahap 4 — total per grup",
+    "Stage 5 — BOM join": "Tahap 5 — penggabungan BOM",
+    "Stage 6 — Peer summary": "Tahap 6 — ringkasan peer (cabang lain)",
+    "Stage 7 — Top 3 summary": "Tahap 7 — ringkasan Top 3",
+    "Stage 8 — Merge": "Tahap 8 — penggabungan",
+    "Stage 9 — DATABASE_SATUAN join": "Tahap 9 — penggabungan DATABASE_SATUAN",
+    "Stage 10 — Helper / STATUS / % to BOM":
+        "Tahap 10 — helper / STATUS / % to BOM",
+    "Stage 12.5 — Waste Fingerprint + Sistematik Flag":
+        "Tahap 12.5 — fingerprint waste + penanda sistemik",
+    "Stage 12.6 — Quadrant Classification": "Tahap 12.6 — klasifikasi kuadran",
+    "Stage 13 — Cleanup temporary": "Tahap 13 — pembersihan kolom sementara",
+    "Stage 14 — Final column order": "Tahap 14 — urutan kolom final",
+    "Build summary statistics": "Menyusun statistik ringkasan",
+    "=== Pipeline DONE ===": "=== Pipeline selesai ===",
+}
+
+
+def _log_id(msg: str) -> str:
+    """v2.13.12 (gel-3 D18): terjemahkan AWALAN baris log engine (EN)
+    ke Indonesia — prefix-match atas _LOG_ID_MAP, sisanya (angka,
+    path, nama sheet) diteruskan. Baris tak dikenal → apa adanya
+    (jujur, bukan tebakan)."""
+    for prefix, indo in _LOG_ID_MAP.items():
+        if msg.startswith(prefix):
+            return indo + msg[len(prefix):]
+    return msg
+
+
+# ============================================================
+# v2.13.12 (gel-3 D13) — timestamp ringkasan gaya Indonesia
+# ============================================================
+_BULAN_ID = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun",
+             "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
+
+
+def _fmt_ts_id(value) -> str:
+    """v2.13.12 (gel-3 D13): timestamp ISO engine ('2026-01-12T18:07:33')
+    → '12 Jan 2026 18:07' (Bulan Indonesia). Nilai eksotis (teks/tanggal
+    aneh) → str apa adanya — jujur, bukan error."""
+    s = str(value or "").strip()
+    if not s:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return s
+    return (f"{dt.day} {_BULAN_ID[dt.month - 1]} {dt.year} "
+            f"{dt.hour:02d}:{dt.minute:02d}")
 
 
 class PipelineView(QWidget):
@@ -94,7 +175,7 @@ class PipelineView(QWidget):
         self._ent_workbook.setPlaceholderText("Pilih file Excel rekap (mis. DATA_WASTE.xlsx)")
         self._ent_workbook.returnPressed.connect(self._on_run_button)
         rl.addWidget(self._ent_workbook, 1)
-        b_browse = QPushButton("Browse…", row)
+        b_browse = QPushButton("Telusuri…", row)
         b_browse.clicked.connect(self._browse)
         rl.addWidget(b_browse)
         b_sample = QPushButton("Pakai Sample", row)
@@ -127,7 +208,9 @@ class PipelineView(QWidget):
         self._spin_ka.setRange(1, 31)
         self._spin_ka.setValue(ka_default)
         pl.addWidget(self._spin_ka)
-        hint = WLabel("(hanya hari 1..N dianalisa — 14 stage pipeline dijalankan in-memory)", prow)
+        hint = WLabel(
+            f"(hanya hari 1..N dianalisa — {PIPELINE_N_STAGES} stage "
+            "pipeline dijalankan in-memory)", prow)
         hint.setObjectName("hint")
         pl.addWidget(hint, 1)
         l2.addWidget(prow)
@@ -162,7 +245,9 @@ class PipelineView(QWidget):
         self._log.setObjectName("log")
         self._log.setReadOnly(True)
         self._log.setMaximumBlockCount(2000)
-        self._log.setPlaceholderText("Log proses (14 stage) tampil di sini saat pipeline berjalan…")
+        self._log.setPlaceholderText(
+            f"Log proses ({PIPELINE_N_STAGES} stage) tampil di sini saat "
+            "pipeline berjalan…")
         l3.addWidget(self._log, 1)
         page_lay.addWidget(c3, 1)
 
@@ -266,7 +351,10 @@ class PipelineView(QWidget):
             return
         wb = self.current_workbook()
         if not wb or not Path(wb).exists():
-            QMessageBox.critical(self, "Input Error",
+            # v2.13.12 (gel-3 D17): "Input Error" → "Input Belum Valid"
+            # (label dialog = status JUDUL, bukan tuduhan error sistem —
+            # workbook memang belum dipilih).
+            QMessageBox.critical(self, "Input Belum Valid",
                                  "Workbook belum dipilih atau tidak ditemukan.")
             return
         ka = self._spin_ka.value()
@@ -279,6 +367,9 @@ class PipelineView(QWidget):
         self._ctx.set_status("Memulai pipeline…", "running")
         self._ctx.log("=== Mulai Pipeline ===")
         self._ctx.log(f"Workbook: {wb} • Key Akhir: {ka} (in-memory)")
+        self._ctx.log(
+            f"{PIPELINE_N_STAGES} stage dianalisa in-memory — progres "
+            "per stage di bawah")
 
         self._worker = PipelineWorker(wb, ka, self)
         self._worker.progress.connect(self._on_progress)
@@ -304,9 +395,14 @@ class PipelineView(QWidget):
         self._worker = None
 
     def _on_progress(self, msg: str, pct: float) -> None:
-        self._ctx.log(msg)
+        # v2.13.12 (gel-3 D18): terjemahan di BATAS UI — baris log EN
+        # engine diterjemahkan SEKALI di sini sehingga label status +
+        # panel log + ctx.log_lines (yang ikut diekspor ke sheet Log Run)
+        # semuanya Indonesia; engine & nama stage internal tetap EN.
+        line = _log_id(msg)
+        self._ctx.log(line)
         self._progress.setValue(int(pct))
-        self._lbl_status.setText(msg)
+        self._lbl_status.setText(line)
 
     def _on_done(self, summary: dict) -> None:
         self._finish_run()
@@ -359,13 +455,24 @@ class PipelineView(QWidget):
             QMessageBox.critical(self, "Pipeline Error", err)
 
     def _render_summary(self, summary: dict) -> None:
+        """v2.13.12 (gel-3 D13): angka fmt_id (pemisah ribuan '.' koma
+        desimal ',' — konvensi app) + timestamp '12 Jan 2026 18:07'
+        (_fmt_ts_id; dulu ISO mentah '2026-01-12T18:07:33.123456')."""
         rows = ["<table cellspacing='6'>"]
         for key, label in _SUMMARY_LABELS.items():
             val = summary.get(key)
             if val is None:
                 continue
+            if key == "timestamp":
+                shown = _fmt_ts_id(val)
+            elif isinstance(val, bool):
+                shown = str(val)
+            elif isinstance(val, (int, float)):
+                shown = fmt_id(val)
+            else:
+                shown = str(val)
             rows.append(f"<tr><td style='color:#64748b;'>{label}</td>"
-                        f"<td style='font-weight:600;'>{val}</td></tr>")
+                        f"<td style='font-weight:600;'>{shown}</td></tr>")
         rows.append("</table>")
         self._summary.setHtml("".join(rows))
 
@@ -473,12 +580,14 @@ class PipelineView(QWidget):
             if "ANOMALY STATUS" in df.columns else {s: 0 for s in order}
         after = _counts(out["ANOMALY STATUS"])
         lines = []
+        # v2.13.12 (gel-3 D14): angka pemisah ribuan gaya Indonesia
+        # (fmt_id — dulu '{:>7,}' koma-EN '25,901' di UI Indonesia).
         for s in order:
             d = after[s] - before[s]
-            sign = f"+{d}" if d > 0 else str(d)
+            sign = f"+{fmt_id(d)}" if d > 0 else fmt_id(d)
             arrow = "→" if d == 0 else ("↑" if d > 0 else "↓")
-            lines.append(f"{s:<18} {before[s]:>7,}  →  {after[s]:>7,}  "
-                         f"({sign}) {arrow}")
+            lines.append(f"{s:<18} {fmt_id(before[s]):>7}  →  "
+                         f"{fmt_id(after[s]):>7}  ({sign}) {arrow}")
         n_anom_a = sum(after[s] for s in order[:3])
         n_anom_b = sum(before[s] for s in order[:3])
         self._ctx.log("=== Pratinjau ambang (BELUM disimpan) ===\n"
@@ -489,6 +598,6 @@ class PipelineView(QWidget):
             self, "Pratinjau Ambang (belum disimpan)",
             "Distribusi status dengan nilai form SAAT INI:\n\n"
             + "\n".join(lines)
-            + f"\n\nAnomali total: {n_anom_b:,} → {n_anom_a:,}\n"
+            + f"\n\nAnomali total: {fmt_id(n_anom_b)} → {fmt_id(n_anom_a)}\n"
             "Simpan config.json bila hasilnya sesuai (berlaku mulai run "
             "berikutnya).")

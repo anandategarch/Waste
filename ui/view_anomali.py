@@ -304,8 +304,14 @@ class DetailPanel(Card):
     # Prompt default — dipakai __init__ DAN clear() (V26-L12)
     # v2.13.9: teks mengikuti desain ringkas (ringkasan + sinyal terpicu
     # + peta hari; kolom lengkap di balik tombol).
-    _PROMPT = ("Klik baris anomali di tabel untuk menampilkan detailnya "
-               "di sini (ringkasan, sinyal terpicu, peta hari).")
+    # v2.13.12 (gel-3 A13): frasa era panel-inline "menampilkan detailnya
+    # di sini" dibuang (panel poped-out sejak v2.8.1 — "di sini" menipu:
+    # detailnya bukan di panel ini melainkan di pop-up) → deskripsi jujur
+    # isi pop-up + footer aksi yang selalu terlihat (gel-1 V1).
+    _PROMPT = ("Klik baris di tabel untuk membuka pop-up detail: ringkasan "
+               "angka kunci, sinyal terpicu, peta nilai per hari, dan "
+               "tombol tindak lanjut (drill fokus + masuk Follow Up) di "
+               "footer yang selalu terlihat.")
 
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -317,6 +323,11 @@ class DetailPanel(Card):
         # v2.13.9: wadah + tombol kolom-lengkap (diisi show_record).
         self._full_box: QWidget | None = None
         self._more_btn: QPushButton | None = None
+        # v2.13.12 (gel-3 A11): jumlah kolom lengkap DISIMPAN supaya teks
+        # tombol mempertahankan '(N)' sepanjang siklus buka/tutup (dulu
+        # angka hilang setelah siklus pertama — toggle kedua menulis teks
+        # tanpa angka, user tak tahu lagi berapa kolom yang disembunyikan).
+        self._n_full: int = 0
         ctx.followup_changed.connect(self._on_fu_state_changed)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 10, 12, 10)
@@ -556,6 +567,9 @@ class DetailPanel(Card):
         fbl.addWidget(metrics)
         full_box.setVisible(False)
         self._full_box = full_box
+        # v2.13.12 (gel-3 A11): simpan jumlah kolom lengkap utk siklus
+        # toggle berikutnya (teks tombol mempertahankan '(N)').
+        self._n_full = n_full
 
         # Peta hari 1-31 (v2.9.0): nilai waste per hari dalam mini-grid —
         # hari tersangka disorot merah. "Grafik batang" tanpa matplotlib:
@@ -567,9 +581,16 @@ class DetailPanel(Card):
         # bagian nilai ("kira 13 itu nilainya"). Kini DUA BARIS: tanggal
         # kecil redup di atas + nilai TEBAL di bawah — tanggal & nilai tak
         # mungkin tertukar lagi.
+        # v2.13.12 (gel-3 A14): rentang judul DINAMIS dari kolom hari yang
+        # benar-benar ada di record (key_akhir=30 → '1–30'; dulu SELALU
+        # '1–31' — judul mendiskripsikan kolom yang tak ada).
+        day_names = [c for c in (str(i) for i in range(1, 32))
+                     if c in rec.index]
+        day_rng = (f"{int(day_names[0])}–{int(day_names[-1])}"
+                   if day_names else "1–31")
         lay.addWidget(self._section(
-            "Nilai per hari (1–31) — angka kecil = TANGGAL, angka besar "
-            "= NILAI; sel merah = hari tersangka"))
+            f"Nilai per hari ({day_rng}) — angka kecil = TANGGAL, angka "
+            "besar = NILAI; sel merah = hari tersangka"))
         lay.addWidget(self._day_map(rec))
 
         # v2.13.10 (gel-1 V1): kolom lengkap = item KONTEN GULIR TERAKHIR
@@ -648,16 +669,20 @@ class DetailPanel(Card):
         v2.13.10 (gel-1 V1): tombol kini di footer sticky — daftar
         lengkap membuka DI AREA GULIR (bagian bawah konten, setelah peta
         hari); ensureWidgetVisible menggulir otomatis supaya daftar
-        langsung terlihat begitu dibuka."""
+        langsung terlihat begitu dibuka.
+        v2.13.12 (gel-3 A11): '(N)' dipertahankan sepanjang siklus —
+        jumlahnya dari self._n_full (dulu angka hilang pasca siklus
+        pertama: teks toggle ditulis ulang tanpa angka)."""
         box = self._full_box
         if box is None:
             return
         show = box.isHidden()
         box.setVisible(show)
         if self._more_btn is not None:
+            suffix = f" ({self._n_full})" if self._n_full else ""
             self._more_btn.setText(
                 ("▾ Sembunyikan daftar kolom lengkap" if show
-                 else "▸ Tampilkan semua kolom data"))
+                 else "▸ Tampilkan semua kolom data") + suffix)
             try:
                 self._more_btn.setToolTip(
                     "Klik utk menyembunyikan kembali daftar kolom lengkap."
@@ -761,8 +786,12 @@ class DetailPanel(Card):
                 # tanggal kecil redup + nilai tebal (rich text — warna nilai
                 # mengikuti stylesheet QLabel: merah utk tersangka, gelap
                 # utk hari biasa).
+                # v2.13.12 (gel-3 A12): nilai sel & tooltip MEMAKAI format
+                # sama — fmt_cell default 2-desimal (dulu sel fmt_cell(v,0)
+                # '7' vs tooltip fmt_cell(v,1) '7,5' — dua angka beda utk
+                # data yang sama di dua tempat bersebelahan).
                 text = (f'<span style="color:#94a3b8; font-size:9px;">'
-                        f"{hari}</span><br><b>{fmt_cell(v, 0)}</b>")
+                        f"{hari}</span><br><b>{fmt_cell(v)}</b>")
             else:
                 text = (f'<span style="color:#cbd5e1; font-size:9px;">'
                         f"{hari}</span>")
@@ -782,7 +811,7 @@ class DetailPanel(Card):
             else:
                 cell.setStyleSheet(
                     "color:#cbd5e1; background:transparent;")
-            tip_val = fmt_cell(v, 1) if has_val else "kosong"
+            tip_val = fmt_cell(v) if has_val else "kosong"
             cell.setToolTip(f"Hari {hari}: {tip_val}")
             gl.addWidget(cell, i // 8, i % 8)
         return host
@@ -1264,11 +1293,23 @@ class AnomaliView(FollowupTableMixin, QWidget):
         Reparent widget tabel (bukan salinan render) → centang ✓, sort,
         seleksi→pop-up detail — semua tetap hidup dan IKUT TERBARUI saat
         filter berganti (model sama, sinyal sama). Posisi layout asli
-        dicatat utk dipulihkan utuh saat ditutup."""
+        dicatat utk dipulihkan utuh saat ditutup.
+        v2.13.12 (gel-3 A9): tabel 0 baris kini DIBEDAKAN — 0-baris-
+        KARENA-FILTER (dataset ADA tapi funnel/skor menyaring semua)
+        → pesan menyebut filter + cara melepasnya; tanpa dataset →
+        arahan ke Pipeline tetap (kontrol positif; dulu kedua-duanya
+        satu pesan 'belum ada data' — menyesatkan saat datanya ADA)."""
         if self._table.model().rowCount() == 0:
-            self._ctx.set_status(
-                "Belum ada data utk dibesarkan — jalankan pipeline dulu "
-                "(tab Pipeline)", "done")
+            df = self._ctx.df
+            if df is not None and not df.empty:
+                self._ctx.set_status(
+                    "Tabel 0 baris — filter/ambang skor sedang menyaring "
+                    "semua baris; lepas filter dulu (tombol ✕ Hapus Filter "
+                    "/ naikkan ambang skor), lalu perbesar tabel.", "done")
+            else:
+                self._ctx.set_status(
+                    "Belum ada data utk dibesarkan — jalankan pipeline dulu "
+                    "(tab Pipeline)", "done")
             return
         if self._fs_dlg is None:
             dlg = QDialog(self)

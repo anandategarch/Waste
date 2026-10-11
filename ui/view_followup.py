@@ -419,7 +419,7 @@ class FollowUpView(QWidget):
 
     def _on_export(self) -> None:
         if self._rows is None or self._rows.empty:
-            QMessageBox.information(self, "Export",
+            QMessageBox.information(self, "Ekspor",
                                     "Daftar follow-up masih kosong.")
             return
         from PySide6.QtWidgets import QFileDialog
@@ -435,15 +435,15 @@ class FollowUpView(QWidget):
                                "Menyimpan daftar follow-up"):
                 out = export_followup_xlsx(self._rows, path,
                                            self._red, self._amber)
-            self._ctx.log(f"=== Export Follow Up → {out} ===")
+            self._ctx.log(f"=== Ekspor Follow Up → {out} ===")
             self._ctx.set_status(f"✓ Daftar follow-up tersimpan: {out}", "done")
             QMessageBox.information(
-                self, "Export Selesai",
+                self, "Ekspor Selesai",
                 f"Daftar follow-up ({len(self._rows)} baris) tersimpan:\n{out}")
         except Exception as e:  # noqa: BLE001 — gagal tulis disk dsb.
-            self._ctx.log(f"!!! Export follow-up gagal: {e}")
-            self._ctx.set_status(f"⚠ Export follow-up gagal: {e}", "error")
-            QMessageBox.critical(self, "Export Gagal", str(e))
+            self._ctx.log(f"!!! Ekspor follow-up gagal: {e}")
+            self._ctx.set_status(f"⚠ Ekspor follow-up gagal: {e}", "error")
+            QMessageBox.critical(self, "Ekspor Gagal", str(e))
 
     def _on_import(self) -> None:
         """⑯ v2.13.3: baca file ekspor yang sudah diisi petugas →

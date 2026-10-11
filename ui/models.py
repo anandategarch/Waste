@@ -17,6 +17,8 @@ import pandas as pd
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
 from PySide6.QtGui import QColor, QFont
 
+from waste_anomaly.utils import load_config
+
 from .shared import fmt_id
 from .theme import STATUS_COLORS
 
@@ -96,7 +98,71 @@ _NEG_FG = QColor("#dc2626")
 # istilah ya bukan hanya S-1". Hover judul kolom tabel / label metrik
 # pop-up detail → penjelasan Bahasa Indonesia awam. Satu sumber untuk
 # semua view (Anomali, Hari Mencurigakan, Banding Periode).
-COLUMN_TOOLTIPS = {
+#
+# v2.13.12 (gel-3 C18): angka ambang kini dibaca dari config AKTIF via
+# build_column_tooltips(config) — dulu hardcode di teks ("≥ 8", "≥ 50%",
+# "≥ 5×") padahal nilai TH_* / STATUS_* user-editable lewat kartu
+# Threshold tab Pipeline (audit C18: tooltip bohong diam-diam begitu
+# user mengubah config). COLUMN_TOOLTIPS tetap ada sebagai snapshot
+# import-time load_config() — kompatibilitas import lama (test/fixture
+# memakai nama modul); ScorecardView memasang kamus runtime dari
+# ctx.config lewat PandasTableModel.set_tooltip_map (gel-3 C3+C9).
+
+
+def _th(config: dict | None, key: str, default: float) -> float:
+    """v2.13.12 (gel-3 C18): ambil angka ambang dari config dengan
+    FALLBACK default engine bila nilai korup (None/string tak terurai/
+    NaN) — default = nilai bawaan signals.py/pipeline, bukan teks lama
+    yang menempel."""
+    try:
+        raw = (config or {}).get("thresholds", {}).get(key, default)
+        if raw is None:
+            return float(default)
+        val = float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+    if val != val:  # NaN
+        return float(default)
+    return val
+
+
+def _fmt_th(val: float) -> str:
+    """Format angka ambang utk teks tooltip: int polos ('8'), float
+    koma-ID ('2,5') — konvensi fmt_id (IN-L1)."""
+    f = float(val)
+    if f == int(f):
+        return fmt_id(int(f), 0)
+    return fmt_id(f, 1)
+
+
+def build_column_tooltips(config: dict | None = None) -> dict[str, str]:
+    """Kamus tooltip judul kolom dgn angka ambang dari ``config``.
+
+    v2.13.12 (gel-3 C18): satu pabrik untuk kamus global (snapshot
+    import-time) DAN kamus per-view runtime (Scorecard memakai ctx.config
+    aktif). Entri tanpa angka ambang = teks tetap (verbatim dari v2.9.0).
+    Kunci kamus TIDAK berubah (dikunci test_v290/test_v2100/test_v2102)."""
+    # Ambang dari config AKTIF (fallback default engine bila korup).
+    pr = _fmt_th(_th(config, "STATUS_PRIORITAS", 8))
+    po = _fmt_th(_th(config, "STATUS_POTENSI", 5))
+    rv = _fmt_th(_th(config, "STATUS_REVIEW", 3))
+    spike = _fmt_th(_th(config, "TH_SPIKE", 3))
+    avg_aktif = _fmt_th(_th(config, "TH_MAX_AVG_AKTIF", 2.5))
+    med = _fmt_th(_th(config, "TH_MAX_MEDIAN", 3))
+    second = _fmt_th(_th(config, "TH_MAX_SECOND", 3))
+    share = _fmt_th(_th(config, "TH_MAX_SHARE_WARN", 0.5) * 100)
+    last_share = _fmt_th(_th(config, "TH_LAST_SHARE", 0.7) * 100)
+    bom_warn = _fmt_th(_th(config, "TH_MAX_BOM_WARN", 0.25) * 100)
+    total_bom = _fmt_th(_th(config, "TH_TOTAL_BOM_WARN", 0.5) * 100)
+    peer_high = _fmt_th(_th(config, "TH_PEER_HIGH", 3))
+    peer_warn = _fmt_th(_th(config, "TH_PEER_WARN", 2))
+    hari_peer = _fmt_th(_th(config, "TH_HARI_PEER_RATIO", 5.0))
+    hari_hist = _fmt_th(_th(config, "TH_HARI_HIST_RATIO", 3.0))
+    chg_high = _fmt_th(_th(config, "TH_CHANGE_HIGH", 50.0))
+    chg_stable = _fmt_th(_th(config, "TH_CHANGE_STABLE", 20.0))
+    chg_min = _fmt_th(_th(config, "TH_CHANGE_MIN_ABS", 10.0))
+    profil_min = int(_th(config, "PROFIL_DAILY_MIN", 20))
+    return {
     # --- identitas ---
     "NAMA RESTO": "Kode & nama cabang/outlet yang mencatat data ini.",
     "NAMA BARANG": "Nama item barang.",
@@ -107,7 +173,7 @@ COLUMN_TOOLTIPS = {
     "Status2": "Kosong = tidak ada nilai sama sekali; Isi = ada nilainya.",
     # --- skor & status ---
     "ANOMALY SCORE": "Total poin dari 12 pemeriksaan (maks 19).\nMakin tinggi = makin layak diperiksa duluan.",
-    "ANOMALY STATUS": "Kategori skor:\nPrioritas Tinggi (≥ 8) · Potensi Anomali (≥ 5) · Perlu Review (≥ 3) · Normal.",
+    "ANOMALY STATUS": f"Kategori skor:\nPrioritas Tinggi (≥ {pr}) · Potensi Anomali (≥ {po}) · Perlu Review (≥ {rv}) · Normal.",
     "ANOMALY REASONS": "Daftar pemeriksaan yang terpicu (dipisah '|').\nHover chip di pop-up detail untuk arti tiap sinyal.",
     "KATEGORI ANOMALI": "Lonjakan Ekstrem / Dominasi Non-Handling / Normal.",
     "RANGKING WASTE": "Peringkat item ini di antara cabang (Top 1-3 — total dan/atau % BOM).",
@@ -122,41 +188,43 @@ COLUMN_TOOLTIPS = {
     "Count Hari": "Banyaknya hari dengan waste > 0.",
     "NILAI HARI TERAKHIR": "Nilai waste di hari terakhir periode.",
     # --- rasio harian ---
-    "MAX / AVG": "Berapa kali lipat nilai terbesar vs rata-rata (≥ 3× = lonjakan).",
-    "MAX / AVG AKTIF": "Nilai terbesar vs rata-rata hari aktif (≥ 2,5× = mencurigakan).",
-    "MAX / MEDIAN AKTIF": "Nilai terbesar vs nilai tengah (≥ 3× = mencurigakan).",
-    "MAX / SECOND MAX": "Nilai terbesar vs terbesar kedua (≥ 3× = puncak menjulang sendirian).",
-    "MAX SHARE": "Porsi nilai terbesar dari TOTAL sebulan (≥ 50% = waste terpusat di 1 hari).",
-    "LAST DAY SHARE": "Porsi hari TERAKHIR dari total (≥ 70% = menumpuk di akhir bulan — cek input).",
+    "MAX / AVG": f"Berapa kali lipat nilai terbesar vs rata-rata (≥ {spike}× = lonjakan).",
+    "MAX / AVG AKTIF": f"Nilai terbesar vs rata-rata hari aktif (≥ {avg_aktif}× = mencurigakan).",
+    "MAX / MEDIAN AKTIF": f"Nilai terbesar vs nilai tengah (≥ {med}× = mencurigakan).",
+    "MAX / SECOND MAX": f"Nilai terbesar vs terbesar kedua (≥ {second}× = puncak menjulang sendirian).",
+    "MAX SHARE": f"Porsi nilai terbesar dari TOTAL sebulan (≥ {share}% = waste terpusat di 1 hari).",
+    "LAST DAY SHARE": f"Porsi hari TERAKHIR dari total (≥ {last_share}% = menumpuk di akhir bulan — cek input).",
     "SINGLE DAY": "YES = waste hanya terjadi 1 hari sebulan.",
     "SCALE SIGNAL": "YES = nilai ~10×/100×/1000× nilai tengah sendiri —\npola khas salah ketik digit tambahan (7 → 70 → 700).",
     # --- BOM (penjualan) ---
     "TOTAL BOM": "Qty PENJUALAN item sebulan (pembanding — bukan waste).\nBOM = penjualan kuantiti.",
     "% to BOM": "Waste vs penjualan. 5% = waste 5 dari 100 terjual.\n'Cek' = tidak ada data penjualan.",
     "Rill % to BOM": "Sama seperti % to BOM (versi tanpa penanda 'Cek').",
-    "MAX / BOM": "Nilai terbesar SEHARI vs penjualan SEBULAN (≥ 25% = tinggi).",
-    "TOTAL / BOM": "Total waste sebulan vs penjualan (≥ 50% = tinggi).",
+    "MAX / BOM": f"Nilai terbesar SEHARI vs penjualan SEBULAN (≥ {bom_warn}% = tinggi).",
+    "TOTAL / BOM": f"Total waste sebulan vs penjualan (≥ {total_bom}% = tinggi).",
     # --- peer (cabang lain) ---
     "PEER COUNT": "Banyak cabang lain yang juga mencatat item ini (pembanding).",
     "PEER MEDIAN TOTAL": "Nilai tengah TOTAL item ini di cabang lain.",
     "PEER MEDIAN MAX": "Nilai tengah puncak-harian item ini di cabang lain.",
-    "TOTAL / PEER MEDIAN": "Total kita vs nilai tengah cabang lain (≥ 3× = jauh di atas).",
-    "MAX / PEER MEDIAN MAX": "Puncak kita vs nilai tengah puncak cabang lain (≥ 2× = jauh di atas).",
+    "TOTAL / PEER MEDIAN": f"Total kita vs nilai tengah cabang lain (≥ {peer_high}× = jauh di atas).",
+    "MAX / PEER MEDIAN MAX": f"Puncak kita vs nilai tengah puncak cabang lain (≥ {peer_warn}× = jauh di atas).",
     # --- hari tersangka (v2.9.0) ---
     "HARI TERSANGKA": "Tanggal (1-31) angka mencurigakan berada —\nhari dengan nilai terbesar baris ini.",
     "NILAI HARI TERSANGKA": "Nilai waste pada hari tersangka.",
     "TIPIKAL CABANG LAIN": "Nilai tengah item SAMA di hari SAMA pada cabang lain —\nangka wajarnya hari itu.",
     "N CABANG PEMBANDING": "Banyak cabang lain yang jadi pembanding di hari itu.",
-    "RASIO VS CABANG LAIN": "Berapa kali lipat nilai kita vs cabang lain di hari yang sama.\n≥ 5× = mencurigakan.",
-    "SHARE HARI TERSANGKA": "Porsi hari tersangka dari total bulanan (≥ 50% = terpusat).",
+    "RASIO VS CABANG LAIN": f"Berapa kali lipat nilai kita vs cabang lain di hari yang sama.\n≥ {hari_peer}× = mencurigakan.",
+    "SHARE HARI TERSANGKA": f"Porsi hari tersangka dari total bulanan (≥ {share}% = terpusat).",
     "BUKTI HARI": "YES = ada ≥ 1 bukti kuat hari itu mencurigakan.\nLihat ALASAN HARI untuk rinciannya.",
     "ALASAN HARI": "Ringkasan bukti hari tersangka dalam satu kalimat.",
     # --- bukti vs bulan lalu (v2.10.0) ---
     "NILAI BULAN LALU": "Nilai item yang sama di cabang yang sama pada\nTANGGAL yang sama, bulan pembanding sebelumnya\n(jumlah semua alasan) — kebiasaan bulan lalu.",
-    "RASIO VS BULAN LALU": "Berapa kali lipat nilai hari tersangka vs\ntanggal yang sama bulan lalu. ≥ 3× = jauh di atas\nkebiasaan bulan sebelumnya.",
+    "RASIO VS BULAN LALU": f"Berapa kali lipat nilai hari tersangka vs\ntanggal yang sama bulan lalu. ≥ {hari_hist}× = jauh di atas\nkebiasaan bulan sebelumnya.",
     "TIPIKAL BEBERAPA BULAN": "Nilai tengah tanggal yang sama dari ≥ 2\nbulan pembanding (butuh beberapa file bulan lalu).",
     # --- profil & kelebihan (v2.13.0) ---
-    "PROFIL": "Pola waktu waste baris ini:\nTiap Hari = hampir setiap hari ada waste (masalah proses/kronis) ·\nKadang = 2-19 hari sebulan · Sekali Ini = 1 hari saja (kejadian\ntunggal — kandidat salah input).\n'— Baru' = pasangan cabang×item tidak ada/nol di bulan pembanding.",
+    "PROFIL": (f"Pola waktu waste baris ini:\nTiap Hari = hampir setiap hari ada waste (masalah proses/kronis) ·\n"
+               f"Kadang = 2-{max(profil_min - 1, 2)} hari sebulan · Sekali Ini = 1 hari saja (kejadian\n"
+               "tunggal — kandidat salah input).\n'— Baru' = pasangan cabang×item tidak ada/nol di bulan pembanding."),
     "KELEBIHAN": "TOTAL sebulan dikurangi tipikal (nilai tengah) cabang lain\npada item yang sama (hanya cabang yang memang punya waste).\nPlus = lebih boros dari tipikal; minus = lebih hemat.\nKosong = pembanding kurang (< 3 cabang lain ber-waste).",
     "PEER MEDIAN (AKTIF)": "Nilai tengah TOTAL item ini di cabang lain yang\nmemang punya waste — baris cabang nol tidak ikut (tidak menarik\ntipikal turun).",
     "PEER AKTIF": "Banyak cabang lain yang punya waste pada item yang sama\n(dipakai menghitung KELEBIHAN).",
@@ -180,14 +248,22 @@ COLUMN_TOOLTIPS = {
                    "huruf & spasi.\nKosong = belum ada di bulan lalu (BARU)."),
     "PERUBAHAN %": ("(TOTAL − BULAN LALU) ÷ BULAN LALU × 100.\n"
                     "'BARU' = tidak ada riwayat bulan lalu."),
-    "PERUBAHAN": ("Kategori perubahan vs bulan lalu — memisahkan LONJAKAN BARU "
-                  "(Naik Tinggi: kandidat salah input / kejadian baru) dari "
-                  "WASTE KRONIS (Stabil: sudah tinggi tiap bulan — masalah "
-                  "proses, bukan salah ketik).\nAmbang bisa diatur di "
-                  "config.json (TH_CHANGE_HIGH / STABLE / MIN_ABS)."),
+    "PERUBAHAN": (f"(Kategori perubahan vs bulan lalu — memisahkan LONJAKAN BARU "
+                  f"(Naik Tinggi: kandidat salah input / kejadian baru) dari "
+                  f"WASTE KRONIS (Stabil: sudah tinggi tiap bulan — masalah "
+                  f"proses, bukan salah ketik).\nAmbang aktif: Naik Tinggi ≥ {chg_high}%"
+                  f" · Stabil ≤ {chg_stable}% · minimum {chg_min} satuan agar "
+                  "bermakna (anti derau).\nBisa diatur di config.json "
+                  "(TH_CHANGE_HIGH / STABLE / MIN_ABS)."),
     "HARI": ("Tanggal 1-31 (pop-up rincian per hari).\n"
              "Selisih = bulan ini − pembanding tanggal sama."),
-}
+    }
+
+
+# Snapshot import-time (kompatibilitas import lama; kontrak test lama
+# `COLUMN_TOOLTIPS.get(col)` tetap terpenuhi — angka dari config saat
+# modul pertama kali dimuat, sama seperti ctx aplikasi startup).
+COLUMN_TOOLTIPS: dict[str, str] = build_column_tooltips(load_config())
 
 
 def fmt_cell(value, ndigits: int = 2) -> str:
@@ -335,6 +411,13 @@ class PandasTableModel(QAbstractTableModel):
         # nama KANONIK (dipakai tab Banding: 'Pembanding' → nama bulan;
         # kontrak test lama `dataframe['Pembanding']` tak tersentuh).
         self._header_map: dict[str, str] = {}
+        # v2.13.12 (gel-3 C3+C9): kamus tooltip PER-VIEW menimpa kamus
+        # global (kolom 'HARI' = Senin–Minggu di kartu kalender Scorecard,
+        # tanggal di kartu sistemik, tanggal 1-31 di tabel Anomali — satu
+        # nama, banyak makna per tabel). Hanya ToolTipRole header yang
+        # membaca ini; kontrak lain (set_header_map alias judul, data,
+        # sort) tak tersentuh.
+        self._tooltip_map: dict[str, str] = {}
 
     def _rebuild_snapshot(self) -> None:
         """Bangun ulang snapshot numpy dari _df (setelah set/reset/sort)."""
@@ -432,6 +515,19 @@ class PandasTableModel(QAbstractTableModel):
         konsumen/test tak berubah). None/{} = matikan."""
         self._header_map = dict(mapping or {})
 
+    def set_tooltip_map(self, mapping: dict[str, str] | None) -> None:
+        """Kamus tooltip judul kolom PER-VIEW menimpa kamus global
+        (v2.13.12 gel-3 C3+C9 — audit: kolom "HARI TERSANGKA" di
+        Scorecard = JUMLAH baris ber-bukti, padahal tooltip global
+        menjelaskan TANGGAL; kolom "HARI" kartu kalender = Senin–Minggu,
+        kartu sistemik = tanggal serentak).
+
+        Hanya ToolTipRole headerData yang membaca peta ini (dicari lebih
+        dulu sebelum COLUMN_TOOLTIPS global); kontrak lain — alias judul
+        (set_header_map), data sel, sort, record — tak tersentuh.
+        None/{} = kembali ke kamus global."""
+        self._tooltip_map = dict(mapping or {})
+
     def notify_column_changed(self, name: str) -> None:
         """dataChanged SATU kolom penuh (nilai berubah in-place).
 
@@ -489,7 +585,13 @@ class PandasTableModel(QAbstractTableModel):
                     # v2.9.0: kamus istilah — hover judul kolom menjelaskan
                     # artinya Bahasa awam (permintaan user: tooltip SEMUA
                     # istilah, bukan cuma S-1). Kolom tanpa kamus → nama.
-                    return COLUMN_TOOLTIPS.get(name, name)
+                    # v2.13.12 (gel-3 C3+C9): kamus PER-VIEW menimpa global
+                    # (kolom sama beda makna antar tabel — 'HARI' kalender
+                    # vs sistemik vs tanggal Anomali).
+                    tip = self._tooltip_map.get(name)
+                    if tip is None:
+                        tip = COLUMN_TOOLTIPS.get(name, name)
+                    return tip
         if role == Qt.FontRole and orientation == Qt.Horizontal:
             f = QFont()
             f.setBold(True)

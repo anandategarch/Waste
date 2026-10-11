@@ -22,9 +22,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import numpy as np
 import pandas as pd
-import pytest
 
 REPO = Path(__file__).resolve().parent.parent
 UI = REPO / "ui"
@@ -228,7 +226,6 @@ class TestMonthAggregates:
         assert abs(d["Cancel Nota"] - 94.0) < 0.01
 
     def test_aggregate_current_sama_bentuk(self):
-        from waste_anomaly.period_history import aggregate_current
         a = _month_a()
         assert not a["agg_jenis"].empty
         assert abs(a["agg_jenis"]["TOTAL"].sum() - 674.0) < 0.01
@@ -713,7 +710,7 @@ class TestConfigV2102:
 
     def test_versi_naik(self):
         from ui.shared import APP_VERSION
-        assert APP_VERSION == "2.13.11"  # v2.13.10: gel-1 kejujuran interaksi inti
+        assert APP_VERSION == "2.13.12"  # v2.13.12: gel-3 bantuan & teks jujur
 
 
 # ============================================================

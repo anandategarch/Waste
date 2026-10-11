@@ -425,11 +425,22 @@ class HariView(FollowupTableMixin, QWidget):
 
     def _on_fullscreen(self) -> None:
         """Pop-out TABEL ASLI ke jendela maximized (Esc = kembali) —
-        reparent + pulihkan index layout (pola AnomaliView v2.12.2)."""
+        reparent + pulihkan index layout (pola AnomaliView v2.12.2).
+        v2.13.12 (gel-3 A9): tabel 0 baris DIBEDAKAN — 0-baris-karena-
+        filter (dataset ADA tapi funnel menyaring semua) → pesan
+        menyebut filter + cara melepas; tanpa dataset → arahan Pipeline
+        tetap (kontrol positif)."""
         if self._table.model().rowCount() == 0:
-            self._ctx.set_status(
-                "Belum ada data utk dibesarkan — jalankan pipeline dulu "
-                "(tab Pipeline)", "done")
+            df = self._ctx.df
+            if df is not None and not df.empty:
+                self._ctx.set_status(
+                    "Tabel 0 baris — filter sedang menyaring semua baris; "
+                    "lepas filter dulu (tombol ✕ Hapus Filter / ikon "
+                    "funnel di judul kolom), lalu perbesar tabel.", "done")
+            else:
+                self._ctx.set_status(
+                    "Belum ada data utk dibesarkan — jalankan pipeline dulu "
+                    "(tab Pipeline)", "done")
             return
         if self._fs_dlg is None:
             dlg = QDialog(self)

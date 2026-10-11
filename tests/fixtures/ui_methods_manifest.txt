@@ -1,8 +1,12 @@
 app.py::MainWindow
 app.py::_qt_excepthook
 app.py::main
+app.py::_build_help_html
 followup_table.py::FollowupTableMixin
 models.py::PandasTableModel
+models.py::build_column_tooltips
+models.py::_fmt_th
+models.py::_th
 models.py::fmt_cell
 models.py::fmt_delta_pct
 models.py::fmt_pct
@@ -23,6 +27,8 @@ view_periode.py::BandTableDialog
 view_periode.py::PeriodeView
 view_periode.py::fmt_run_label
 view_pipeline.py::PipelineView
+view_pipeline.py::_fmt_ts_id
+view_pipeline.py::_log_id
 widgets.py::Card
 widgets.py::DataTable
 widgets.py::FilterHeader
@@ -34,6 +40,7 @@ widgets.py::_HeaderFilterMenu
 widgets.py::_header_font
 widgets.py::_paint_funnel
 widgets.py::busy_feedback
+widgets.py::_menu_value_fmt
 widgets.py::status_chip_for
 workers.py::ExportWorker
 workers.py::HistoryWorker

@@ -47,6 +47,7 @@ from waste_anomaly.insights import (
 from waste_anomaly.period_history import detect_month_label
 from waste_anomaly.priority import reason_share
 
+from .models import build_column_tooltips
 from .shared import fmt_id
 from .state import AppContext
 from .widgets import Card, DataTable, KpiCard, WLabel, busy_feedback
@@ -54,6 +55,119 @@ from .widgets import Card, DataTable, KpiCard, WLabel, busy_feedback
 # Kolom tabel utama = SCORECARD_COLS (insights) — urutan PERSIS.
 # (v2.13.8 gel-C: konstanta SC_COLS lokal DIHAPUS — tak pernah dirujuk;
 # insights.SCORECARD_COLS adalah satu sumber kebenaran.)
+
+# ============================================================
+# v2.13.12 (gel-3 C3+C9) — KAMUS TOOLTIP PER-TABEL Scorecard
+# ============================================================
+# Satu nama kolom bisa beda makna antar tabel ("HARI" kartu kalender =
+# Senin–Minggu; kartu sistemik = tanggal serentak; tabel Anomali =
+# tanggal pop-up) → kamus PER-VIEW menimpa kamus global lewat
+# PandasTableModel.set_tooltip_map (hanya ToolTipRole — kontrak lain
+# tak tersentuh). Audit C3: "HARI TERSANGKA" tabel utama = JUMLAH
+# BARIS ber-bukti (bukan tanggal — kamus global menjelaskan tanggal);
+# audit C9: 10/13 kolom tabel utama dulunya polos tanpa kamus.
+# Kolom NAMA RESTO / KELEBIHAN tetap memakai kamus global (makna sama).
+_SC_TIPS_MAIN = {
+    "RANK": "Urutan kunjungan audit — tabel diurut KELEBIHAN (potensi "
+            "hemat) terbesar; RANK 1 = kunjungi duluan.",
+    "TOTAL WASTE": "Total waste cabang ini sebulan (semua item "
+                    "dijumlahkan, satuan campuran).",
+    "INTENSITAS %": "Total waste ÷ penjualan (BOM) cabang × 100 — "
+                     "persen barang terjual yang terbuang.",
+    "ALASAN DOMINAN": "Keterangan dgn porsi waste terbesar di cabang "
+                      "ini (mis. 'Handling (42,3%)') — mulai investigasi "
+                      "dari sini.",
+    "ITEM TIAP HARI": "Banyaknya item yang waste-nya tercatat HAMPIR "
+                      "TIAP HARI (PROFIL 'Tiap Hari') di cabang ini — "
+                      "masalah kronis, bukan kejadian tunggal.",
+    "ANOMALI": "Banyaknya baris ber-status bukan Normal (Prioritas "
+               "Tinggi + Potensi Anomali + Perlu Review) di cabang ini.",
+    "HARI TERSANGKA": "JUMLAH BARIS ber-bukti hari tersangka (BUKTI "
+                      "HARI = YES) — BUKAN tanggal. Angka 5 = ada 5 "
+                      "baris yang lonjakannya bisa dilokalisasi ke "
+                      "tanggal tertentu; tanggal tiap baris ada di kolom "
+                      "HARI TERSANGKA tab Anomali/Hari Mencurigakan.",
+    "BARU": "Banyak pasangan item baru bulan ini (tidak ada di bulan "
+            "pembanding terakhir) — 0 + catatan 'perlu pembanding' bila "
+            "belum ada file bulan lalu (jujur, bukan nol asli).",
+    "PULIH": "Banyak pasangan item yang HILANG bulan ini (ada di bulan "
+             "pembanding terakhir, tidak lagi tercatat aktif sekarang).",
+    "STATUS INPUT": "Verdict pelaporan item umum: Lengkap / Berhenti "
+                    "Input / Memang Tak Pernah / Perlu Pembanding — "
+                    "detektor input kosong (klik 2× baris = contoh "
+                    "itemnya).",
+    "TREN": "Arah total waste vs pembanding terbaru: ↗ Naik / ↘ Turun "
+            "(batas ±10%) / → Stabil / Baru / Pulih — butuh ≥ 1 file "
+            "bulan lalu.",
+}
+
+# Kartu 💰 Top Kerugian (money_ranking) — kolom RASIO / DI ATAS %
+# CABANG / PROFIL spesifik tabel ini; TIPIKAL CABANG LAIN di sini =
+# median TOTAL sebulan (bukan median per-hari seperti kamus global).
+_SC_TIPS_MONEY = {
+    "TIPIKAL CABANG LAIN": "Nilai tengah (median) TOTAL item ini di "
+                           "cabang lain yang memang punya waste — "
+                           "pembanding per-bulan (bukan per-hari).",
+    "RASIO": "TOTAL ÷ tipikal cabang lain ('404×' = 404 kali lipat "
+             "kebiasaan cabang lain, unit-free).",
+    "DI ATAS % CABANG": "Persentil TOTAL baris ini di antara cabang "
+                        "lain yang mencatat item sama (90 = lebih "
+                        "tinggi dari 90% cabang pembanding).",
+    "PROFIL": "Pola waktu waste baris ini: Tiap Hari / Kadang / "
+              "Sekali Ini (kandidat salah input).",
+}
+
+# Kartu 📅 Pola Hari Kalender — "HARI" = Senin–Minggu (bukan tanggal).
+_SC_TIPS_WEEKDAY = {
+    "HARI": "Hari KALENDER (Senin–Minggu) — dibaca dari nama bulan file; "
+            "BUKAN tanggal 1–31.",
+    "TOTAL": "Total waste semua cabang pada hari kalender ini sepanjang "
+             "bulan (mis. semua Senin dijumlahkan).",
+    "N HARI": "Berapa kali hari kalender ini muncul dalam periode "
+              "(Senin biasanya 4-5× sebulan).",
+    "RATA PER HARI": "TOTAL ÷ N HARI — rata-rata waste per kemunculan "
+                     "hari kalender ini (adil antar hari).",
+}
+
+# Kartu 🔗 Hari Sistemik — "HARI" = tanggal serentak (1–31).
+_SC_TIPS_SISTEMIK = {
+    "HARI": "TANGGAL (1–31) — hari banyak cabang naik serentak "
+            "(serentak = masalah bersama, bukan satu cabang).",
+    "CABANG TERPENGARUH": "Jumlah cabang yang waste-nya ≥ 2× median "
+                          "hariannya sendiri di tanggal ini (≥ 3 atau "
+                          "15% cabang = sistemik).",
+    "N": "Jumlah cabang terpengaruh (sama dgn kolom sebelah — angka "
+         "cepat baca).",
+    "DAFTAR CABANG": "Nama cabang-cabang yang naik serentak di tanggal "
+                     "ini (gulir lebar bila panjang).",
+}
+
+# Kartu 🧪 Kualitas Data (data_quality.run_checks).
+_SC_TIPS_DQ = {
+    "SEVERITY": "warning = patut dibersihkan (satuan kembar, "
+                "kapitalisasi beda); info = konteks normal.",
+    "KODE": "Kode singkat pemeriksaan (mis. SATUAN_KEMBAR).",
+    "TEMUAN": "Ringkasan satu baris pemeriksaan.",
+    "JUMLAH": "Berapa baris data yang terdampak temuan ini.",
+    "PENJELASAN": "Penjelasan lengkap — arahkan kursor ke sel utk baca "
+                  "utuh (kolomnya sengaja sempit).",
+}
+
+# Kartu 📈 Tren Bulanan — label bulan dinamis (nama bulan file), TREN
+# dijelaskan; NAMA RESTO dari kamus global.
+_SC_TIPS_TREND = {
+    "TREN": "Arah total waste cabang vs pembanding terbaru: ↗ Naik / "
+            "↘ Turun (batas ±10%) / → Stabil / Baru / Pulih.",
+}
+
+# Pop-up rincian cabang (drill): tabel money = kolom MONEY_COLS →
+# kamus money; tabel share alasan = ALASAN / SHARE %.
+_SC_TIPS_SHARE = {
+    "ALASAN": "Keterangan (mis. Handling, Cancel Nota) — porsi di "
+              "bawahnya dihitung dari TOTAL baris cabang ini.",
+    "SHARE %": "Porsi TOTAL keterangan ini dari total waste cabang "
+               "(semua keterangan dijumlahkan = 100%).",
+}
 
 
 class ScorecardView(QWidget):
@@ -416,9 +530,17 @@ class ScorecardView(QWidget):
 
         m = self._memo
         sc = self._apply_local("scorecard", m["scorecard"])
+        # v2.13.12 (gel-3 C3+C9+C18): kamus tooltip PER-TABEL dipasang
+        # dari config RUNTIME (ctx.config — angka ambang mengikuti config
+        # aktif, bukan snapshot import-time): peta global di-merge dulu,
+        # entri per-view menimpa (HARI TERSANGKA = jumlah baris, dst).
+        cfg_tips = build_column_tooltips(self._ctx.config)
+        self._table.model().set_tooltip_map({**cfg_tips, **_SC_TIPS_MAIN})
         self._table.set_dataframe(sc, sort_desc="KELEBIHAN")
 
         money = self._apply_local("money", m["money"])
+        self._money_table.model().set_tooltip_map(
+            {**cfg_tips, **_SC_TIPS_MONEY})
         self._money_table.set_dataframe(money, sort_desc="KELEBIHAN")
         # v2.13.11 (gel-2 C4): total NYATA dihitung dari df (KELEBIHAN > 0;
         # kontrak kolom: terisi hanya bila peer ≥ 3 & TOTAL > 0) — dulu
@@ -445,6 +567,8 @@ class ScorecardView(QWidget):
         self._lbl_money.setText(base)
 
         wk = self._apply_local("weekday", m["weekday"])
+        self._weekday_table.model().set_tooltip_map(
+            {**cfg_tips, **_SC_TIPS_WEEKDAY})
         self._weekday_table.set_dataframe(wk)
         label = m.get("label") or ""
         if wk is None or wk.empty:
@@ -457,6 +581,8 @@ class ScorecardView(QWidget):
                 "terbesar otomatis terlihat (klik judul utk sort).")
 
         sysd = self._apply_local("sistemik", m["sistemik"])
+        self._sistemik_table.model().set_tooltip_map(
+            {**cfg_tips, **_SC_TIPS_SISTEMIK})
         self._sistemik_table.set_dataframe(sysd)
         if sysd is None or sysd.empty:
             self._lbl_sistemik.setText(
@@ -465,6 +591,8 @@ class ScorecardView(QWidget):
                 "kejadian bersama).")
 
         dq = self._apply_local("dq", m.get("dq"))
+        self._dq_table.model().set_tooltip_map(
+            {**cfg_tips, **_SC_TIPS_DQ})
         self._dq_table.set_dataframe(dq)
         if dq is None or dq.empty:
             self._lbl_dq.setText("Semua pemeriksaan bersih.")
@@ -478,6 +606,8 @@ class ScorecardView(QWidget):
 
         # v2.13.3 (⑧): kartu tren multi-bulan (≥ 2 pembanding).
         trend = self._apply_local("trend", m.get("trend"))
+        self._trend_table.model().set_tooltip_map(
+            {**cfg_tips, **_SC_TIPS_TREND})
         self._trend_table.set_dataframe(trend)
         if trend is None or trend.empty:
             self._lbl_trend.setText(
@@ -624,6 +754,11 @@ class ScorecardView(QWidget):
             money = money_ranking(df, top_n=10_000)
             if not money.empty:
                 money = money[money["NAMA RESTO"].astype(str) == resto]
+            # v2.13.12 (gel-3 C3+C9): tabel drill ikut kamus per-view —
+            # kolom money sama makna dgn kartu 💰 (runtime ctx.config).
+            self._drill_money.model().set_tooltip_map(
+                {**build_column_tooltips(self._ctx.config),
+                 **_SC_TIPS_MONEY})
             self._drill_money.set_dataframe(
                 money.head(15), sort_desc="KELEBIHAN")
             share = reason_share(df, resto)
@@ -635,6 +770,7 @@ class ScorecardView(QWidget):
             else:
                 share_df = pd.DataFrame(
                     columns=["ALASAN", "SHARE %"])
+            self._drill_share.model().set_tooltip_map(_SC_TIPS_SHARE)
             self._drill_share.set_dataframe(share_df)
             cov = coverage_report(df, self._ctx.history_months)
             if not cov.empty:
@@ -671,10 +807,20 @@ class ScorecardView(QWidget):
             else "⤢ KPI & kartu ditampilkan kembali", "done")
 
     def _on_fullscreen(self) -> None:
+        # v2.13.12 (gel-3 A9): tabel 0 baris DIBEDAKAN — 0-baris-karena-
+        # funnel lokal kartu ini (dataset ADA) → pesan menyebut funnel;
+        # tanpa dataset → arahan Pipeline tetap (kontrol positif).
         if self._table.model().rowCount() == 0:
-            self._ctx.set_status(
-                "Belum ada data utk dibesarkan — jalankan pipeline dulu "
-                "(tab Pipeline)", "done")
+            df = self._ctx.df
+            if df is not None and not df.empty:
+                self._ctx.set_status(
+                    "Tabel 0 baris — filter funnel lokal kartu ini sedang "
+                    "menyaring semua baris; lepas funnel dulu (ikon di "
+                    "judul kolom), lalu perbesar tabel.", "done")
+            else:
+                self._ctx.set_status(
+                    "Belum ada data utk dibesarkan — jalankan pipeline dulu "
+                    "(tab Pipeline)", "done")
             return
         if self._fs_dlg is None:
             dlg = QDialog(self)

@@ -472,7 +472,13 @@ class TestTeksSumberFollowup:
     def test_bantuan_menyebut_hari_dan_larangan_klik_2x(self):
         src = (UI / "app.py").read_text(encoding="utf-8")
         assert "Hari Mencurigakan" in src
-        assert "TIDAK lagi memfilter" in src
+        # v2.13.12 (gel-3 D19) — pin DITULIS ULANG JUJUR: frasa lama
+        # "TIDAK lagi memfilter" mengandung token versi implisit (kata
+        # "lagi" = merujuk perubahan v2.13.5); pembersihan 10 token
+        # versi dari Bantuan ikut menyingkatnya jadi "TIDAK memfilter".
+        # MAKSUD test tak berubah: Bantuan harus menyatakan klik-2×
+        # TIDAK memfilter (klik-2× filter dihapus — judul test ini).
+        assert "TIDAK memfilter" in src
 
     def test_tooltip_layar_penuh_tak_menyebut_klik_2x_filter(self):
         """Tooltip ⛶ tidak lagi mengiklankan klik-2× (perilaku dihapus)."""

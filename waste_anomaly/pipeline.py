@@ -26,6 +26,39 @@ from .schema import SchemaValidationError, validate_rekap_schema
 from .utils import clamp, load_config
 
 
+# ============================================================
+# v2.13.12 (gel-3 D15) — SATU SUMBER KEBENARAN jumlah & urutan stage.
+# ============================================================
+# UI dulunya hardcode "14 stage" (hint Parameter + placeholder log
+# view_pipeline) — basi sejak v2.9.0 menambah Stage 15 (bukti hari
+# tersangka) & v2.13.0 menambah Stage 15b (profil baris): 18 nyata.
+# Urutan = urutan EKSEKUSI _run_pipeline (stage_01..14 + 12.5/12.6 +
+# annotate_day_evidence + annotate_profile). Label = label LOG engine
+# (EN — penerjemahan ke Bahasa Indonesia dilakukan DI BATAS UI oleh
+# view_pipeline._log_id, gel-3 D18; engine tetap EN).
+PIPELINE_STAGES: list[str] = [
+    "Stage 1 — Source & cleanup",
+    "Stage 2 — Per-row daily statistics",
+    "Stage 3 — Reason summary",
+    "Stage 4 — Group totals",
+    "Stage 5 — BOM join",
+    "Stage 6 — Peer summary",
+    "Stage 7 — Top 3 summary",
+    "Stage 8 — Merge",
+    "Stage 9 — DATABASE_SATUAN join",
+    "Stage 10 — Helper / STATUS / % to BOM",
+    "Stage 11 — 12 sinyal anomali",
+    "Stage 12 — Expand",
+    "Stage 12.5 — Waste Fingerprint + Sistematik Flag",
+    "Stage 12.6 — Quadrant Classification",
+    "Stage 13 — Cleanup temporary",
+    "Stage 14 — Final column order",
+    "Stage 15 — Bukti hari tersangka",
+    "Stage 15b — Profil baris + kelebihan",
+]
+PIPELINE_N_STAGES: int = len(PIPELINE_STAGES)
+
+
 class PipelineCancelledError(RuntimeError):
     """Run dibatalkan user via cancel_check — bukan error sistem.
 

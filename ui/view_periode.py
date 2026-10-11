@@ -566,8 +566,11 @@ class PeriodeView(QWidget):
                            "Banding tetap adil: metrik 'Waste per Hari' "
                            "membagi total dgn jumlah hari tiap bulan.")
                 it_s.setToolTip(
-                    f"Berhasil dimuat: {res.get('rows_kept', 0):,} baris "
-                    f"waste disaring → {res.get('item_count', 0):,} "
+                    # v2.13.12 (gel-3 B17): angka fmt_id (dulu '{:,}'
+                    # koma-EN di tooltip status file).
+                    f"Berhasil dimuat: {fmt_id(res.get('rows_kept', 0))} "
+                    f"baris waste disaring → "
+                    f"{fmt_id(res.get('item_count', 0))} "
                     f"kombinasi cabang × item.{ka_note}")
             self._tbl_files.setItem(r, 2, it_s)
 
@@ -869,9 +872,11 @@ class PeriodeView(QWidget):
         n = len(df)
         tot_a = float(df["Bulan Ini"].sum()) if n else 0.0
         tot_b = float(df["Pembanding"].sum()) if n else 0.0
+        # v2.13.12 (gel-3 B17): angka subjudul fmt_id — dulu '{:,.0f}'
+        # koma-EN ('25,901') di UI yang semuanya Indonesia ('25.901').
         sub = self._labels_sub(
-            f"total {tot_a:,.0f} vs {tot_b:,.0f} • semua jenis digabung "
-            "• baris = tanggal")
+            f"total {fmt_id(tot_a)} vs {fmt_id(tot_b)} • semua jenis "
+            "digabung • baris = tanggal")
         self._drill.show_table(
             f"📅 Hari 1–{n} — {barang} @ {resto}", sub, df, level="day",
             root=root, header_map={"Pembanding": self._label_b_disp})
