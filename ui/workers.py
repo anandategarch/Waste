@@ -7,9 +7,18 @@ tidak freeze) — pola QThread + Signal:
 - HistoryWorker  : muat N workbook pembanding (kuantiti) + tipikal (v2.10.0
                    menggantikan PeriodWorker — banding kini multi-file,
                    kuantiti tanpa BOM, via waste_anomaly/period_history)
-- RekapImportWorker : olah REKAP MENTAH mentah → DATA_WASTE standar
+- RekapImportWorker : olah REKAP MENTAH mentah → workbook DATA_WASTE standar
                    (v2.14.0 — menggantikan olahan manual Excel user;
                    jalur waste_anomaly/rekap_import)
+
+v2.15.0 — SEKALI JALAN: tombol 🧮 UI kini menjalankan pipeline LANGSUNG
+pada file mentah (rekap_import dipanggil pipeline.py di fase LOAD —
+ensure_rekap_header + normalize_rekap_values + inject_bom_from_raw_rows),
+TANPA file olahan antara (permintaan user: "aku mau sekali proses aja dan
+gak perlu export hasil olahan proses rekap mentah nya"). RekapImportWorker
+TETAP tersedia sebagai API berdiri-sendiri (ekspor file olahan untuk
+arsip/pemakaian programatik — teruji test_v2140; UI tidak lagi
+memanggilnya).
 """
 from __future__ import annotations
 
@@ -214,12 +223,17 @@ class RekapImportWorker(QThread):
     """v2.14.0: olah REKAP MENTAH mentah → workbook DATA_WASTE standar.
 
     Dulu user harus mengolah manual di Excel (filter JENIS + formula +
-    Power Query) supaya jadi struktur 53 kolom — kini satu tombol di tab
-    Pipeline. Berjalan di background (pembacaan ±54 ribu baris + tulis
+    Power Query) supaya jadi struktur 53 kolom — kini satu panggilan
+    API. Berjalan di background (pembacaan ±54 ribu baris + tulis
     ±25 ribu baris = ±10-15 dtk — UI tidak boleh freeze); pola sinyal
     mengikuti PipelineWorker/HistoryWorker (done/failed + deleteLater
     D10 di sisi view). Config dilewatkan pemanggil (dict sudah termuat —
     tidak baca-ulang file dari dalam thread).
+
+    v2.15.0 — API BERDIRI-SENDIRI: tombol 🧮 UI kini SEKALI JALAN
+    (pipeline memanggil rekap_import di fase LOAD — tanpa file antara),
+    jadi worker ini TIDAK lagi dipakai jalur utama UI; tetap tersedia
+    untuk ekspor file olahan programatik (teruji test_v2140).
 
     done → dict ringkasan (lihat convert_rekap_mentah): out_path,
     rows_raw/rows_kept, jenis_counts, bom_pairs/bom_matched, dll.

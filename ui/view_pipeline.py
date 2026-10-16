@@ -4,11 +4,20 @@
 Worker = QThread (ui tidak freeze); tombol dua-mode Mulai↔Batalkan (F9);
 log selalu terlihat (popup log lama dihapus — tidak ada tombol ganda).
 
-v2.14.0: tombol 🧮 "Olah REKAP MENTAH…" — pilih file mentah → diolah
-background (RekapImportWorker) jadi workbook DATA_WASTE standar (saring
-JENIS WASTE/SUSUT/TRIAL + TOTAL BOM dari baris JENIS==BOM + kolom
-hitungan semantika stage_02/05; menggantikan olahan manual Excel user);
-kolom workbook terisi otomatis + log ringkasan + petunjuk Mulai Pipeline.
+v2.15.0: tombol 🧮 "Olah & Jalankan REKAP MENTAH…" SEKALI JALAN — pilih
+file mentah → pipeline LANGSUNG dijalankan padanya (header tergeser
+diperbaiki + nilai identity dinormalisasi + TOTAL BOM diinjeksi dari baris
+JENIS=BOM oleh rekap_import, dipanggil pipeline di fase LOAD); TANPA file
+olahan antara & tanpa klik Mulai Pipeline kedua kali — hasil identik jalur
+2-langkah v2.14.0 (golden file asli: 25.722 baris · 25.028 ber-BOM · 62
+prioritas) tapi jauh lebih cepat (satu baca file, ±6 dtk vs ±32 dtk).
+
+v2.14.0: tombol 🧮 "Olah REKAP MENTAH…" (2-langkah: worker RekapImportWorker
+mengolah → ekspor DATA_WASTE <bulan>.xlsx → kolom workbook terisi → user
+klik Mulai Pipeline) — jalur ekspor itu kini hanya API
+(convert_rekap_mentah / RekapImportWorker tetap tersedia & teruji,
+UI tidak lagi memakainya — permintaan user: "aku mau sekali proses aja
+dan gak perlu export hasil olahan proses rekap mentah nya").
 
 v2.13.12 (gel-3): D15 — jumlah stage dinamis dari pipeline.PIPELINE_N_STAGES
 (dulu hardcode "14 stage"); D17 — "Browse…" → "Telusuri…", "Input Error" →
@@ -43,7 +52,7 @@ from PySide6.QtWidgets import (
 from .shared import APP_DIR, LOG_RUN_LINES, fmt_id, friendly_file_error
 from .state import AppContext
 from .widgets import Card, WLabel, busy_feedback
-from .workers import PipelineWorker, RekapImportWorker
+from .workers import PipelineWorker
 from waste_anomaly.pipeline import PIPELINE_N_STAGES
 
 _SUMMARY_LABELS = {
@@ -145,9 +154,10 @@ class PipelineView(QWidget):
         self._ctx = ctx
         self._worker: PipelineWorker | None = None
         self._running = False
-        # v2.14.0 — worker olah REKAP MENTAH (satu aktif; referensi dipegang
-        # supaya tidak GC saat thread jalan — pola _worker pipeline).
-        self._import_worker: RekapImportWorker | None = None
+        # v2.15.0 — tombol 🧮 kini SEKALI JALAN (dialog → _start; pipeline
+        # sendiri memanggil rekap_import di fase LOAD): tidak ada lagi
+        # worker olah terpisah / file antara (jalur RekapImportWorker
+        # 2-langkah v2.14.0 kini hanya API di ui/workers.py).
 
         # v2.13.6 (audit R2): tinggi-min 4 kartu = 716px (terukur) >
         # ruang halaman tab ±582px di 1366×768 → tombol Simpan/Reset/
@@ -187,17 +197,20 @@ class PipelineView(QWidget):
         b_browse = QPushButton("Telusuri…", row)
         b_browse.clicked.connect(self._browse)
         rl.addWidget(b_browse)
-        # v2.14.0 — olah REKAP MENTAH mentah jadi DATA_WASTE standar
-        # (menggantikan olahan manual Excel user: saring JENIS WASTE/
-        # SUSUT/TRIAL + ekstrak TOTAL BOM baris JENIS==BOM + kolom
-        # hitungan stage_02/05 — jalur waste_anomaly/rekap_import).
-        b_import = QPushButton("🧮 Olah REKAP MENTAH…", row)
+        # v2.15.0 — SEKALI JALAN: pilih file REKAP MENTAH mentah →
+        # pipeline LANGSUNG dijalankan padanya (rekap_import dipanggil
+        # pipeline di fase LOAD: perbaiki header tergeser + normalisasi
+        # nilai identity + injeksi TOTAL BOM dari baris JENIS==BOM).
+        # Tanpa file olahan antara — menggantikan 2-langkah v2.14.0
+        # (olah → ekspor → klik Mulai Pipeline) atas permintaan user.
+        b_import = QPushButton("🧮 Olah & Jalankan REKAP MENTAH…", row)
         b_import.setToolTip(
             "Pilih file REKAP MENTAH mentah (mis. \"REKAP MENTAH_01-31 "
-            "AGUSTUS 2026_TEGAR.xlsx\") — diolah otomatis jadi workbook "
-            "DATA_WASTE standar (saring WASTE/SUSUT/TRIAL + TOTAL BOM dari "
-            "baris BOM) lalu siap Mulai Pipeline. Menggantikan olahan "
-            "manual di Excel.")
+            "AGUSTUS 2026_TEGAR.xlsx\" — boleh masih berisi SEMUA jenis "
+            "BOM/SO/stok & header tergeser) — olahan + pipeline berjalan "
+            "SEKALI JALAN tanpa file antara: TOTAL BOM diambil dari baris "
+            "BOM, saringan & statistik dihitung pipeline. Menggantikan "
+            "olah manual Excel + proses 2-klik.")
         b_import.clicked.connect(self._on_import_rekap)
         rl.addWidget(b_import)
         self._btn_import = b_import
@@ -372,26 +385,31 @@ class PipelineView(QWidget):
         return self._ent_workbook.text().strip()
 
     # ------------------------------------------------------------
-    # v2.14.0 — OLAH REKAP MENTAH (menggantikan olahan manual Excel)
+    # v2.15.0 — OLAH & JALANKAN REKAP MENTAH SEKALI JALAN
+    # (menggantikan olahan manual Excel + 2-langkah v2.14.0)
     # ------------------------------------------------------------
     def _on_import_rekap(self) -> None:
-        """Pilih file REKAP MENTAH mentah → olah di background thread.
+        """Pilih file REKAP MENTAH mentah → MULAI PIPELINE SEKARANG.
 
-        Dulu: user filter JENIS + formula + Power Query manual di Excel
-        supaya jadi struktur 53 kolom. Kini: satu tombol — worker
-        (RekapImportWorker) menjalankan convert_rekap_mentah (baca ±54
-        ribu baris + tulis ±25 ribu baris = ±10-15 dtk — UI tetap hidup,
-        pola QThread PipelineWorker/HistoryWorker; D29: tombol Mulai +
-        tombol ini dinonaktifkan selama proses supaya klik-ganda tidak
-        membuat worker ganda)."""
+        v2.14.0 (2-langkah): worker mengolah → ekspor "DATA_WASTE <bulan>
+        .xlsx" → kolom workbook terisi → user klik Mulai Pipeline.
+        v2.15.0 (SEKALI JALAN — permintaan user "aku mau sekali proses aja
+        dan gak perlu export hasil olahan proses rekap mentah nya"):
+        kolom workbook diisi path MENTAH lalu _start() dipanggil LANGSUNG
+        — pipeline memanggil rekap_import di fase LOAD (ensure_rekap_header
+        + normalize_rekap_values + inject_bom_from_raw_rows) sehingga file
+        mentah dianalisa lengkap (BOM hidup) TANPA file antara. Seluruh
+        mesin run lama dipakai apa adanya: worker QThread + progres per
+        stage + tombol ⏹ Batalkan + ringkasan + render tab lain. Batal/
+        error/gagal memakai jalur _on_failed yang sama (D7
+        friendly_file_error + traceback utuh ke log panel).
+        """
         if self._running:
             QMessageBox.information(
                 self, "Pipeline Sedang Berjalan",
-                "Tunggu pipeline selesai (atau batalkan) sebelum mengolah "
+                "Tunggu pipeline selesai (atau batalkan) sebelum memproses "
                 "file REKAP MENTAH baru.")
             return
-        if self._import_worker is not None and self._import_worker.isRunning():
-            return  # sudah berjalan — klik ganda di-swallow senyap
         # Folder awal dialog: folder workbook aktif (kalau ada) — file
         # rekap mentah user biasanya satu folder dengan data bulanan.
         start_dir = str(APP_DIR)
@@ -405,79 +423,13 @@ class PipelineView(QWidget):
             "Excel files (*.xlsx *.xlsm);;All files (*.*)")
         if not path:
             return
-        self._btn_import.setEnabled(False)
-        self._btn_run.setEnabled(False)
-        self._ctx.set_status(
-            f"⏳ Mengolah REKAP MENTAH: {Path(path).name} …", "running")
-        self._ctx.log(f"=== Olah REKAP MENTAH: {Path(path).name} ===")
-        self._lbl_status.setText("⏳ Mengolah REKAP MENTAH di background…")
-        self._import_worker = RekapImportWorker(
-            path, config=self._ctx.config, parent=self)
-        self._import_worker.done.connect(self._on_import_done)
-        self._import_worker.failed.connect(self._on_import_failed)
-        # D10 (gel-4): worker selesai → deleteLater — objek QThread tidak
-        # menumpuk seumur aplikasi (pola PipelineWorker/ExportWorker).
-        self._import_worker.finished.connect(self._import_worker.deleteLater)
-        self._import_worker.start()
-
-    def _on_import_done(self, result: dict) -> None:
-        """Olahan selesai → isi kolom workbook + log ringkasan + petunjuk
-        langkah berikutnya (Mulai Pipeline)."""
-        self._btn_import.setEnabled(True)
-        self._btn_run.setEnabled(True)
-        self._ent_workbook.setText(result.get("out_path", ""))
-        jenis = ", ".join(
-            f"{k} {fmt_id(v)}"
-            for k, v in sorted(result.get("jenis_counts", {}).items()))
-        lines = [
-            f"✓ REKAP MENTAH terolah → {Path(result.get('out_path', '')).name}",
-            f"  {fmt_id(result.get('rows_raw', 0))} baris mentah → "
-            f"{fmt_id(result.get('rows_kept', 0))} baris data "
-            f"({jenis})",
-            f"  {fmt_id(result.get('resto_count', 0))} cabang · "
-            f"{fmt_id(result.get('item_count', 0))} item · "
-            f"{fmt_id(result.get('day_count', 0))} kolom hari",
-            f"  BOM: {fmt_id(result.get('bom_pairs', 0))} pasangan "
-            f"(resto, barang) — {fmt_id(result.get('bom_matched', 0))} baris "
-            f"data ber-TOTAL BOM (sinyal S6/S7 aktif)",
-            "  Kolom workbook terisi otomatis — klik ▶ Mulai Pipeline.",
-        ]
-        for ln in lines:
-            self._ctx.log(ln)
-        self._lbl_status.setText(
-            f"✓ Terolah: {fmt_id(result.get('rows_kept', 0))} baris — "
-            "siap Mulai Pipeline")
-        self._ctx.set_status(
-            f"✓ REKAP MENTAH terolah: {fmt_id(result.get('rows_kept', 0))} "
-            f"baris • {fmt_id(result.get('bom_pairs', 0))} pasangan BOM",
-            "ok")
-        QMessageBox.information(
-            self, "REKAP MENTAH Terolah",
-            "File mentah berhasil diolah jadi workbook DATA_WASTE standar:\n"
-            f"\n{result.get('out_path', '')}"
-            f"\n\nBaris mentah: {fmt_id(result.get('rows_raw', 0))}"
-            f"\nBaris data (WASTE/SUSUT/TRIAL): {fmt_id(result.get('rows_kept', 0))}"
-            f"\nJenis: {jenis}"
-            f"\nCabang: {fmt_id(result.get('resto_count', 0))} · "
-            f"Item: {fmt_id(result.get('item_count', 0))}"
-            f"\nTOTAL BOM: {fmt_id(result.get('bom_pairs', 0))} pasangan "
-            f"({fmt_id(result.get('bom_matched', 0))} baris ber-BOM)"
-            "\n\nKolom workbook sudah terisi — tinggal klik "
-            "▶ Mulai Pipeline.")
-
-    def _on_import_failed(self, err: str, tb: str) -> None:
-        """Olahan gagal → tombol dipulihkan + pesan ramah (pola D7:
-        RekapImportError sudah ramah; error lain diterjemahkan di batas
-        UI via friendly_file_error, traceback utuh ke log panel)."""
-        self._btn_import.setEnabled(True)
-        self._btn_run.setEnabled(True)
-        self._lbl_status.setText("⚠ Olah REKAP MENTAH gagal")
-        self._ctx.set_status(f"ERROR: {err}", "error")
-        self._ctx.log(f"!!! Olah REKAP MENTAH gagal: {err}")
-        if tb:
-            self._ctx.log(tb)
-        QMessageBox.critical(
-            self, "Olah REKAP MENTAH Gagal", friendly_file_error(err))
+        # Kolom workbook = file MENTAH (tidak ada file antara yang
+        # diekspor); _start membaca nilai ini lalu menjalankan worker.
+        self._ent_workbook.setText(path)
+        self._ctx.log(
+            f"=== Olah & jalankan REKAP MENTAH sekali proses: "
+            f"{Path(path).name} ===")
+        self._start()
 
     # ------------------------------------------------------------
     # RUN / CANCEL

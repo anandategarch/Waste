@@ -11,6 +11,15 @@ Penggunaan dasar:
         progress_callback=lambda msg, pct: print(f"[{pct:.0f}%] {msg}"),
     )
     df = summary["df"]  # hasil in-memory (tidak ada file Excel yang ditulis)
+
+v2.15.0 — SEKALI JALAN: workbook_path boleh file REKAP MENTAH MENTAH
+(semua JENIS + baris BOM + header kadang tergeser). Dua langkah olahan
+rekap_import dipanggil otomatis di fase LOAD: ensure_rekap_header()
+(perbaiki header tergeser) + inject_bom_from_raw_rows() (kolom inline
+TOTAL BOM dari baris JENIS=="BOM" sebelum stage_01 memfilternya) —
+hasil identik jalur 2-langkah lama (olah → export → pipeline), tanpa
+file antara. File DATA_WASTE standar tak tersentuh (kedua helper
+no-op identitas).
 """
 
 from __future__ import annotations
@@ -22,6 +31,11 @@ from pathlib import Path
 from . import stages
 from .day_focus import annotate_day_evidence
 from .loader import load_bom, load_database_satuan, load_rekap_mentah
+from .rekap_import import (
+    ensure_rekap_header,
+    inject_bom_from_raw_rows,
+    normalize_rekap_values,
+)
 from .schema import SchemaValidationError, validate_rekap_schema
 from .utils import clamp, load_config
 
@@ -219,6 +233,21 @@ def _run_pipeline(
     df_rekap = load_rekap_mentah(workbook_path, config, logger=_log)
     _cancel_gate("DATA_WASTE")  # v2.13.13 (gel-4 D22): gate antar-file
 
+    # v2.15.0 — SEKALI JALAN (1/3): perbaiki header TERGESER pada sheet
+    # rekap mentah (baris judul di atas header — pola fn_rekap_mentah
+    # stock-monitoring). No-op identitas untuk sheet ber-header normal
+    # (file standar DATA_WASTE tak tersentuh); header tak terdeteksi →
+    # passthrough, validate_rekap_schema di bawah memberi pesan jujur.
+    df_rekap = ensure_rekap_header(df_rekap, logger=_log)
+
+    # v2.15.0 — SEKALI JALAN (2/3): normalisasi nilai identity sheet
+    # MENTAH (JENIS 'waste '→'WASTE'; 'GR '→'GR' dst. — mirror
+    # pembersihan convert_rekap_mentah v2.14.0) supaya hasil analisa
+    # file mentah == hasil file olahan 2-langkah. Trigger jujur: hanya
+    # sheet ber-JENIS non-waste (BOM/SO/stok) / tak-kanonik; file
+    # standar W/S/T bersih → passthrough identitas (golden aman).
+    df_rekap = normalize_rekap_values(df_rekap, logger=_log)
+
     # ---- VALIDASI SKEMA (F8 v2.4.0) ----
     # Anti degradasi senyap: header lowercase/missing dulunya diproses
     # 'sukses' dengan analisa setengah mati. Sekarang gagal keras + pesan jelas.
@@ -242,6 +271,15 @@ def _run_pipeline(
     _log("Loading DATABASE_SATUAN ...", 10)
     df_satuan = load_database_satuan(workbook_path, config, logger=_log)
     _cancel_gate("DATABASE_SATUAN")  # v2.13.13 (gel-4 D22): gate antar-file
+
+    # v2.15.0 — SEKALI JALAN (3/3): injeksi kolom inline "TOTAL BOM"
+    # dari baris JENIS=="BOM" sheet mentah — SEBELUM stage_01
+    # memfilter baris non-waste keluar. Tanpa ini, pipeline pada file
+    # REKAP MENTAH mentah kehilangan BOM (kolom TOTAL BOM tak ada & sheet
+    # BOM terpisah tak ada di file rekap) → sinyal S6/S7 + Rill % to BOM
+    # mati. No-op idempotent: TOTAL BOM sudah ada (file standar / hasil
+    # olahan / re-run output) atau tanpa baris BOM → passthrough.
+    df_rekap = inject_bom_from_raw_rows(df_rekap, logger=_log)
 
     # ---- STAGE 1: SOURCE & CLEANUP ----
     _gate("Stage 1 — Source & cleanup", 15)

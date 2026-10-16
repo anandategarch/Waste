@@ -577,6 +577,16 @@ class _RIWStubFail(_RIWStub):
 
 
 class TestUiAlur:
+    """v2.15.0 — DITULIS ULANG JUJUR: alur 2-langkah v2.14.0 (worker
+    RekapImportWorker mengolah → ekspor → kolom workbook terisi →
+    petunjuk Mulai Pipeline) diganti SEKALI JALAN atas permintaan user
+    ("aku mau sekali proses aja dan gak perlu export hasil olahan
+    proses rekap mentah nya"): tombol 🧮 kini mengisi kolom workbook
+    dgn path MENTAH lalu memanggil _start() langsung — pipeline
+    memanggil rekap_import di fase LOAD (tanpa file antara). Detail
+    alur baru dikunci test_v2150.py [R150-7]; kelas ini memastikan
+    KONTRAK LAMA yang masih berlaku: tombol hidup, guard saat run,
+    worker API utuh."""
 
     def _view(self, ctx):
         import ui.view_pipeline as vp
@@ -589,75 +599,17 @@ class TestUiAlur:
         try:
             btn = view._btn_import
             assert btn is not None
-            assert "Olah REKAP MENTAH" in btn.text()
+            # v2.15.0: "Olah & Jalankan REKAP MENTAH…" (sekali jalan;
+            # dulu v2.14.0 "Olah REKAP MENTAH…" 2-langkah ber-ekspor)
+            assert "REKAP MENTAH" in btn.text()
             assert "REKAP MENTAH_01-31" in btn.toolTip()
-        finally:
-            view.close()
-            view.deleteLater()
-
-    def test_alur_penuh_path_terisi_log_dan_status(self, tmp_path, monkeypatch):
-        """Dialog → worker → done: kolom workbook terisi out_path, log
-        ringkasan tercatat, status ok, tombol import+run PULIH (enable)."""
-        import ui.view_pipeline as vp
-        from ui.state import AppContext
-        from PySide6.QtWidgets import QMessageBox
-        app = _qapp()
-        ctx = AppContext({})
-        view = self._view(ctx)
-        dialogs: list = []
-        monkeypatch.setattr(
-            QMessageBox, "information",
-            lambda *a, **k: dialogs.append(a) or QMessageBox.Ok)
-        monkeypatch.setattr(
-            vp.QFileDialog, "getOpenFileName",
-            classmethod(lambda cls, *a, **k: (str(tmp_path / "r.xlsx"), "")))
-        monkeypatch.setattr(vp, "RekapImportWorker", _RIWStub)
-        try:
-            view._on_import_rekap()
-            app.processEvents()
-            assert view.current_workbook() == "/tmp/olah_hasil.xlsx"
-            lines = list(ctx.log_lines)
-            assert any("REKAP MENTAH terolah" in l for l in lines)
-            assert any("2 pasangan" in l for l in lines)  # BOM di ringkasan
-            assert any("Mulai Pipeline" in l for l in lines)
-            assert view._btn_import.isEnabled()
-            assert view._btn_run.isEnabled()
-            assert dialogs, "dialog ringkasan harus muncul"
-            assert "terolah" in (view._lbl_status.text() or "").lower()
-        finally:
-            view.close()
-            view.deleteLater()
-
-    def test_gagal_dialog_kritis_dan_tombol_pulih(self, monkeypatch):
-        import ui.view_pipeline as vp
-        from ui.state import AppContext
-        from PySide6.QtWidgets import QMessageBox
-        app = _qapp()
-        ctx = AppContext({})
-        view = self._view(ctx)
-        criticals: list = []
-        monkeypatch.setattr(
-            QMessageBox, "critical",
-            lambda *a, **k: criticals.append(a) or QMessageBox.Ok)
-        monkeypatch.setattr(
-            vp.QFileDialog, "getOpenFileName",
-            classmethod(lambda cls, *a, **k: ("/tmp/rekap_mentah.xlsx", "")))
-        monkeypatch.setattr(vp, "RekapImportWorker", _RIWStubFail)
-        try:
-            view._on_import_rekap()
-            app.processEvents()
-            assert criticals, "dialog gagal harus muncul"
-            assert view._btn_import.isEnabled()
-            assert view._btn_run.isEnabled()
-            assert any("gagal" in l.lower() for l in ctx.log_lines)
-            assert "gagal" in (view._lbl_status.text() or "").lower()
         finally:
             view.close()
             view.deleteLater()
 
     def test_tolak_saat_pipeline_berjalan(self, monkeypatch):
         """Pipeline _running=True → tolak ramah (dialog info), worker
-        TIDAK dibuat (guard klik saat run)."""
+        TIDAK dibuat (guard klik saat run — kontrak D29 lama)."""
         import ui.view_pipeline as vp
         from ui.state import AppContext
         from PySide6.QtWidgets import QMessageBox
@@ -673,7 +625,7 @@ class TestUiAlur:
             def __init__(self, *a, **k):
                 created.append(a)
 
-        monkeypatch.setattr(vp, "RekapImportWorker", _Never)
+        monkeypatch.setattr(vp, "PipelineWorker", _Never)
         try:
             view._running = True
             view._on_import_rekap()
@@ -701,25 +653,29 @@ class TestManifestBantuanVersi:
         assert "rekap_import" in wa_all
 
     def test_bantuan_menyebut_tombol(self):
-        """F1 Bantuan seksi Tab Pipeline menyebut 'Olah REKAP MENTAH' +
-        alur singkatnya (regresi dokumentasi — pola B24 gel-6)."""
+        """F1 Bantuan seksi Tab Pipeline menyebut tombol rekap mentah +
+        alur singkatnya (regresi dokumentasi — pola B24 gel-6).
+        v2.15.0 — DITULIS ULANG JUJUR: label tombol kini 'Olah & Jalankan
+        REKAP MENTAH…' (sekali jalan, tanpa file antara)."""
         src = (UI / "app.py").read_text(encoding="utf-8")
-        assert "Olah REKAP MENTAH" in src
+        assert "Jalankan REKAP MENTAH" in src
         assert "REKAP MENTAH_01-31" in src  # contoh nama file user
 
     def test_versi_2140_sinkron(self):
+        """v2.15.0 — DITULIS ULANG JUJUR: pin dinaikkan bersama fitur
+        sekali-jalan (test_v2150 [R150-8] mengunci detailnya)."""
         from ui.shared import APP_VERSION
         from waste_anomaly import __version__
         from waste_anomaly.utils import load_config
         cfg = load_config()
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.14.0"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.15.0"
         init_src = (REPO / "waste_anomaly" / "__init__.py").read_text(
             encoding="utf-8")
-        assert "Versi: 2.14.0" in init_src
+        assert "Versi: 2.15.0" in init_src
         mulai = (REPO / "MULAI.bat").read_bytes()
-        assert b"v2.14.0" in mulai
+        assert b"v2.15.0" in mulai
         readme = (REPO / "README.md").read_text(encoding="utf-8")
-        assert "v2.14.0" in readme
+        assert "v2.15.0" in readme
 
     def test_crlf_bat_utuh(self):
         """MULAI.bat/SETUP.bat tetap CRLF penuh (kontrak gelombang 1-6)."""

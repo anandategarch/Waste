@@ -1,5 +1,6 @@
 """
-rekap_import.py — Olah file REKAP MENTAH mentah → workbook DATA_WASTE standar.
+rekap_import.py — Olah data REKAP MENTAH mentah (in-memory) & ekspor
+workbook DATA_WASTE standar.
 
 MASALAH yang diselesaikan (v2.14.0):
 User menyimpan rekap bulanan mentah dari sistem (mis. "REKAP MENTAH_01-31
@@ -12,6 +13,22 @@ menggantikan olahan manual tersebut — satu panggilan:
 
     convert_rekap_mentah("REKAP MENTAH_01-31 AGUSTUS 2026_TEGAR.xlsx")
     → "DATA_WASTE Agustus 2026.xlsx" (siap Mulai Pipeline)
+
+v2.15.0 — SEKALI JALAN (tanpa file antara):
+Pipeline kini memanggil dua helper modul ini LANGSUNG pada file mentah,
+jadi tombol 🧮 UI cukup SEKALI PROSES (pilih file → pipeline langsung —
+tanpa ekspor file olahan antara, tanpa klik Mulai Pipeline kedua kali):
+  - ensure_rekap_header()  : perbaiki header tergeser pada frame hasil
+    loader (baris judul di atas header — pola fn_rekap_mentah
+    stock-monitoring); no-op untuk sheet ber-header normal.
+  - inject_bom_from_raw_rows() : tambah kolom inline "TOTAL BOM" dari
+    baris JENIS=="BOM" yang ada di sheet mentah (sebelum stage_01
+    memfilternya) — prioritas stage_05, sinyal S6/S7 & Rill % to BOM
+    hidup. No-op bila kolom TOTAL BOM sudah ada (idempotent) atau tidak
+    ada baris BOM (file standar / pure W-S-T).
+convert_rekap_mentah() TETAP tersedia sebagai API berdiri-sendiri
+(menghasilkan file olahan untuk dipakai manual / diarsip) — UI tidak
+ lagi memakainya di jalur utamanya.
 
 Langkah olahan (mirror olahan manual user, terverifikasi terhadap file
 asli 54.160 baris + DATA_WASTE.xlsx standar 25.901 baris):
@@ -125,12 +142,16 @@ def _detect_header_row(peek: pd.DataFrame) -> int | None:
     Schema wajib: NAMA RESTO + JENIS + NAMA BARANG (case/strip-toleran)
     + ≥3 kolom hari pada baris itu. Return indeks baris atau None.
     (Pola fn_rekap_mentah._detect_rekap_header stock-monitoring — file
-    rekap user kadang ber-baris judul di atas header.)"""
+    rekap user kadang ber-baris judul di atas header.)
+
+    v2.15.0: nilai header float-integral (1.0 — engine calamine menyerap
+    sel numerik jadi float, pola C3-a _normalize_columns) dihitung sebagai
+    hari "1".."31" — dulu str(1.0)="1.0" tak pernah match _DAY_SET
+    sehingga baris header sah DITOLAK deteksi."""
     if peek is None or peek.empty:
         return None
     for hr in range(min(6, len(peek))):
-        headers = [str(h).strip().upper() if h is not None else ""
-                   for h in peek.iloc[hr].tolist()]
+        headers = [_hdr_norm(h) for h in peek.iloc[hr].tolist()]
         if any(rc not in headers for rc in ("NAMA RESTO", "JENIS", "NAMA BARANG")):
             continue
         n_days = sum(1 for h in headers
@@ -140,9 +161,28 @@ def _detect_header_row(peek: pd.DataFrame) -> int | None:
     return None
 
 
+def _hdr_norm(h: Any) -> str:
+    """Normalisasi SATU nilai header: None/NaN → ""; float integral
+    (1.0) → "1"; selain itu str().strip().upper(). (Pola C3-a
+    _normalize_columns — dipakai _detect_header_row & _promote_at supaya
+    header hari numerik dikenali di engine calamine maupun openpyxl.)"""
+    if h is None:
+        return ""
+    if isinstance(h, float):
+        if math.isnan(h):
+            return ""
+        if math.isfinite(h) and h.is_integer():
+            h = int(h)
+    return str(h).strip().upper()
+
+
 def _promote_at(df: pd.DataFrame, hr: int) -> pd.DataFrame:
     """Baris hr jadi header (duplikat diberi suffix _1/_2 — mirror
-    _promote_at fn_rekap_mentah; header None → ColumnN)."""
+    _promote_at fn_rekap_mentah; header None → ColumnN).
+
+    v2.15.0: nilai header float-integral (1.0 — engine calamine)
+    dinormalisasi ke "1" (pola C3-a _normalize_columns) — dulu
+    str(1.0)="1.0" membuat kolom hari tak ditemukan stage berikutnya."""
     headers = df.iloc[hr].tolist()
     body = df.iloc[hr + 1:].reset_index(drop=True)
     new_cols: list[str] = []
@@ -150,6 +190,8 @@ def _promote_at(df: pd.DataFrame, hr: int) -> pd.DataFrame:
     for i, h in enumerate(headers):
         if h is None or (isinstance(h, float) and math.isnan(h)):
             h = f"Column{i + 1}"
+        elif isinstance(h, float) and math.isfinite(h) and h.is_integer():
+            h = int(h)  # 1.0 → 1 → "1" (bukan "1.0")
         h = str(h)
         if h in seen:
             seen[h] += 1
@@ -272,6 +314,221 @@ def _strip_series(s: pd.Series) -> pd.Series:
     return s.where(s.isna(), s.astype(str).str.strip())
 
 
+# ============================================================
+# v2.15.0 — SEKALI JALAN: helper dipakai pipeline.py langsung
+# pada file REKAP MENTAH mentah (tanpa file antara)
+# ============================================================
+
+def _looks_like_rekap_header(cols_upper: list[str]) -> bool:
+    """Kolom frame SUDAH jadi header rekap yang valid? (case-toleran)."""
+    return (
+        all(rc in cols_upper for rc in ("NAMA RESTO", "JENIS", "NAMA BARANG"))
+        and sum(1 for c in cols_upper if c in _DAY_SET) >= 3
+    )
+
+
+def ensure_rekap_header(df: pd.DataFrame, logger=None) -> pd.DataFrame:
+    """v2.15.0: perbaiki header TERGESER pada frame hasil loader (header=0).
+
+    Sheet rekap kadang ber-baris judul di atas header (pola
+    fn_rekap_mentah stock-monitoring). Loader membaca header=0 → kolom
+    jadi judul sampah & baris PERTAMA data = header asli. Fungsi ini:
+      1. Cepat: kolom sudah valid (NAMA RESTO + JENIS + NAMA BARANG + ≥3
+         hari) → passthrough IDENTITAS (no-op — file standar tak
+         tersentuh, nol biaya dijalur normal).
+      2. Bangun grid mentar dari frame: baris 0 = header palsu (judul),
+         baris 1.. = data (header asli ada di antaranya).
+      3. Deteksi baris header schema (≤6 baris — _detect_header_row).
+         Ketemu → _promote_at + _normalize_columns; TIDAK ketemu →
+         passthrough apa adanya (validate_rekap_schema akan memberi
+         pesan error jujur — fungsi ini bukan tempat menebak).
+    """
+    if df is None or df.empty:
+        return df
+    cols_upper = [str(c).strip().upper() for c in df.columns]
+    if _looks_like_rekap_header(cols_upper):
+        return df
+
+    n = len(df.columns)
+    head = pd.DataFrame([list(df.columns)], columns=list(range(n)))
+    body = df.reset_index(drop=True)
+    body.columns = list(range(n))
+    grid = pd.concat([head, body], ignore_index=True)
+    hr = _detect_header_row(grid)
+    if hr is None:
+        return df
+    out = _normalize_columns(_promote_at(grid, hr))
+    _log(logger, f"[rekap_import] header tergeser — baris {hr} data "
+                 f"dipromosi jadi header (pola fn_rekap_mentah)")
+    return out
+
+
+def _bom_map_from_rows(raw: pd.DataFrame,
+                       day_cols: list[str]) -> dict[tuple[str, str], float]:
+    """TOTAL BOM per (NAMA RESTO, NAMA BARANG) dari baris JENIS=="BOM".
+
+    Satu sumber kebenaran utk convert_rekap_mentah (v2.14.0) DAN
+    inject_bom_from_raw_rows (v2.15.0): groupby jumlah kolom hari, kunci
+    _key_str dua sisi (outlet numerik 1049.0 → "1049"; None → skip —
+    pola H9-a: kunci kosong tak bisa di-join)."""
+    bom_map: dict[tuple[str, str], float] = {}
+    if raw is None or raw.empty or "JENIS" not in raw.columns:
+        return bom_map
+    jenis_norm = raw["JENIS"].astype(str).str.strip().str.upper()
+    bom_rows = raw[jenis_norm == "BOM"]
+    if bom_rows.empty:
+        return bom_map
+    bom_num = bom_rows[day_cols].apply(pd.to_numeric, errors="coerce")
+    bom_tot = bom_num.fillna(0).sum(axis=1)
+    k_resto = bom_rows["NAMA RESTO"].map(_key_str)
+    k_barang = bom_rows["NAMA BARANG"].map(_key_str)
+    for r, b, t in zip(k_resto, k_barang, bom_tot):
+        if r is None or b is None:
+            continue  # kunci kosong — tidak bisa di-join (pola H9-a)
+        key = (r, b)
+        bom_map[key] = bom_map.get(key, 0.0) + float(t)
+    return bom_map
+
+
+def _bom_inline_series(df: pd.DataFrame,
+                       bom_map: dict) -> pd.Series:
+    """Kolom inline "TOTAL BOM" utk frame data W/S/T (NaN tanpa pasangan)."""
+    resto_key = df["NAMA RESTO"].map(_key_str)
+    barang_key = df["NAMA BARANG"].map(_key_str)
+    return pd.Series(
+        [bom_map.get((r, b)) for r, b in zip(resto_key, barang_key)],
+        index=df.index, dtype="float64")
+
+
+# Kolom identity yang di-strip converter pada file olahan (v2.14.0 —
+# "identity passthrough di-strip" pola fn_rekap_mentah). Jalur sekali-
+# jalan v2.15.0 melakukan strip YANG SAMA supaya hasil pipeline pada
+# file mentah == hasil pipeline pada file olahan (parity penuh).
+_IDENTITY_COLS = ("SOURCE DATA", "KETERANGAN", "NAMA BARANG",
+                  "NAMA RESTO", "SATUAN")
+
+
+def normalize_rekap_values(df: pd.DataFrame, logger=None) -> pd.DataFrame:
+    """v2.15.0: normalisasi nilai identity sheet REKAP MENTAH — mirror
+    pembersihan convert_rekap_mentah (v2.14.0) supaya jalur sekali-jalan
+    menghasilkan analisa IDENTIK dengan jalur 2-langkah lama
+    (olah → export → pipeline):
+
+      - JENIS dinormalisasi strip+upper ('waste ' → 'WASTE') — tanpa
+        ini baris JENIS tak-kanonik TERBUANG di filter stage_01
+        (exact-match) padahal converter menyelamatkannya;
+      - kolom identity (SOURCE DATA/KETERANGAN/NAMA BARANG/NAMA RESTO/
+        SATUAN) di-strip — 'GR ' → 'GR' (grup satuan/keterangan sama
+        dgn file olahan; NaN tetap NaN).
+
+    TRIGGER jujur — hanya sheet MENTAH yang tersentuh: frame memuat
+    nilai JENIS non-waste eksplisit (BOM/SO/STOK AWAL — ciri sheet
+    rekap "semua jenis") ATAU varian JENIS tak-kanonik. File standar
+    DATA_WASTE (W/S/T bersih) → passthrough IDENTITAS — perilaku
+    historis (termasuk SATUAN 'GR ' yang memang tidak pernah di-strip
+    di file standar) tak berubah, golden test aman.
+
+    Selain identity, kolom HARI (1..31) sel kosong/teks → 0 numerik —
+    parity file olahan converter (coerce lalu fillna(0)) DAN parity
+    file standar buatan proses M-code user (terukur: DATA_WASTE.xlsx
+    23.470 dari 25.901 baris ber-hari semua-0 eksplisit, hanya 1 sel
+    null — proses olahan user MEMANG mengisi 0). Tanpa ini: baris
+    hari-kosong-semua TERBUANG di filter TOTAL-notna stage_02
+    (25.722 → 25.692 di file asli) dan AVG berubah semantik di sel
+    kosong parsial (mean non-null ≠ mean semua-kolom).
+
+    Return SALINAN bila ada perubahan (caller tak termutasi — pola M6).
+    """
+    if df is None or df.empty or "JENIS" not in df.columns:
+        return df
+    s = df["JENIS"]
+    norm = s.where(s.isna(), s.astype(str).str.strip().str.upper())
+    # Sheet mentah = ada nilai JENIS eksplisit di luar {W,S,T}
+    # (BOM/SO/stok — baris ini memang akan dibuang stage_01) ATAU ada
+    # varian tak-kanonik ('waste '). NaN TIDAK memicu (bukan ciri mentah).
+    nonkeep = norm.notna() & ~norm.isin(_KEEP_JENIS)
+    dirty = s.notna() & (norm != s)
+    if not (nonkeep.any() or dirty.any()):
+        return df
+    out = df.copy()
+    out["JENIS"] = norm
+    n_strip = 0
+    for col in _IDENTITY_COLS:
+        if col not in out.columns:
+            continue
+        c = out[col]
+        if c.dtype != object and not pd.api.types.is_string_dtype(c):
+            continue
+        stripped = c.where(c.isna(), c.astype(str).str.strip())
+        n_strip += int((stripped.fillna("") != c.fillna("")).sum())
+        out[col] = stripped
+    # Hari kosong/teks → 0 numerik (mirror converter: coerce DULU baru
+    # fillna — teks 'abc' pun jadi 0, bukan NaN yang lolos ke stage_02
+    # dgn semantik 'sum non-null' yang beda).
+    n_fill = 0
+    for col in _day_cols_of(out):
+        coerced = pd.to_numeric(out[col], errors="coerce")
+        n_fill += int(coerced.isna().sum())
+        out[col] = coerced.fillna(0)
+    n_jenis = int(dirty.sum())
+    _log(logger, f"[rekap_import] nilai sheet mentah dinormalisasi "
+                 f"(parity olahan v2.14.0): JENIS {n_jenis} baris "
+                 f"kanonisasi + {n_strip} sel identity di-strip + "
+                 f"{n_fill} sel hari kosong → 0")
+    return out
+
+
+def inject_bom_from_raw_rows(df: pd.DataFrame, logger=None) -> pd.DataFrame:
+    """v2.15.0: tambah kolom inline "TOTAL BOM" dari baris JENIS=="BOM"
+    sheet mentah — dipanggil pipeline SEBELUM stage_01 (stage_01
+    memfilter baris BOM keluar; tanpa injeksi ini sinyal S6/S7 mati di
+    file mentah karena kolom TOTAL BOM tidak ada & sheet BOM terpisah
+    tidak ada di file rekap).
+
+    Guard (idempotent + jujur):
+      - "TOTAL BOM" SUDAH ada di kolom → passthrough identitas (file
+        standar / hasil olahan / re-run output — stage_05 memakai kolom
+        inline itu, nilai tak diganggu).
+      - Tanpa "JENIS" / tanpa baris JENIS=="BOM" → passthrough (file
+        pure W-S-T: stage_05 jatuh ke jalur sheet BOM seperti biasa).
+      - Tanpa "NAMA RESTO"/"NAMA BARANG" → passthrough (frame tak bisa
+        di-join; validate_rekap_schema akan bicara).
+    Return SALINAN frame dengan kolom baru (caller frame tak termutasi —
+    pola M6 stage_05).
+    """
+    if df is None or df.empty:
+        return df
+    if "TOTAL BOM" in df.columns:
+        return df
+    if "JENIS" not in df.columns or "NAMA RESTO" not in df.columns \
+            or "NAMA BARANG" not in df.columns:
+        return df
+    day_cols = _day_cols_of(df)
+    if not day_cols:
+        return df
+    jenis_norm = df["JENIS"].astype(str).str.strip().str.upper()
+    n_bom_rows = int((jenis_norm == "BOM").sum())
+    if n_bom_rows == 0:
+        return df
+    bom_map = _bom_map_from_rows(df, day_cols)
+    if not bom_map:
+        return df
+    out = df.copy()
+    bom_inline = _bom_inline_series(out, bom_map)
+    out["TOTAL BOM"] = bom_inline
+    # Hitung match hanya pada baris DATA (W/S/T) — semantik bom_matched
+    # converter; baris BOM/SO ikut kena join tapi memang dibuang stage_01
+    # (menghitungnya menyesatkan: '51.364 baris data' padahal datanya
+    # 25 ribu).
+    keep_mask = jenis_norm.isin(_KEEP_JENIS)
+    n_matched = int(bom_inline[keep_mask].notna().sum())
+    _log(logger, f"[rekap_import] TOTAL BOM inline dari {n_bom_rows} baris "
+                 f"JENIS=BOM → {len(bom_map)} pasangan (resto, barang); "
+                 f"{n_matched} baris data (W/S/T) ber-TOTAL BOM — sinyal "
+                 f"S6/S7 & Rill % to BOM aktif (v2.15.0 sekali jalan)")
+    return out
+
+
 def _find_satuan_sheet(path: Path, config: dict) -> str | None:
     """Sheet DATABASE_SATUAN di workbook SUMBER (bila ada → disalin)."""
     try:
@@ -284,7 +541,7 @@ def _find_satuan_sheet(path: Path, config: dict) -> str | None:
 
 
 def convert_rekap_mentah(source: str | os.PathLike,
-                         out_path: str | os_PathLike | None = None,
+                         out_path: str | os.PathLike | None = None,
                          config: dict | None = None,
                          logger=None) -> dict:
     """Olah file REKAP MENTAH mentah → workbook DATA_WASTE standar.
@@ -354,20 +611,13 @@ def convert_rekap_mentah(source: str | os.PathLike,
                  f"({', '.join(f'{k}: {v}' for k, v in sorted(jenis_counts.items()))})")
 
     # --- BOM: ekstrak JENIS=="BOM" → TOTAL BOM per (NAMA RESTO, NAMA
-    # BARANG) — ditulis inline (prioritas stage_05) + sheet BOM ---
-    bom_rows = raw[jenis_norm == "BOM"]
-    bom_map: dict[tuple[str | None, str | None], float] = {}
-    if not bom_rows.empty:
-        bom_num = bom_rows[day_cols].apply(pd.to_numeric, errors="coerce")
-        bom_tot = bom_num.fillna(0).sum(axis=1)
-        k_resto = bom_rows["NAMA RESTO"].map(_key_str)
-        k_barang = bom_rows["NAMA BARANG"].map(_key_str)
-        for r, b, t in zip(k_resto, k_barang, bom_tot):
-            if r is None or b is None:
-                continue  # kunci kosong — tidak bisa di-join (pola H9-a)
-            key = (r, b)
-            bom_map[key] = bom_map.get(key, 0.0) + float(t)
-    _log(logger, f"[rekap_import] BOM: {len(bom_rows)} baris JENIS=BOM → "
+    # BARANG) — ditulis inline (prioritas stage_05) + sheet BOM
+    # (v2.15.0: logika diekstrak ke _bom_map_from_rows — dipakai BERSAMA
+    # inject_bom_from_raw_rows jalur sekali-jalan pipeline; satu sumber
+    # kebenaran) ---
+    bom_map = _bom_map_from_rows(raw, day_cols)
+    n_bom_rows = int((jenis_norm == "BOM").sum())
+    _log(logger, f"[rekap_import] BOM: {n_bom_rows} baris JENIS=BOM → "
                  f"{len(bom_map)} pasangan (resto, barang)")
 
     # --- Statistik kolom hari (semantika stage_02) ---
@@ -381,12 +631,9 @@ def convert_rekap_mentah(source: str | os.PathLike,
     status2 = np.where(total == 0, "Kosong", "Isi")
 
     # --- TOTAL BOM inline: join key _key_str dua sisi (pola F1 v2.3.2 —
-    # outlet numerik 1049.0 → "1049"; None → None tak join palsu) ---
-    resto_key = kept["NAMA RESTO"].map(_key_str)
-    barang_key = kept["NAMA BARANG"].map(_key_str)
-    bom_inline = pd.Series(
-        [bom_map.get((r, b)) for r, b in zip(resto_key, barang_key)],
-        index=kept.index, dtype="float64")
+    # outlet numerik 1049.0 → "1049"; None → None tak join palsu)
+    # (v2.15.0: _bom_inline_series — shared dgn inject_bom_from_raw_rows) ---
+    bom_inline = _bom_inline_series(kept, bom_map)
     bom_matched = int(bom_inline.notna().sum())
 
     # % to BOM & Rill % to BOM (semantika stage_05 — di-guard > 0)
