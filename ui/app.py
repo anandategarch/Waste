@@ -91,6 +91,14 @@ def _build_help_html(config: dict | None = None) -> str:
 <li>Isi <b>Input Workbook</b>: tombol <b>Telusuri…</b> memilih file Excel rekap
 (mis. DATA_WASTE.xlsx), atau <b>Pakai Sample</b> mengisi file contoh dari folder
 aplikasi. Menekan <b>Enter</b> di kolom workbook langsung menjalankan pipeline.</li>
+<li><b>🧮 Olah REKAP MENTAH…</b>: punya file rekap <b>mentah</b> bulanan (mis.
+"REKAP MENTAH_01-31 AGUSTUS 2026_TEGAR.xlsx" — masih berisi SEMUA jenis:
+WASTE/SUSUT/TRIAL/BOM/SO/stok)? Klik tombol ini, pilih filenya — aplikasi
+mengolah otomatis (saring WASTE/SUSUT/TRIAL + ambil <b>TOTAL BOM</b> dari baris
+BOM + kolom hitungan) jadi workbook <b>DATA_WASTE standar</b> di folder yang
+sama, lalu mengisinya ke kolom Input Workbook — tinggal <b>Mulai Pipeline</b>.
+Tidak perlu lagi filter/formula manual di Excel. Berjalan di background (±10-15
+dtk untuk ±50 ribu baris).</li>
 <li><b>Key Akhir (1–31)</b>: hanya hari 1..N yang dianalisa — bulan berjalan
 yang belum penuh cukup diisi sampai tanggal terakhirnya.</li>
 <li>Kartu <b>Threshold &amp; Konfigurasi</b> (config.json): nilai ambang

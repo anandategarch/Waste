@@ -7,6 +7,9 @@ tidak freeze) — pola QThread + Signal:
 - HistoryWorker  : muat N workbook pembanding (kuantiti) + tipikal (v2.10.0
                    menggantikan PeriodWorker — banding kini multi-file,
                    kuantiti tanpa BOM, via waste_anomaly/period_history)
+- RekapImportWorker : olah REKAP MENTAH mentah → DATA_WASTE standar
+                   (v2.14.0 — menggantikan olahan manual Excel user;
+                   jalur waste_anomaly/rekap_import)
 """
 from __future__ import annotations
 
@@ -19,6 +22,7 @@ from PySide6.QtCore import QThread, Signal
 from waste_anomaly.exporter import export_to_excel
 from waste_anomaly.period_history import load_history_file
 from waste_anomaly.pipeline import run_pipeline
+from waste_anomaly.rekap_import import RekapImportError, convert_rekap_mentah
 from waste_anomaly.utils import load_config
 
 from waste_anomaly.followup import fingerprint_series
@@ -204,3 +208,47 @@ class HistoryWorker(QThread):
             self.done.emit(months)
         except Exception as e:  # noqa: BLE001 — semua error ke UI, bukan crash thread
             self.failed.emit(str(e), traceback.format_exc())
+
+
+class RekapImportWorker(QThread):
+    """v2.14.0: olah REKAP MENTAH mentah → workbook DATA_WASTE standar.
+
+    Dulu user harus mengolah manual di Excel (filter JENIS + formula +
+    Power Query) supaya jadi struktur 53 kolom — kini satu tombol di tab
+    Pipeline. Berjalan di background (pembacaan ±54 ribu baris + tulis
+    ±25 ribu baris = ±10-15 dtk — UI tidak boleh freeze); pola sinyal
+    mengikuti PipelineWorker/HistoryWorker (done/failed + deleteLater
+    D10 di sisi view). Config dilewatkan pemanggil (dict sudah termuat —
+    tidak baca-ulang file dari dalam thread).
+
+    done → dict ringkasan (lihat convert_rekap_mentah): out_path,
+    rows_raw/rows_kept, jenis_counts, bom_pairs/bom_matched, dll.
+    failed → (pesan singkat, traceback). RekapImportError sudah ramah
+    (pesan siap tampil); traceback kosong untuk kasus itu.
+    """
+
+    done = Signal(dict)
+    failed = Signal(str, str)
+
+    def __init__(self, source: str,
+                 out_path: str | None = None,
+                 config: dict | None = None,
+                 parent=None) -> None:
+        super().__init__(parent)
+        self._source = str(source)
+        self._out_path = out_path
+        self._config = config if config is not None else load_config()
+
+    def run(self) -> None:
+        try:
+            result = convert_rekap_mentah(
+                self._source, out_path=self._out_path,
+                config=self._config)
+            self.done.emit(result)
+        except RekapImportError as e:
+            # Pesan sudah user-friendly (daftar masalah + saran) —
+            # traceback kosong: tidak ada yang perlu dicocokkan.
+            self.failed.emit(str(e), "")
+        except Exception as e:  # noqa: BLE001 — error ke UI, bukan crash thread
+            self.failed.emit(f"{type(e).__name__}: {e}",
+                             traceback.format_exc())

@@ -50,4 +50,5 @@ widgets.py::status_chip_for
 workers.py::ExportWorker
 workers.py::HistoryWorker
 workers.py::PipelineWorker
+workers.py::RekapImportWorker
 workers.py::_extra_sheets
