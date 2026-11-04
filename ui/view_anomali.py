@@ -105,12 +105,16 @@ from .widgets import (
 # di tabel. Nilai 'Cek' = item tanpa data penjualan (tak bisa dihitung).
 TABLE_COLS = [
     "ANOMALY SCORE", "ANOMALY STATUS", "PROFIL", "NAMA RESTO",
-    "NAMA BARANG", "JENIS", "KETERANGAN", "TOTAL", "% to BOM",
+    "NAMA BARANG", "TOTAL", "% to BOM", "JENIS", "KETERANGAN",
     # v2.10.2: muncul hanya bila pembanding bulan lalu tersedia (kolom
     # ditambahkan ADDITIF oleh change_vs_history — tanpa pembanding tabel
     # identik v2.10.1, pola view Hari Mencurigakan).
     "BULAN LALU", "PERUBAHAN %", "PERUBAHAN",
 ]
+# v2.17.0 rombak P0: TOTAL + % to BOM ditarik ke depan (kanan NAMA BARANG)
+# — sebelumnya di posisi 8-9 setelah 7 kolom identitas. Sinyal magnitudo
+# wajib terbaca sebelum JENIS/KETERANGAN (yg narrow_hide di viewport sempit).
+# % to BOM tetap langsung setelah TOTAL (kontrak test_v280 index+1).
 
 # v2.12.3: funnel filter di header tabel (permintaan user "daripada aku
 # harus pakai slicer"). Kolom → kunci filter ctx — STATE TETAP SATU di
@@ -517,29 +521,11 @@ class DetailPanel(Card):
         hl.addStretch(1)
         lay.addWidget(head)
 
-        # v2.13.9 — RINGKASAN PENTING (permintaan user "yang penting-penting
-        # aja"): ±7 angka kunci berlabel Bahasa awam, nilai kosong dilewati.
-        # Tooltip label/nilai = kamus istilah kolom sumbernya.
-        sum_rows = _summary_rows(rec)
-        if sum_rows:
-            lay.addWidget(self._section("Ringkasan"))
-            sum_w = QWidget()
-            sfl = QFormLayout(sum_w)
-            sfl.setContentsMargins(0, 0, 0, 0)
-            sfl.setSpacing(4)
-            sfl.setFieldGrowthPolicy(
-                QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-            for label, shown, tip in sum_rows:
-                key = QLabel(f"{label}:", sum_w)
-                key.setStyleSheet("color:#64748b;")
-                if tip:
-                    key.setToolTip(tip)
-                val_lbl = WLabel(shown, sum_w)
-                val_lbl.setStyleSheet("font-weight:600;")
-                if tip:
-                    val_lbl.setToolTip(tip)
-                sfl.addRow(key, val_lbl)
-            lay.addWidget(sum_w)
+        # v2.17.0 rombak P0: urutan SINYAL-DULU — "Sinyal terpicu" (chip
+        # merah, inti investigasi) ditampilkan SEBELUM "Ringkasan" (angka
+        # konteks). Sebelumnya Ringkasan duluan → user baca 7 angka konteks
+        # sebelum tahu SINYAL APA yang menyala. Popup anomali = jawaban
+        # "kenapa baris ini muncul" → sinyal wajib terbaca pertama.
 
         # Sinyal TERPICU SAJA (v2.13.9 — dulu grid 12 chip: 7-11 di
         # antaranya abu-abu "tidak terpicu" = kebisingan visual; yang
@@ -591,6 +577,30 @@ class DetailPanel(Card):
                           self._content)
             note.setObjectName("muted")
             lay.addWidget(note)
+
+        # v2.13.9 — RINGKASAN PENTING (permintaan user "yang penting-penting
+        # aja"): ±7 angka kunci berlabel Bahasa awam, nilai kosong dilewati.
+        # Tooltip label/nilai = kamus istilah kolom sumbernya.
+        sum_rows = _summary_rows(rec)
+        if sum_rows:
+            lay.addWidget(self._section("Ringkasan"))
+            sum_w = QWidget()
+            sfl = QFormLayout(sum_w)
+            sfl.setContentsMargins(0, 0, 0, 0)
+            sfl.setSpacing(4)
+            sfl.setFieldGrowthPolicy(
+                QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+            for label, shown, tip in sum_rows:
+                key = QLabel(f"{label}:", sum_w)
+                key.setStyleSheet("color:#64748b;")
+                if tip:
+                    key.setToolTip(tip)
+                val_lbl = WLabel(shown, sum_w)
+                val_lbl.setStyleSheet("font-weight:600;")
+                if tip:
+                    val_lbl.setToolTip(tip)
+                sfl.addRow(key, val_lbl)
+            lay.addWidget(sum_w)
 
         # Alasan (teks lengkap ANOMALY REASONS)
         reasons = fmt_cell(rec.get("ANOMALY REASONS"))

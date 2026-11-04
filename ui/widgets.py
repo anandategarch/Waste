@@ -22,7 +22,15 @@ from contextlib import contextmanager
 
 import pandas as pd
 from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPolygonF
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QKeyEvent,
+    QKeySequence,
+    QPainter,
+    QPolygonF,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -35,6 +43,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
+    QStatusBar,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -596,6 +605,33 @@ class WLabel(QLabel):
             self.setObjectName("muted")
 
 
+def icon_header(text: str, icon_name: str,
+                parent: QWidget | None = None,
+                size: int = 16,
+                object_name: str = "cardTitle",
+                tooltip: str | None = None) -> QWidget:
+    """Header seksi: ikon vektor + WLabel (v2.17.0 P0-E — ganti emoji).
+
+    Mengembalikan QWidget (QHBoxLayout) siap addWidget ke layout kartu.
+    objectName default 'cardTitle' supaya QSS tema tetap berlaku pada teks.
+    tooltip (opsional) dipasang pada label teks (bukan host) supaya hover
+    pada teks memunculkannya.
+    """
+    from .icons import Icon
+    host = QWidget(parent)
+    hl = QHBoxLayout(host)
+    hl.setContentsMargins(0, 0, 0, 0)
+    hl.setSpacing(6)
+    hl.addWidget(Icon(icon_name, size, parent=host))
+    lbl = WLabel(text, host)
+    if object_name:
+        lbl.setObjectName(object_name)
+    if tooltip:
+        lbl.setToolTip(tooltip)
+    hl.addWidget(lbl, 1)
+    return host
+
+
 # ============================================================
 # TABEL DATA
 # ============================================================
@@ -610,6 +646,9 @@ class DataTable(QTableView):
     # QTableView.clicked: klik pada sel kolom centang ✓ TIDAK diteruskan
     # (sedang memasukkan/mencabut baris — pop-up justru mengganggu).
     row_clicked = Signal(object)
+    # v2.17.0 P0-F clipboard: emit (n_rows, n_cols) setelah salin ke
+    # clipboard — view/window boleh wire utk umpan-balik tambahan.
+    copied = Signal(int, int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -693,6 +732,127 @@ class DataTable(QTableView):
             self._on_sort_changed)
         self.horizontalHeader().sectionResized.connect(
             self._on_section_resized)
+        # v2.17.0 P0-F clipboard: Ctrl+C salin baris terpilih + menu konteks
+        # Salin. Sebelumnya tabel tak bisa disalin sama sekali (bloker UX:
+        # user harus screenshot / ketik ulang utk laporan/ad-hoc Excel).
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_context_menu)
+
+    # ------------------------------------------------------------
+    # v2.17.0 P0-F: CLIPBOARD (Ctrl+C + menu konteks Salin)
+    # ------------------------------------------------------------
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.matches(QKeySequence.StandardKey.Copy):
+            self._copy_selection_to_clipboard()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _on_context_menu(self, pos: QPoint) -> None:
+        menu = QMenu(self)
+        sm = self.selectionModel()
+        n_sel = (len({i.row() for i in sm.selectedIndexes()})
+                 if sm is not None and sm.selectedIndexes() else 0)
+        act_sel = menu.addAction(
+            f"Salin Baris Terpilih{f' ({n_sel})' if n_sel else ''}")
+        act_sel.setShortcut(QKeySequence.StandardKey.Copy)
+        act_all = menu.addAction("Salin Semua Baris Tampil")
+        act_all.setToolTip("Salin seluruh baris terfilter terlihat di tabel "
+                           "(TSV — tempel langsung ke Excel/Sheets).")
+        chosen = menu.exec(self.viewport().mapToGlobal(pos))
+        if chosen is act_sel:
+            self._copy_selection_to_clipboard()
+        elif chosen is act_all:
+            self._copy_all_visible_to_clipboard()
+
+    def _copy_selection_to_clipboard(self) -> bool:
+        """Salin baris terpilih (TSV: header + baris, tab-separated)."""
+        sm = self.selectionModel()
+        if sm is None or not sm.selectedIndexes():
+            self._flash_status("Tidak ada baris terpilih — klik baris dulu.")
+            return False
+        model = self.model()
+        idxs = sm.selectedIndexes()
+        rows = sorted({i.row() for i in idxs})
+        cols = sorted({i.column() for i in idxs})
+        lookup = {(i.row(), i.column()): i for i in idxs}
+        lines = [self._header_tsv(cols)]
+        for r in rows:
+            cells = []
+            for c in cols:
+                idx = lookup.get((r, c))
+                if idx is not None:
+                    txt = model.data(idx, Qt.ItemDataRole.DisplayRole)
+                    cells.append("" if txt is None else str(txt))
+                else:
+                    cells.append("")
+            lines.append("\t".join(cells))
+        self._set_clipboard("\n".join(lines), len(rows), len(cols))
+        return True
+
+    def _copy_all_visible_to_clipboard(self) -> bool:
+        """Salin SEMUA baris terlihat + kolom tampak (TSV). Subset ekspor
+        ad-hoc: filter tabel dulu → Salin Semua → tempel ke Excel."""
+        model = self.model()
+        n = model.rowCount()
+        if not n:
+            self._flash_status("Tabel kosong — tidak ada baris untuk disalin.")
+            return False
+        # Kolom tampak saja: buang hidden + internal __* (mis. __SRC_ROW).
+        cols = []
+        for c in range(model.columnCount()):
+            if self.isColumnHidden(c):
+                continue
+            h = model.headerData(c, Qt.Orientation.Horizontal,
+                                 Qt.ItemDataRole.DisplayRole)
+            if h is not None and str(h).startswith("__"):
+                continue
+            cols.append(c)
+        has_text_at = hasattr(model, "text_at")
+        lines = [self._header_tsv(cols)]
+        for r in range(n):
+            cells = []
+            for c in cols:
+                if has_text_at:
+                    txt = model.text_at(r, c)  # jalur bulk snapshot numpy
+                else:
+                    txt = model.data(model.index(r, c),
+                                     Qt.ItemDataRole.DisplayRole)
+                cells.append("" if txt is None else str(txt))
+            lines.append("\t".join(cells))
+        self._set_clipboard("\n".join(lines), n, len(cols))
+        return True
+
+    def _header_tsv(self, cols: list[int]) -> str:
+        model = self.model()
+        parts = []
+        for c in cols:
+            h = model.headerData(c, Qt.Orientation.Horizontal,
+                                 Qt.ItemDataRole.DisplayRole)
+            parts.append("" if h is None else str(h))
+        return "\t".join(parts)
+
+    def _set_clipboard(self, text: str, n_rows: int, n_cols: int) -> None:
+        cb = QApplication.clipboard()
+        if cb is not None:
+            cb.setText(text)
+        self.copied.emit(n_rows, n_cols)
+        self._flash_status(
+            f"✓ {n_rows} baris × {n_cols} kolom disalin ke clipboard "
+            f"(Ctrl+V ke Excel/Sheets).")
+
+    def _flash_status(self, msg: str) -> None:
+        """Tampilkan pesan sementara (4 dtk) di status bar window leluhur.
+
+        findChild(QStatusBar) menemukan statusBar MainWindow bila tabel
+        berada di view utama; popup QDialog tak punya statusBar → diam
+        (copy tetap jalan, cuma tanpa umpan-balik visual)."""
+        win = self.window()
+        if win is None:
+            return
+        sb = win.findChild(QStatusBar)
+        if sb is not None:
+            sb.showMessage(msg, 4000)
 
     def _on_sort_changed(self, *_args) -> None:
         self._default_order = False
@@ -1320,9 +1480,11 @@ class KpiStrip(QWidget):
         gl = QGridLayout(row)
         gl.setContentsMargins(0, 0, 0, 0)
         gl.setSpacing(8)
-        self.kpi_total = KpiCard("TOTAL BARIS", "#0f172a",
-                                  tooltip="Banyak baris data yang lolos filter "
-                                          "(semua status, termasuk Normal).")
+        # v2.17.0 rombak P0: urutan SINYAL-DULU — anomali ber-skoring
+        # (Prioritas/Potensi/Review) memimpin, TOTAL WASTE (magnitudo),
+        # CABANG (konteks), TOTAL BARIS (vanity) terakhir. Sebelumnya
+        # TOTAL BARIS di posisi 1 — user lihat "berapa baris" dulu sebelum
+        # "berapa anomali" (urutan vanity-first, bukan signal-first).
         self.kpi_prioritas = KpiCard("PRIORITAS TINGGI", "#dc2626",
                                      tooltip="Anomali ber-skor ≥ 8 — periksa "
                                              "paling duluan.")
@@ -1338,9 +1500,12 @@ class KpiStrip(QWidget):
         self.kpi_cabang = KpiCard("CABANG", "#9333ea",
                                   tooltip="Banyak cabang berbeda pada data "
                                           "terfilter.")
-        for i, card in enumerate((self.kpi_total, self.kpi_prioritas,
-                                  self.kpi_potensi, self.kpi_review,
-                                  self.kpi_waste, self.kpi_cabang)):
+        self.kpi_total = KpiCard("TOTAL BARIS", "#0f172a",
+                                  tooltip="Banyak baris data yang lolos filter "
+                                          "(semua status, termasuk Normal).")
+        for i, card in enumerate((self.kpi_prioritas, self.kpi_potensi,
+                                  self.kpi_review, self.kpi_waste,
+                                  self.kpi_cabang, self.kpi_total)):
             gl.addWidget(card, 0, i)
         lay.addWidget(row)
         self.lbl_units = WLabel("", self)

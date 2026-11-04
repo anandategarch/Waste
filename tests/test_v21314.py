@@ -295,7 +295,7 @@ class TestB11FullscreenKolomCentang:
         from waste_anomaly.followup import CHECK_COL
         view, ctx, app = _view_periode_files(tmp_path, monkeypatch,
                                              ["JULI"])
-        view._tabs.setCurrentIndex(2)  # halaman '🏬 Cabang Mover'
+        view._tabs.setCurrentIndex(2)  # halaman 'Cabang Mover'
         app.processEvents()
         view._on_fullscreen()
         app.processEvents()
@@ -381,7 +381,7 @@ class TestB22DrillDariFullscreen:
         from ui.view_periode import BandTableDialog
         view, _ctx, app = _view_periode_files(tmp_path, monkeypatch,
                                               ["JULI"])
-        view._tabs.setCurrentIndex(3)  # halaman '📦 Item Mover'
+        view._tabs.setCurrentIndex(3)  # halaman 'Item Mover'
         app.processEvents()
         view._on_fullscreen()
         app.processEvents()
@@ -419,7 +419,9 @@ class TestB22DrillDariFullscreen:
 class TestD24ShortcutGlobal:
     def test_ctrl_3_pindah_tab_index_2(self):
         """D24: QTest Ctrl+3 → tab index 2 (Hari Mencurigakan — urutan
-        _views); dulu nol shortcut global: pindah tab hanya via mouse."""
+        _views); dulu nol shortcut global: pindah tab hanya via mouse.
+        v2.17.0 rombak: urutan tab diganti (Pipeline 0, Anomali 1, Hari 2,
+        ...Follow Up 5) — Hari tetap index 2; Ctrl+6 kini → Follow Up."""
         from PySide6.QtCore import Qt
         from PySide6.QtTest import QTest
         from ui.app import MainWindow
@@ -427,16 +429,20 @@ class TestD24ShortcutGlobal:
         win = MainWindow()
         win.show()
         app.processEvents()
-        assert win._tabs.currentIndex() == 0
+        assert win._tabs.currentIndex() == 0, "first-run = Pipeline (idx 0)"
         QTest.keyClick(win, Qt.Key.Key_3,
                        Qt.KeyboardModifier.ControlModifier)
         app.processEvents()
         assert win._tabs.currentIndex() == 2, (
             "Ctrl+3 harus pindah ke tab index 2 (D24)")
+        QTest.keyClick(win, Qt.Key.Key_1,
+                       Qt.KeyboardModifier.ControlModifier)
+        app.processEvents()
+        assert win._tabs.currentIndex() == 0, "Ctrl+1 → tab Pipeline (idx 0)"
         QTest.keyClick(win, Qt.Key.Key_6,
                        Qt.KeyboardModifier.ControlModifier)
         app.processEvents()
-        assert win._tabs.currentIndex() == 5, "Ctrl+6 → tab Pipeline"
+        assert win._tabs.currentIndex() == 5, "Ctrl+6 → tab Follow Up (idx 5)"
 
     def test_shortcut_terpasang_semua_action(self):
         """D24: 6 action tab (Ctrl+1..Ctrl+6) + action ekspor (Ctrl+E)

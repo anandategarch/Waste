@@ -226,12 +226,15 @@ class TestHariView:
         _qapp()
         win = MainWindow()
         assert win._tabs.count() == 6
-        assert win._tabs.tabText(1).split(" (")[0] == "Follow Up"
+        # v2.17.0 rombak P0: tab 0 = Pipeline (entry), tab 1 = Anomali,
+        # tab 5 = Follow Up (terakhir). tab 2 = Hari tetap.
+        assert win._tabs.tabText(0) == "Pipeline"
+        assert win._tabs.tabText(1) == "Anomali"
         assert win._tabs.tabText(2) == "Hari Mencurigakan"
         titles = [win._tabs.tabText(i).split(" (")[0] for i in range(6)]
-        assert titles == ["Anomali", "Follow Up", "Hari Mencurigakan",
+        assert titles == ["Pipeline", "Anomali", "Hari Mencurigakan",
                           "Scorecard Cabang", "Banding Periode",
-                          "Pipeline"]
+                          "Follow Up"]
         win.close()
 
     def test_render_tabel_bukti_default(self):
@@ -260,23 +263,24 @@ class TestHariView:
         assert "bukti hari" in view._lbl_count.text()
 
     def test_klik_baris_buka_popup_dan_peta_hari(self):
-        from PySide6.QtWidgets import QLabel
+        from PySide6.QtWidgets import QDoubleSpinBox
         view, _ = _make_hari_view()
         view._table.selectRow(0)
         rec = view._table.selected_record()
         assert rec is not None
         view._popup.show_record(rec)
-        labels = view._popup._panel._content.findChildren(QLabel)
-        # peta hari: sel ber-tooltip 'Hari N: ...' dan sel merah tersangka
-        day_cells = [l for l in labels if l.toolTip().startswith("Hari ")]
+        # v2.16.0: peta hari kini EDITABLE — QDoubleSpinBox per hari (bukan
+        # QLabel read-only _day_map). Sel ber-tooltip 'Hari N ...' = peta hari.
+        spins = view._popup._panel._content.findChildren(QDoubleSpinBox)
+        day_cells = [s for s in spins if s.toolTip().startswith("Hari ")]
         assert len(day_cells) >= 30, "peta hari 1-31 tidak ter-render"
-        red = [l for l in day_cells if "#dc2626" in (l.styleSheet() or "")]
+        # Hari tersangka (17) disorot merah — styleSheet memuat #dc2626.
+        red = [s for s in day_cells if "#dc2626" in (s.styleSheet() or "")]
         assert red, "hari tersangka tidak disorot merah"
-        # v2.12.3 (redesain peta hari): dulu '17:70' (tanggal:nilai —
-        # membingungkan); kini tanggal kecil + nilai tebal terpisah —
-        # teks = '<span ...>17</span><br><b>70</b>'.
-        assert "17</span>" in red[0].text(), red[0].text()
-        assert "<b>70</b>" in red[0].text(), red[0].text()
+        # Tersangka = hari 17, nilai asli 70 — tooltip menyebut TERSANGKA
+        # + nilai spinbox = 70.
+        assert "TERSANGKA" in red[0].toolTip(), red[0].toolTip()
+        assert abs(red[0].value() - 70.0) < 0.01, red[0].value()
 
     def test_refresh_dibungkus_busy_feedback(self):
         """Kontrak v2.8.3 tetap: titik tunggal render dibungkus (anti-beku)."""

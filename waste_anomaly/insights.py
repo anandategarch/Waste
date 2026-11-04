@@ -73,10 +73,14 @@ SYSTEMIC_COLS = [
 ]
 WEEKDAY_COLS = ["HARI", "TOTAL", "N HARI", "RATA PER HARI"]
 SCORECARD_COLS = [
-    "RANK", "NAMA RESTO", "TOTAL WASTE", "INTENSITAS %", "KELEBIHAN",
-    "ALASAN DOMINAN", "ITEM TIAP HARI", "ANOMALI", "HARI TERSANGKA",
-    "BARU", "PULIH", "STATUS INPUT", "TREN",
+    "RANK", "NAMA RESTO", "KELEBIHAN", "STATUS INPUT",
+    "TOTAL WASTE", "INTENSITAS %", "ANOMALI", "HARI TERSANGKA",
+    "ALASAN DOMINAN", "ITEM TIAP HARI", "BARU", "PULIH", "TREN",
 ]
+# v2.17.0 rombak P0: KELEBIHAN (sinyal utama action) + STATUS INPUT
+# (keputusan audit) ditarik ke depan (kanan NAMA RESTO) — sebelumnya
+# KELEBIHAN di posisi 4 & STATUS INPUT di 11 (hampir terakhir). Tabel
+# scorecard = prioritas tindak lanjut; sinyal action wajib terbaca dulu.
 # ⑧ tren multi-bulan: label kolom bebas (label bulan pembanding) + TREN.
 TREND_BASE_COLS = ["NAMA RESTO", "TREN"]
 

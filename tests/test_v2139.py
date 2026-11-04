@@ -333,11 +333,13 @@ class TestPopupRingkas:
         'tombol ter-render di panel pop-up' (peta hari tetap di konten
         gulir — scope findChildren-nya tetap _content)."""
         panel = _panel(_full_df().iloc[0])
-        from PySide6.QtWidgets import QLabel, QPushButton
-        day_cells = [l for l in panel._content.findChildren(QLabel)
-                     if l.toolTip().startswith("Hari ")]
+        from PySide6.QtWidgets import QDoubleSpinBox, QPushButton
+        # v2.16.0: peta hari kini EDITABLE — QDoubleSpinBox per hari (bukan
+        # QLabel read-only). Sel ber-tooltip 'Hari N ...' = peta hari.
+        day_cells = [s for s in panel._content.findChildren(QDoubleSpinBox)
+                     if s.toolTip().startswith("Hari ")]
         assert len(day_cells) >= 30, "peta hari 1-31 harus utuh"
-        red = [l for l in day_cells if "#dc2626" in (l.styleSheet() or "")]
+        red = [s for s in day_cells if "#dc2626" in (s.styleSheet() or "")]
         assert red, "hari tersangka harus disorot merah"
         btns = [b.text() for b in panel.findChildren(QPushButton)]
         assert any("Masuk Follow Up" in t for t in btns)
@@ -386,4 +388,4 @@ class TestVersi:
         from waste_anomaly.utils import load_config
         from ui.shared import APP_VERSION
         cfg = load_config()
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.15.0"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.17.0"

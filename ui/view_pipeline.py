@@ -288,7 +288,10 @@ class PipelineView(QWidget):
             f"Log proses ({PIPELINE_N_STAGES} stage) tampil di sini saat "
             "pipeline berjalan…")
         l3.addWidget(self._log, 1)
-        page_lay.addWidget(c3, 1)
+        # v2.17.0 rombak P0: c3 (Ringkasan/Log) addWidget DITUNDA —
+        # ditambahkan SETELAH c4 (Threshold) di bawah. Alur baru: Input →
+        # Parameter → Threshold Config → Run & Log Results (config sebelum
+        # hasil, bukan sebaliknya).
 
         # ===== Card 4: Threshold & Konfigurasi =====
         c4 = Card(self)
@@ -356,12 +359,19 @@ class PipelineView(QWidget):
         scroll.setWidget(inner)
         l4.addWidget(scroll, 1)
         page_lay.addWidget(c4, 1)
+        # v2.17.0 rombak P0: c3 (Ringkasan/Log) ditambahkan SETELAH c4
+        # (Threshold) — alur config-sebelum-hasil. Sebelumnya c4 di akhir
+        # (setelah hasil) → user harus scroll ke bawah utk atur threshold
+        # padahal itu wajib SEBELUM menjalankan pipeline.
+        page_lay.addWidget(c3, 1)
 
         # Log line dari ctx → panel log (worker progress juga lewat sini)
         ctx.log_line.connect(self._append_log)
-        # Set split: ringkasan/log card mendapat ruang lebih besar
-        page_lay.setStretch(2, 3)
-        page_lay.setStretch(3, 2)
+        # v2.17.0 rombak P0: setelah reorder — index 2 = c4 Threshold
+        # (stretch 2, form konfig), index 3 = c3 Ringkasan/Log (stretch 3,
+        # ruang log tumbuh lebih besar). Sebelumnya index 2=c3, 3=c4.
+        page_lay.setStretch(2, 2)
+        page_lay.setStretch(3, 3)
 
     # ------------------------------------------------------------
     # INPUT

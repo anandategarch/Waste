@@ -54,16 +54,27 @@ from waste_anomaly.period_history import (
 
 from .shared import fmt_id, friendly_file_error
 from .state import AppContext
-from .widgets import Card, DataTable, SortControl, WLabel, busy_feedback
+from .icons import make_qicon
+from .widgets import Card, DataTable, SortControl, WLabel, busy_feedback, icon_header
 from .workers import HistoryWorker
 
+# v2.17.0 P0-E: ikon vektor per sub-tab (sebelumnya emoji 📊🧾🏬📦🆕📉).
+_PAGE_ICONS = {
+    "summary": "chart_bar",
+    "per_jenis": "receipt",
+    "branch": "store",
+    "items": "package",
+    "new_items": "sparkle",
+    "gone_items": "trending_down",
+}
+
 _PAGES = [
-    ("summary", "📊 Ringkasan"),
-    ("per_jenis", "🧾 Per Jenis"),
-    ("branch", "🏬 Cabang Mover"),
-    ("items", "📦 Item Mover"),
-    ("new_items", "🆕 Item Baru"),
-    ("gone_items", "📉 Item Hilang"),
+    ("summary", "Ringkasan"),
+    ("per_jenis", "Per Jenis"),
+    ("branch", "Cabang Mover"),
+    ("items", "Item Mover"),
+    ("new_items", "Item Baru"),
+    ("gone_items", "Item Hilang"),
 ]
 
 # key dict hasil compare_quantity → (df, label) — kontrak TERKUNCI test
@@ -362,14 +373,14 @@ class PeriodeView(QWidget):
         cl = QVBoxLayout(card)
         cl.setContentsMargins(12, 10, 12, 10)
         cl.setSpacing(6)
-        ttl = WLabel("🔀 Banding Periode — bulan berjalan vs bulan-bulan sebelumnya", card)
-        ttl.setObjectName("cardTitle")
-        ttl.setToolTip(
-            "Tambahkan file rekap bulan lalu (1 file = 1 bulan, format REKAP "
-            "MENTAH — cukup kolom nama barang, resto, satuan & hari 1-31, "
-            "tanpa angka BOM). Nama bulan dibaca otomatis dari nama file; "
-            "klik 2× baris untuk mengoreksi. Semua file dimuat di latar "
-            "belakang — aplikasi tetap responsif.")
+        ttl = icon_header(
+            "Banding Periode — bulan berjalan vs bulan-bulan sebelumnya",
+            "shuffle", card,
+            tooltip=("Tambahkan file rekap bulan lalu (1 file = 1 bulan, format REKAP "
+                     "MENTAH — cukup kolom nama barang, resto, satuan & hari 1-31, "
+                     "tanpa angka BOM). Nama bulan dibaca otomatis dari nama file; "
+                     "klik 2× baris untuk mengoreksi. Semua file dimuat di latar "
+                     "belakang — aplikasi tetap responsif."))
         cl.addWidget(ttl)
 
         row = QWidget(card)
@@ -441,8 +452,9 @@ class PeriodeView(QWidget):
         cl = QVBoxLayout(card)
         cl.setContentsMargins(12, 10, 12, 10)
         cl.setSpacing(6)
-        ttl = WLabel("📈 Hasil Banding (kuantiti — tanpa angka BOM)", card)
-        ttl.setObjectName("cardTitle")
+        ttl = icon_header(
+            "Hasil Banding (kuantiti — tanpa angka BOM)",
+            "trending_up", card)
         cl.addWidget(ttl)
 
         ctrl = QWidget(card)
@@ -513,7 +525,11 @@ class PeriodeView(QWidget):
             pl.setContentsMargins(12, 10, 12, 10)
             pl.setSpacing(6)
             pl.addWidget(table, 1)
-            self._tabs.addTab(page, title)
+            idx = self._tabs.addTab(page, title)
+            # v2.17.0 P0-E: ikon vektor sub-tab (sebelumnya emoji di judul).
+            icon_name = _PAGE_ICONS.get(key)
+            if icon_name:
+                self._tabs.setTabIcon(idx, make_qicon(icon_name, 16))
         cl.addWidget(self._tabs, 1)
         return card
 

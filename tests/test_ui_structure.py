@@ -50,11 +50,13 @@ DATA_VIEWS = {
     "view_periode.py": "PeriodeView",
 }
 
-# v2.9.0: 3 → 4 tab (+ Hari Mencurigakan); v2.12.0: 4 → 5 (+ Follow Up,
-# tepat setelah Anomali — alur buruan → tindak lanjut)
+# v2.9.0: 3 → 4 tab (+ Hari Mencurigakan); v2.12.0: 4 → 5 (+ Follow Up);
+# v2.17.0 rombak P0: urutan alur analisa — Pipeline index 0 (entry point
+# muat data), Anomali index 1, drill Hari/Scorecard/Banding index 2-4,
+# Follow Up (tindak lanjut) terakhir index 5.
 VIEW_TAB_TITLES = [
-    "Anomali", "Follow Up", "Hari Mencurigakan", "Scorecard Cabang",
-    "Banding Periode", "Pipeline",
+    "Pipeline", "Anomali", "Hari Mencurigakan", "Scorecard Cabang",
+    "Banding Periode", "Follow Up",
 ]
 
 

@@ -34,9 +34,10 @@ REMOVED_VIEW_FILES = [
     "view_jelajah.py", "view_waktu.py",                  # v2.8.1
 ]
 REMOVED_TAB_TITLES = ["Uang", "Peer", "Kualitas Data", "Jelajah", "Waktu"]
-EXPECTED_TAB_TITLES = ["Anomali", "Follow Up", "Hari Mencurigakan",
+# v2.17.0 rombak P0: Pipeline (entry point) index 0, Follow Up terakhir.
+EXPECTED_TAB_TITLES = ["Pipeline", "Anomali", "Hari Mencurigakan",
                         "Scorecard Cabang", "Banding Periode",
-                        "Pipeline"]  # v2.13.1: +Scorecard Cabang
+                        "Follow Up"]  # v2.13.1: +Scorecard Cabang
 
 
 def _qapp():
@@ -130,8 +131,8 @@ class TestHapusLimaView:
 class TestTabelAnomaliPenuhDanPopup:
     def _view(self):
         win = _make_window()
-        # Anomali = tab 0 (default) — view sudah ter-instantiate
-        anom = win._views[0][1]
+        # v2.17.0 rombak: Anomali kini di tab 1 (tab 0 = Pipeline entry point).
+        anom = win._views[1][1]
         return win, anom
 
     def test_judul_kartu_satu_baris_pendek(self):

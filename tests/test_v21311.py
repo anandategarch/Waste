@@ -179,10 +179,12 @@ def _df_scorecard(n_resto: int = 4, n_rows: int | None = None,
 
 class TestD4FirstRun:
     def test_first_run_label_arah_terrender(self, tmp_path, monkeypatch):
-        """D4: MainWindow baru (belum ada data) → tab awal Anomali
-        TER-RENDER tanpa menunggu klik: label 'Belum ada data — buka
-        tab Pipeline, pilih workbook, jalankan.' + tabel kosong. Dulu:
-        currentChanged terpasang SETELAH addTab → tab 0 tak pernah
+        """D4: MainWindow baru (belum ada data) → label 'Belum ada data —
+        buka tab Pipeline, pilih workbook, jalankan.' + tabel kosong.
+        v2.17.0 rombak: tab 0 kini Pipeline (entry point), Anomali di tab 1
+        — first-run TIDAK lagi mendarat di Anomali. Beralih ke tab Anomali
+        → on_shown → refresh → empty-state ter-render (CTA arah Pipeline).
+        Dulu: currentChanged terpasang SETELAH addTab → tab 0 tak pernah
         on_shown → tabel+label kosong tanpa CTA (terlihat hang; VLM QA
         konfirmasi layar first-run tanpa empty-state)."""
         import ui.app as ap
@@ -192,9 +194,14 @@ class TestD4FirstRun:
         win = ap.MainWindow()
         win.show()
         app.processEvents()
-        anom = win._views[0][1]
+        # v2.17.0: first-run = Pipeline (tab 0); beralih ke Anomali (tab 1)
+        # utk memicu on_shown → refresh → empty-state.
+        win._tabs.setCurrentIndex(1)
+        app.processEvents()
+        anom = win._views[1][1]
         assert "Belum ada data" in anom._lbl_count.text(), (
-            "label arah first-run harus ter-render sejak awal (audit D4)")
+            "label arah Anomali empty-state harus ter-render setelah tab "
+            "dibuka (audit D4)")
         assert "Pipeline" in anom._lbl_count.text(), "CTA mengarah ke Pipeline"
         assert anom._table.model().rowCount() == 0
         assert anom._dirty is False, (

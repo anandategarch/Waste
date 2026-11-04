@@ -53,7 +53,7 @@ from waste_anomaly.priority import reason_share
 from .models import build_column_tooltips
 from .shared import fmt_id
 from .state import AppContext
-from .widgets import Card, DataTable, KpiCard, WLabel, busy_feedback
+from .widgets import Card, DataTable, KpiCard, WLabel, busy_feedback, icon_header
 
 # Kolom tabel utama = SCORECARD_COLS (insights) — urutan PERSIS.
 # (v2.13.8 gel-C: konstanta SC_COLS lokal DIHAPUS — tak pernah dirujuk;
@@ -244,10 +244,9 @@ class ScorecardView(QWidget):
         hcl = QHBoxLayout(head)
         hcl.setContentsMargins(0, 0, 0, 0)
         hcl.setSpacing(8)
-        title = WLabel(
-            "🏢 Scorecard Cabang — urutan kunjungan audit (klik 2× = "
-            "rincian cabang)", head)
-        title.setObjectName("cardTitle")
+        title = icon_header(
+            "Scorecard Cabang — urutan kunjungan audit (klik 2× = "
+            "rincian cabang)", "building", head)
         hcl.addWidget(title)
         hcl.addStretch(1)
         self._btn_expand = QPushButton("⤢ Perbesar Tabel", head)
@@ -297,14 +296,13 @@ class ScorecardView(QWidget):
         ml = QVBoxLayout(money)
         ml.setContentsMargins(12, 10, 12, 10)
         ml.setSpacing(6)
-        mt = WLabel("💰 Top Kerugian vs Tipikal — per baris (ranking uang)",
-                    money)
-        mt.setObjectName("cardTitle")
-        mt.setToolTip(
-            "Baris teratas berdasar KELEBIHAN (TOTAL − tipikal/median "
-            "cabang lain, hanya cabang yang memang ber-waste; peer < 3 = "
-            "tak dihitung). SATUAN tampil — campuran GR/PCS jujur "
-            "(funnel SATUAN bisa memilah).")
+        mt = icon_header(
+            "Top Kerugian vs Tipikal — per baris (ranking uang)",
+            "coins", money,
+            tooltip=("Baris teratas berdasar KELEBIHAN (TOTAL − tipikal/median "
+                     "cabang lain, hanya cabang yang memang ber-waste; peer < 3 = "
+                     "tak dihitung). SATUAN tampil — campuran GR/PCS jujur "
+                     "(funnel SATUAN bisa memilah)."))
         ml.addWidget(mt)
         self._lbl_money = WLabel("", money)
         self._lbl_money.setObjectName("hint")
@@ -327,13 +325,12 @@ class ScorecardView(QWidget):
         wl = QVBoxLayout(wcard)
         wl.setContentsMargins(12, 10, 12, 10)
         wl.setSpacing(6)
-        wt = WLabel("📅 Pola Hari Kalender (Senin–Minggu)", wcard)
-        wt.setObjectName("cardTitle")
-        wt.setToolTip(
-            "Total waste per HARI KALENDER asli — dibaca dari nama bulan "
-            "file (mis. 'SEPTEMBER_2026'). Mengganti proxy hari%7 yang "
-            "tak sebanding antar bulan (1 Agustus 2026 = Sabtu, "
-            "1 September 2026 = Selasa).")
+        wt = icon_header(
+            "Pola Hari Kalender (Senin–Minggu)", "calendar", wcard,
+            tooltip=("Total waste per HARI KALENDER asli — dibaca dari nama bulan "
+                     "file (mis. 'SEPTEMBER_2026'). Mengganti proxy hari%7 yang "
+                     "tak sebanding antar bulan (1 Agustus 2026 = Sabtu, "
+                     "1 September 2026 = Selasa)."))
         wl.addWidget(wt)
         self._lbl_weekday = WLabel("", wcard)
         self._lbl_weekday.setObjectName("hint")
@@ -357,12 +354,11 @@ class ScorecardView(QWidget):
         dql = QVBoxLayout(dqcard)
         dql.setContentsMargins(12, 10, 12, 10)
         dql.setSpacing(6)
-        dqt = WLabel("🧪 Kualitas Data — pemeriksaan otomatis", dqcard)
-        dqt.setObjectName("cardTitle")
-        dqt.setToolTip(
-            "Hasil pemeriksaan data quality (dulu hanya di export/Excel).\n"
-            "warning = patut dibersihkan (satuan kembar, kapitalisasi beda);\n"
-            "info = konteks normal (baris placeholder, Benford).")
+        dqt = icon_header(
+            "Kualitas Data — pemeriksaan otomatis", "flask", dqcard,
+            tooltip=("Hasil pemeriksaan data quality (dulu hanya di export/Excel).\n"
+                     "warning = patut dibersihkan (satuan kembar, kapitalisasi beda);\n"
+                     "info = konteks normal (baris placeholder, Benford)."))
         dql.addWidget(dqt)
         self._lbl_dq = WLabel("", dqcard)
         self._lbl_dq.setObjectName("hint")
@@ -379,15 +375,14 @@ class ScorecardView(QWidget):
         scl = QVBoxLayout(scard)
         scl.setContentsMargins(12, 10, 12, 10)
         scl.setSpacing(6)
-        st = WLabel("🔗 Hari Sistemik — naik serentak di banyak cabang",
-                    scard)
-        st.setObjectName("cardTitle")
-        st.setToolTip(
-            "Hari dengan ≥ 3 cabang (atau 15%) mengalami waste ≥ 2× "
-            "median hariannya sendiri → kemungkinan masalah BERSAMA "
-            "(pengiriman / hari besar / POS), bukan kecurigaan satu "
-            "cabang. Hari tersangka yang bertepatan hari sistemik perlu "
-            "ditafsir ulang.")
+        st = icon_header(
+            "Hari Sistemik — naik serentak di banyak cabang",
+            "link", scard,
+            tooltip=("Hari dengan ≥ 3 cabang (atau 15%) mengalami waste ≥ 2× "
+                     "median hariannya sendiri → kemungkinan masalah BERSAMA "
+                     "(pengiriman / hari besar / POS), bukan kecurigaan satu "
+                     "cabang. Hari tersangka yang bertepatan hari sistemik perlu "
+                     "ditafsir ulang."))
         scl.addWidget(st)
         self._lbl_sistemik = WLabel("", scard)
         self._lbl_sistemik.setObjectName("hint")
@@ -411,15 +406,14 @@ class ScorecardView(QWidget):
         tl2 = QVBoxLayout(tcard)
         tl2.setContentsMargins(12, 10, 12, 10)
         tl2.setSpacing(6)
-        tt = WLabel("📈 Tren Bulanan per Cabang — butuh ≥ 2 bulan pembanding",
-                    tcard)
-        tt.setObjectName("cardTitle")
-        tt.setToolTip(
-            "Total waste per cabang tiap bulan pembanding + bulan "
-            "berjalan + TREN (vs pembanding terbaru):\n"
-            "↗ Naik / ↘ Turun (batas ±10%), → Stabil, Baru, Pulih.\n"
-            "Menambah file bulan lalu di tab Banding Periode otomatis "
-            "mengisi kartu ini.")
+        tt = icon_header(
+            "Tren Bulanan per Cabang — butuh ≥ 2 bulan pembanding",
+            "trending_up", tcard,
+            tooltip=("Total waste per cabang tiap bulan pembanding + bulan "
+                     "berjalan + TREN (vs pembanding terbaru):\n"
+                     "↗ Naik / ↘ Turun (batas ±10%), → Stabil, Baru, Pulih.\n"
+                     "Menambah file bulan lalu di tab Banding Periode otomatis "
+                     "mengisi kartu ini."))
         tl2.addWidget(tt)
         self._lbl_trend = WLabel("", tcard)
         self._lbl_trend.setObjectName("hint")

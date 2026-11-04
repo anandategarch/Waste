@@ -48,7 +48,7 @@ from .state import AppContext
 from .followup_table import FollowupTableMixin
 from .models import COLUMN_TOOLTIPS
 from .view_anomali import DetailDialog, _HF_COLS
-from .widgets import Card, DataTable, KpiCard, SortControl, WLabel, busy_feedback
+from .widgets import Card, DataTable, KpiCard, SortControl, WLabel, busy_feedback, icon_header
 from waste_anomaly.period_history import (
     day_evidence_vs_history,
     month_sort_key,
@@ -61,12 +61,17 @@ from waste_anomaly.rekap_import import SRC_ROW_COL
 # dimuat (filter `c in df.columns` di bawah) — tanpa pembanding, tabel
 # tampil persis seperti v2.9.0.
 TABLE_COLS = [
-    "ANOMALY SCORE", "NAMA RESTO", "NAMA BARANG", "JENIS", "KETERANGAN",
-    "HARI TERSANGKA", "NILAI HARI TERSANGKA", "TIPIKAL CABANG LAIN",
-    "RASIO VS CABANG LAIN", "SHARE HARI TERSANGKA",
+    "ANOMALY SCORE", "NAMA RESTO", "NAMA BARANG",
+    "HARI TERSANGKA", "NILAI HARI TERSANGKA", "RASIO VS CABANG LAIN",
+    "SHARE HARI TERSANGKA", "TIPIKAL CABANG LAIN",
+    "JENIS", "KETERANGAN",
     "NILAI BULAN LALU", "RASIO VS BULAN LALU", "TIPIKAL BEBERAPA BULAN",
     "ALASAN HARI",
 ]
+# v2.17.0 rombak P0: HARI TERSANGKA + NILAI + RASIO + SHARE ditarik ke depan
+# (kanan NAMA BARANG) — sebelumnya HARI TERSANGKA di posisi 6 setelah
+# JENIS/KETERANGAN. Ini inti tab "Hari Mencurigakan": hari tersangka +
+# rasio harus terbaca pertama, bukan identitas. JENIS/KETERANGAN mundur.
 
 # v2.12.4: hint '💡 Bukti hari = ...' DIHAPUS (permintaan user: kalimat
 # penjelas panjang dihapus dari UI). Penjelasan istilah tetap tersedia di
@@ -125,8 +130,9 @@ class HariView(FollowupTableMixin, QWidget):
         hcl = QHBoxLayout(head)
         hcl.setContentsMargins(0, 0, 0, 0)
         hcl.setSpacing(8)
-        title = WLabel("📅 Hari Mencurigakan — potensi salah angka per tanggal (1–31)", head)
-        title.setObjectName("cardTitle")
+        title = icon_header(
+            "Hari Mencurigakan — potensi salah angka per tanggal (1–31)",
+            "calendar", head)
         hcl.addWidget(title)
         hcl.addStretch(1)
         self._btn_expand = QPushButton("⤢ Perbesar Tabel", head)

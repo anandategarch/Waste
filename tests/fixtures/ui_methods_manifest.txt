@@ -22,6 +22,8 @@ state.py::AppContext
 view_anomali.py::AnomaliView
 view_anomali.py::DetailDialog
 view_anomali.py::DetailPanel
+view_anomali.py::_NoWheelFilter
+view_anomali.py::fmt_color_styled_write_day_value
 view_anomali.py::_rec_val
 view_anomali.py::_summary_rows
 view_followup.py::FollowUpView
@@ -38,6 +40,7 @@ widgets.py::DataTable
 widgets.py::FilterHeader
 widgets.py::KpiCard
 widgets.py::KpiStrip
+widgets.py::SortControl
 widgets.py::StatusChip
 widgets.py::WLabel
 widgets.py::_HeaderFilterMenu
@@ -47,8 +50,10 @@ widgets.py::_paint_funnel
 widgets.py::busy_feedback
 widgets.py::_menu_value_fmt
 widgets.py::status_chip_for
+widgets.py::icon_header
 workers.py::ExportWorker
 workers.py::HistoryWorker
 workers.py::PipelineWorker
 workers.py::RekapImportWorker
+workers.py::SaveEditsWorker
 workers.py::_extra_sheets

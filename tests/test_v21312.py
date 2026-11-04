@@ -628,35 +628,28 @@ class TestTombolKolomLengkap:
 class TestPetaHariDesimal:
     def test_nilai_tooltip_subset_teks_sel(self):
         """A12: sel peta hari & tooltip MEMAKAI format sama (fmt_cell
-        default 2-desimal) — nilai di tooltip ⊆ teks sel (dulu sel
-        fmt_cell(v,0) '8' vs tooltip fmt_cell(v,1) '7,5' — dua angka
-        beda utk data sama di dua tempat bersebelahan)."""
-        from PySide6.QtWidgets import QLabel
+        default 2-desimal) — nilai di tooltip sesuai nilai sel (dulu sel
+        read-only membulatkan '8' (fmt_cell(v,0)) vs tooltip '7,5'
+        (fmt_cell(v,1)) — dua angka beda utk data sama di dua tempat
+        bersebelahan). v2.16.0: peta hari kini EDITABLE (QDoubleSpinBox) —
+        nilai spinbox = nilai asli (presisi penuh, decimals=2), tooltip
+        'Nilai asli: X' konsisten dgn nilai spinbox."""
+        from PySide6.QtWidgets import QDoubleSpinBox
         panel = _panel(_rec_desimal())
-        cells = [c for c in panel._content.findChildren(QLabel)
+        cells = [c for c in panel._content.findChildren(QDoubleSpinBox)
                  if c.toolTip().startswith("Hari ")]
         assert cells, "sel peta hari tak ditemukan"
-        checked = 0
-        for cell in cells:
-            tip = cell.toolTip()  # "Hari N: nilai"
-            if ":" not in tip:
-                continue
-            val = tip.split(":", 1)[1].strip()
-            if val in ("kosong", ""):
-                continue
-            # nilai tooltip harus muncul DI DALAM teks sel yang sama
-            assert val in cell.text(), (
-                f"tooltip '{val}' ≠ sel '{cell.text()}' (audit A12)")
-            checked += 1
-        assert checked > 0
-        # nilai berpecahan 7,5 HARUS tampil utuh & SAMA di sel & tooltip
-        # (fmt_cell default 2-desimal: '7,50'; dulu sel '8' vs tooltip
-        # '7,5' — dua angka beda utk data sama)
-        tip3 = [c.toolTip() for c in cells
-                if c.toolTip().startswith("Hari 3:")]
-        assert tip3 and tip3[0] == "Hari 3: 7,50", tip3
-        cell3 = [c for c in cells if c.toolTip() == "Hari 3: 7,50"][0]
-        assert "7,50" in cell3.text(), cell3.text()
+        # Hari 3 = 7,5 — spinbox value HARUS 7.5 (presisi penuh, BUKAN
+        # membulatkan ke 8 seperti _day_map read-only dulu — bug A12).
+        day3 = [c for c in cells if "Hari 3" in c.toolTip()]
+        assert day3, "sel hari 3 tak ditemukan"
+        assert abs(day3[0].value() - 7.5) < 0.01, day3[0].value()
+        # Tooltip menyebut 'Nilai asli: 7,50' (fmt_cell 2-desimal) —
+        # konsisten dgn nilai spinbox (7.5 ≈ 7,50).
+        assert "7,50" in day3[0].toolTip(), day3[0].toolTip()
+        # Semua sel: nilai spinbox non-negatif (range 0..1e9, anti absurd).
+        for c in cells:
+            assert 0.0 <= c.value() <= 1e9, c.value()
 
 
 # ============================================================
@@ -761,7 +754,10 @@ class TestPinSumber:
         assert 'critical(self, "Input Error"' not in src_vpl
         assert 'critical(self, "Input Belum Valid"' in src_vpl
         src_app = (UI / "app.py").read_text(encoding="utf-8")
-        assert '"💾 Ekspor Excel"' in src_app
+        # v2.17.0 rombak P0-E: tombol Ekspor kini pakai ikon vektor
+        # (make_qicon("save")) + teks "Ekspor Excel" (tanpa emoji 💾).
+        assert 'make_qicon("save"' in src_app
+        assert '"Ekspor Excel"' in src_app
         assert '"Export Selesai"' not in src_app
         assert '"Ekspor Selesai"' in src_app
         src_fu = (UI / "view_followup.py").read_text(encoding="utf-8")

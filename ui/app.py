@@ -24,10 +24,11 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QIcon, QKeySequence
+from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -52,6 +53,7 @@ from .shared import (
 )
 from .state import AppContext
 from .theme import QSS
+from .icons import Icon, make_qicon
 from .view_anomali import AnomaliView
 from .view_followup import FollowUpView
 from .view_hari import HariView
@@ -267,15 +269,27 @@ class MainWindow(QMainWindow):
     def _build_toolbar(self) -> None:
         bar = self.addToolBar("Utama")
         bar.setMovable(False)
-        bar.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        title = QLabel(f"  📊 {APP_TITLE}  ")
+        # v2.17.0 P0-E: ToolButtonTextBesideIcon — ikon vektor + teks
+        # (sebelumnya TextOnly + emoji 📊/💾/❓ = sup-emoji warna).
+        bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        # Judul app: ikon chart_bar + teks (bukan emoji 📊).
+        title_host = QWidget()
+        thl = QHBoxLayout(title_host)
+        thl.setContentsMargins(8, 0, 8, 0)
+        thl.setSpacing(6)
+        title_icon = Icon("chart_bar", 18, QColor("#f1f5f9"))
+        thl.addWidget(title_icon)
+        title = QLabel(APP_TITLE)
         title.setStyleSheet("color:#f1f5f9; font-size:15px; font-weight:700; background:transparent;")
-        bar.addWidget(title)
+        thl.addWidget(title)
+        bar.addWidget(title_host)
         sep = QWidget()
         sep.setFixedWidth(12)
         bar.addWidget(sep)
 
-        act_export = QAction("💾 Ekspor Excel", self)
+        # v2.17.0 P0-E: ikon vektor save (sebelumnya emoji 💾).
+        act_export = QAction(make_qicon("save", 16, QColor("#f1f5f9")),
+                             "Ekspor Excel", self)
         act_export.setToolTip(
             "Simpan laporan Excel (6 sheet inti + sheet analisa)\n"
             "Aktif setelah pipeline menghasilkan data (tab Pipeline).")
@@ -294,7 +308,9 @@ class MainWindow(QMainWindow):
         bar.addAction(act_export)
         self._act_export = act_export
 
-        act_help = QAction("❓ Bantuan", self)
+        # v2.17.0 P0-E: ikon vektor help (sebelumnya emoji ❓).
+        act_help = QAction(make_qicon("help", 16, QColor("#f1f5f9")),
+                           "Bantuan", self)
         act_help.triggered.connect(self._show_help)
         # v2.13.10 (gel-1 D1): shortcut F1 — didokumentasikan di README,
         # banner .bat, dan Bantuan sendiri, tapi TIDAK pernah terpasang
@@ -316,30 +332,35 @@ class MainWindow(QMainWindow):
         # pipeline & export; sheet analisa temporal/money/DQ tetap diexport.
         # v2.12.0: 3 → 5 — tab Follow Up (shortlist centangan ✓, setelah
         # Anomali — alur buruan → tindak lanjut).
+        # v2.17.0 (rombak P0 — urutan alur analisa): Pipeline (muat data)
+        # di index 0 = entry point, Anomali (analisa utama) index 1,
+        # drill-down Hari/Scorecard/Banding index 2-4, Follow Up (tindak
+        # lanjut) terakhir index 5. Sebelumnya Pipeline di index 5 — user
+        # harus tab ke akhir dulu baru bisa muat data (alur terbalik).
         self._views: list[tuple[str, QWidget]] = [
+            ("Pipeline", PipelineView(self.ctx)),
             ("Anomali", AnomaliView(self.ctx)),
-            ("Follow Up", FollowUpView(self.ctx)),
             ("Hari Mencurigakan", HariView(self.ctx)),
             # v2.13.1: tab Scorecard Cabang (urutan kunjungan audit +
             # kartu pendukung: top kerugian, pola hari kalender, hari
             # sistemik) — setelah Hari Mencurigakan, sebelum Banding.
             ("Scorecard Cabang", ScorecardView(self.ctx)),
             ("Banding Periode", PeriodeView(self.ctx)),
-            ("Pipeline", PipelineView(self.ctx)),
+            ("Follow Up", FollowUpView(self.ctx)),
         ]
         for name, view in self._views:
             self._tabs.addTab(view, name)
         # v2.12.0: ref view Follow Up (badge jumlah baris di judul tab).
-        self._fu_view = self._views[1][1]
+        # v2.17.0: Follow Up sekarang di index 5 (sebelumnya 1).
+        self._fu_view = self._views[5][1]
         self._update_followup_badge()
         self._tabs.currentChanged.connect(self._on_tab_changed)
         # v2.13.11 (gel-2 D4): first-run — currentChanged terpasang SETELAH
-        # addTab, jadi tab 0 (Anomali) TIDAK PERNAH memicu on_shown: tabel +
-        # label arah kosong tanpa CTA ke Pipeline (terlihat seperti hang;
-        # audit D4 + VLM QA konfirmasi layar first-run tanpa empty-state).
-        # Picu SEKALI pasca-wiring → AnomaliView.refresh() terjadi → label
-        # "Belum ada data — buka tab Pipeline…" ter-render sejak awal.
-        # (Kontrak lazy-render tetap: pindah tab → on_shown per-view.)
+        # addTab, jadi tab 0 TIDAK PERNAH memicu on_shown otomatis. v2.17.0:
+        # tab 0 kini Pipeline (entry point muat data) — picu SEKALI pasca-
+        # wiring supaya PipelineView.on_shown() jalan sejak awal (tombol
+        # Mulai/Olah siap, bukan layar kosong). Kontrak lazy-render tetap:
+        # pindah tab → on_shown per-view.
         self._on_tab_changed(self._tabs.currentIndex())
         # Anti-terpotong: bila tab bar sempit, teks di-elide dengan '…'
         # (konvensi jelas) + tombol panah scroll — TIDAK pernah dipotong

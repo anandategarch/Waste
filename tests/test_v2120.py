@@ -708,7 +708,7 @@ class TestV2120MainWindow:
                 win = MainWindow()
                 try:
                     idx = win._tabs.indexOf(win._fu_view)
-                    assert idx == 1  # tepat setelah Anomali
+                    assert idx == 5  # v2.17.0: Follow Up di tab 5 (terakhir)
                     assert win._tabs.tabText(idx) == "Follow Up"
                     fps = fingerprint_series(_df_fu())
                     win.ctx.set_dataset(_df_fu(), {"key_akhir": 31})
