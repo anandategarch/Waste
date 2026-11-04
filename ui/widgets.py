@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QFrame,
+    QComboBox,
     QHeaderView,
     QHBoxLayout,
     QLabel,
@@ -1431,4 +1432,103 @@ class StatusChip(QFrame):
 def status_chip_for(status: str, parent=None) -> StatusChip:
     fg, bg = STATUS_COLORS.get(status, ("#334155", "#f1f5f9"))
     return StatusChip(status, fg, bg, parent)
+
+
+# ============================================================
+# v2.16.1 — SortControl reusable (permintaan user: "tombol sort di
+# banding periode & disemua tab juga ada tombol sort nya")
+# ============================================================
+
+class SortControl(QWidget):
+    """Kontrol sort reusable: combo kolom + toggle arah (Naik/Turun).
+
+    Dipasang di toolbar view. Saat user pilih kolom / toggle arah, sort
+    tabel terhubung langsung (DataTable.sortByColumn). Kolom di-refresh
+    otomatis saat tabel berganti dataset (refresh_columns).
+
+    DataTable sendiri sudah setSortingEnabled(True) — klik header juga
+    sort. Kontrol ini memberi akses EKSPLISIT (permintaan user: tombol
+    sort terlihat, bukan tersembunyi di klik header).
+    """
+
+    def __init__(self, table, parent=None) -> None:
+        super().__init__(parent)
+        self._table_ref = weakref.ref(table) if table is not None else None
+        self._order = Qt.SortOrder.DescendingOrder
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        lbl = QLabel("Sortir:", self)
+        lbl.setStyleSheet("color:#64748b; font-weight:600;")
+        lay.addWidget(lbl)
+        self._cb = QComboBox(self)
+        self._cb.setMinimumWidth(150)
+        self._cb.setToolTip(
+            "Pilih kolom utk mengurutkan tabel.\n"
+            "(Klik judul kolom tabel juga bisa sort langsung.)")
+        self._cb.currentIndexChanged.connect(self._apply)
+        lay.addWidget(self._cb)
+        self._dir = QPushButton("↓", self)
+        self._dir.setFixedWidth(34)
+        self._dir.setToolTip(
+            "Klik utk balik arah sort.\n↓ = Turun (besar→kecil / Z→A)\n"
+            "↑ = Naik (kecil→besar / A→Z)")
+        self._dir.setStyleSheet(
+            "QPushButton { font-weight:700; font-size:14px; "
+            "padding:2px 0; }")
+        self._dir.clicked.connect(self._toggle_dir)
+        lay.addWidget(self._dir)
+
+    def refresh_columns(self) -> None:
+        """Isi combo dgn kolom VISIBLE tabel saat ini. Dipanggil view
+        setelah set_dataframe supaya pilihan sort selalu relevan."""
+        table = self._table_ref() if self._table_ref else None
+        if table is None:
+            return
+        model = table.model()
+        df = getattr(model, "dataframe", None)
+        if df is None:
+            return
+        visible = getattr(table, "_visible_cols", None)
+        cols = list(visible) if visible else list(df.columns)
+        # Sembunyikan kolom internal (__FP, __SRC_ROW, ✓)
+        cols = [c for c in cols if not str(c).startswith("__")
+                and c not in ("✓",)]
+        cur = self._cb.currentData()
+        self._cb.blockSignals(True)
+        self._cb.clear()
+        self._cb.addItem("(urut default)", "")
+        for c in cols:
+            self._cb.addItem(str(c), str(c))
+        # Pertahankan pilihan bila masih ada
+        if cur:
+            idx = self._cb.findData(cur)
+            if idx >= 0:
+                self._cb.setCurrentIndex(idx)
+        self._cb.blockSignals(False)
+
+    def _toggle_dir(self) -> None:
+        self._order = (Qt.SortOrder.AscendingOrder
+                       if self._order == Qt.SortOrder.DescendingOrder
+                       else Qt.SortOrder.DescendingOrder)
+        self._dir.setText("↑" if self._order == Qt.SortOrder.AscendingOrder
+                          else "↓")
+        self._apply()
+
+    def _apply(self) -> None:
+        table = self._table_ref() if self._table_ref else None
+        if table is None:
+            return
+        col_name = self._cb.currentData()
+        if not col_name:
+            return  # "(urut default)" — biarkan tabel sortir default
+        model = table.model()
+        df = getattr(model, "dataframe", None)
+        if df is None or col_name not in df.columns:
+            return
+        idx = list(df.columns).index(col_name)
+        try:
+            table.sortByColumn(idx, self._order)
+        except Exception:  # noqa: BLE001 — sort gagal jangan crash UI
+            pass
 

@@ -265,14 +265,16 @@ def _resolve_sheet_xml_path(zip_reader: zipfile.ZipFile,
     if target is None:
         raise SourceWriteError(
             f"Relationship {r_id} (sheet {sheet_name!r}) tak ada di rels")
-    # Target relatif ke xl/ (mis. "worksheets/sheet1.xml")
+    # Target dari rels bisa: "worksheets/sheet1.xml" (relatif ke xl/),
+    # "/xl/worksheets/sheet1.xml" (absolut dgn leading slash), atau
+    # "xl/worksheets/sheet1.xml" (sudah absolut tanpa leading slash).
+    # Normalisasi: hilangkan leading slash, pastikan prefix "xl/".
+    target = target.lstrip("/")
     if not target.startswith("xl/"):
         target = f"xl/{target}"
-    # Normalisasi path (hilangkan ./ dll)
-    target = target.replace("/xl/xl/", "/xl/").replace("xl/xl/", "xl/")
-    if not target.startswith("xl/") and not target.startswith("/xl/"):
-        target = f"xl/{target}"
-    return target.lstrip("/")
+    # Hilangkan duplikasi "xl/xl/" bila terjadi (edge case rels aneh)
+    target = target.replace("xl/xl/", "xl/", 1) if target.startswith("xl/xl/") else target
+    return target
 
 
 def _replace_cell_v_xml(xml_str: str, cell_ref: str,
@@ -363,6 +365,7 @@ def write_day_edits(
     day_edits: dict[str, float | int | None],
     logger: Callable[[str], None] | None = None,
     config: dict | None = None,
+    backup: bool = True,
 ) -> dict[str, Any]:
     """Tulis koreksi nilai hari 1-31 ke baris `src_row` sheet rekap sumber.
 
@@ -374,10 +377,14 @@ def write_day_edits(
                      (sel kosong). Nilai harus numerik ≥0.
       logger       : callback pipeline-style (opsional).
       config       : config dict (opsional; default load_config()).
+      backup       : v2.16.1 — bila False, LEWATI pembuatan backup (user yakin
+                     perubahan, minta cepat). Default True (aman). Bila False,
+                     field "backup" di return = "" dan pesan error tak referensi
+                     backup (tidak ada cadangan utk pulih).
 
     Return dict:
       ok=True, sheet, src_row, cells_written, total_updated (bool),
-      total_new (float|None), backup (path str), changes (list[dict]),
+      total_new (float|None), backup (path str or ""), changes (list[dict]),
       prev_total (float|None).
 
     Raise SourceWriteError bila:
@@ -387,7 +394,7 @@ def write_day_edits(
       - hari di day_edits tak ada di header sheet
       - verifikasi post-write mismatch (tulis 'X' tapi baca 'Y')
 
-    Backup otomatis dibuat SEBELUM tulis (make_backup).
+    Backup otomatis dibuat SEBELUM tulis (make_backup) bila backup=True.
     """
     src = Path(source_path)
     # ---- VALIDASI INPUT (sebelum sentuh file) ----
@@ -432,10 +439,18 @@ def write_day_edits(
                     f"(batas wajar 1e9)")
             cleaned[day_s] = num
     _log(logger, f"[source_writer] mulai tulis {len(cleaned)} koreksi hari "
-                 f"ke baris {src_row_i} file '{src.name}'")
+                 f"ke baris {src_row_i} file '{src.name}'"
+                 + ("" if backup else " (TANPA backup — user yakin perubahan)"))
 
-    # ---- BACKUP (sebelum sentuh file) ----
-    backup = make_backup(src, logger=logger)
+    # ---- BACKUP (sebelum sentuh file) — opsional v2.16.1 ----
+    backup_path: Path | None = None
+    if backup:
+        backup_path = make_backup(src, logger=logger)
+    else:
+        _log(logger, "[source_writer] backup DILEWATI (backup=False)")
+    # Pesan seragam utk error messages: path atau fallback bila tak ada.
+    bak_msg = (str(backup_path) if backup_path is not None
+               else "(backup dilewati — TIDAK ada cadangan)")
 
     # ---- RESOLVE SHEET ----
     sheet_name, header_row_0 = _resolve_sheet(src, config=config)
@@ -577,7 +592,7 @@ def write_day_edits(
             raise SourceWriteError(
                 f"Sel {cell_ref} (hari {day_s}) tidak ditemukan di sheet XML. "
                 f"Baris mungkin tak punya sel itu (data sparse). Backup: "
-                f"{backup}. Koreksi dibatalkan — file TIDAK berubah.")
+                f"{bak_msg}. Koreksi dibatalkan — file TIDAK berubah.")
         cells_written += 1
         changes.append({
             "day": day_s,
@@ -627,7 +642,7 @@ def write_day_edits(
         raise SourceWriteError(
             f"Gagal mengganti file asli dgn hasil tulis: {exc}. "
             f"File hasil ada di {tmp_out}; asli MUNGKIN masih utuh. "
-            f"Backup: {backup}.") from exc
+            f"Backup: {bak_msg}.") from exc
     _log(logger, f"[source_writer] SIMPAN OK (via XML) — {cells_written} sel "
                  f"hari + TOTAL {'diupdate' if total_updated else 'tidak ada'}")
 
@@ -637,7 +652,7 @@ def write_day_edits(
     except Exception as exc:
         raise SourceWriteError(
             f"Gagal membuka ulang file utk verifikasi: {exc}. "
-            f"File MUNGKIN korup — backup: {backup}.") from exc
+            f"File MUNGKIN korup — backup: {bak_msg}.") from exc
     try:
         ws_v = wb_verify[sheet_name]
         vrow = ws_v.iter_rows(min_row=src_row_i, max_row=src_row_i,
@@ -647,7 +662,7 @@ def write_day_edits(
         except StopIteration:
             raise SourceWriteError(
                 f"VERIFIKASI GAGAL: baris {src_row_i} tak terbaca ulang. "
-                f"Backup: {backup}.")
+                f"Backup: {bak_msg}.")
         for ch in changes:
             xl_col = ch["xl_col"]
             got = v_vals[xl_col - 1] if xl_col - 1 < len(v_vals) else None
@@ -662,7 +677,7 @@ def write_day_edits(
                 raise SourceWriteError(
                     f"VERIFIKASI GAGAL hari {ch['day']} (sel {ch['cell_ref']}): "
                     f"tulis {want!r} tapi baca-ulang {got!r}. File MUNGKIN "
-                    f"korup — backup ada di {backup}. JANGAN pakai file ini.")
+                    f"korup — backup: {bak_msg}. JANGAN pakai file ini.")
         if total_updated and total_col is not None:
             got_t = (v_vals[total_col - 1]
                      if total_col - 1 < len(v_vals) else None)
@@ -670,11 +685,11 @@ def write_day_edits(
                 if abs(float(got_t) - float(total_new)) > 1e-9:
                     raise SourceWriteError(
                         f"VERIFIKASI TOTAL GAGAL: tulis {total_new!r} tapi "
-                        f"baca-ulang {got_t!r}. Backup: {backup}.")
+                        f"baca-ulang {got_t!r}. Backup: {bak_msg}.")
             else:
                 raise SourceWriteError(
                     f"VERIFIKASI TOTAL GAGAL: baca-ulang non-numerik "
-                    f"{got_t!r}. Backup: {backup}.")
+                    f"{got_t!r}. Backup: {bak_msg}.")
     finally:
         wb_verify.close()
     _log(logger, f"[source_writer] verifikasi post-write OK — semua sel "
@@ -688,6 +703,6 @@ def write_day_edits(
         "total_updated": total_updated,
         "total_new": total_new,
         "prev_total": prev_total,
-        "backup": str(backup),
+        "backup": str(backup_path) if backup_path is not None else "",
         "changes": changes,
     }

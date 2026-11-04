@@ -266,3 +266,44 @@ class RekapImportWorker(QThread):
         except Exception as e:  # noqa: BLE001 — error ke UI, bukan crash thread
             self.failed.emit(f"{type(e).__name__}: {e}",
                              traceback.format_exc())
+
+
+class SaveEditsWorker(QThread):
+    """v2.16.1 — tulis koreksi hari ke file Excel di background thread.
+
+    MASALAH: write_day_edits di UI thread membekukan aplikasi ~2 detik
+    (file 10MB) → "Not Responding". User: "percepat proses revisi
+    kuantiti nya? yang sekarang masih lama dan not responding."
+
+    SOLUSI: jalankan write_day_edits di QThread terpisah. UI tetap responsif
+    (status "Menyimpan…" + tombol di-disable selagi worker jalan). Signal
+    done/failed dikirim ke UI thread utk update df + dialog hasil.
+
+    backup=False default (permintaan user: "Gak perlu ada back up file aja
+    biar cepat dan aku sudah aku yakin dengan perubahan nku"). Verifikasi
+    post-write TETAP jalan (anti silent-error — tulis yg salah = raise).
+    """
+
+    done = Signal(dict)
+    failed = Signal(str, str)  # (pesan singkat, traceback)
+
+    def __init__(self, source_path: str, src_row: int,
+                 day_edits: dict, parent=None) -> None:
+        super().__init__(parent)
+        self._source = str(source_path)
+        self._src_row = int(src_row)
+        self._day_edits = dict(day_edits)
+
+    def run(self) -> None:
+        try:
+            from waste_anomaly.source_writer import (
+                SourceWriteError, write_day_edits)
+            result = write_day_edits(
+                self._source, self._src_row, self._day_edits,
+                logger=None, backup=False)
+            self.done.emit(result)
+        except SourceWriteError as e:
+            self.failed.emit(str(e), "")
+        except Exception as e:  # noqa: BLE001 — error ke UI, bukan crash thread
+            self.failed.emit(f"{type(e).__name__}: {e}",
+                             traceback.format_exc())

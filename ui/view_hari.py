@@ -48,7 +48,7 @@ from .state import AppContext
 from .followup_table import FollowupTableMixin
 from .models import COLUMN_TOOLTIPS
 from .view_anomali import DetailDialog, _HF_COLS
-from .widgets import Card, DataTable, KpiCard, WLabel, busy_feedback
+from .widgets import Card, DataTable, KpiCard, SortControl, WLabel, busy_feedback
 from waste_anomaly.period_history import (
     day_evidence_vs_history,
     month_sort_key,
@@ -214,6 +214,10 @@ class HariView(FollowupTableMixin, QWidget):
 
         # Pop-up detail — satu instance dipakai ulang (pola AnomaliView).
         self._popup = DetailDialog(ctx, self)
+        # v2.16.1 — SortControl (tombol sort eksplisit di bar kontrol).
+        self._sort = SortControl(self._table, self._ctrl)
+        self._ctrl.layout().insertWidget(
+            self._ctrl.layout().count() - 1, self._sort)
         # v2.12.3 — jendela layar penuh tabel (dibuat malas, dipakai ulang):
         # WIDGET TABEL ASLI di-reparent sementara (pola AnomaliView v2.12.2)
         # → interaksi sort/pop-up/klik-2× tetap hidup; Esc → pulihkan posisi.
@@ -424,6 +428,9 @@ class HariView(FollowupTableMixin, QWidget):
             narrow_hide=["KETERANGAN", "TIPIKAL BEBERAPA BULAN",
                          "NILAI BULAN LALU", "ALASAN HARI"],
             visible_cols=[CHECK_COL] + cols)
+        # v2.16.1 — refresh pilihan kolom SortControl
+        if self._sort is not None:
+            self._sort.refresh_columns()
         n_tampil = len(shown)
         # v2.13.15 (gel-6 A15): INDIKATOR AMBANG SKOR LINTAS-TAB — spin
         # "Anomali dengan skor ≥" (tab Anomali) menyaring ctx.anomali_df()

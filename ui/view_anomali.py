@@ -43,7 +43,7 @@ import weakref
 from collections import OrderedDict
 
 import pandas as pd
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -71,6 +71,7 @@ from waste_anomaly.profile import annotate_profile_vs_history
 from waste_anomaly.rekap_import import SRC_ROW_COL
 from waste_anomaly.signals import SIGNAL_PARTS
 from waste_anomaly.source_writer import SourceWriteError, write_day_edits
+from .workers import SaveEditsWorker
 
 from .followup_table import FollowupTableMixin, HF_COLS as _HF_COLS
 from .models import (
@@ -89,6 +90,7 @@ from .widgets import (
     Card,
     DataTable,
     KpiStrip,
+    SortControl,
     StatusChip,
     WLabel,
     busy_feedback,
@@ -297,6 +299,22 @@ def _summary_rows(rec: pd.Series) -> list[tuple[str, str, str]]:
     return out
 
 
+class _NoWheelFilter(QObject):
+    """v2.16.1 — blok event wheel di QDoubleSpinBox (permintaan user:
+    "jangan pakai scroll dong buat ubah kuantiti nya khawatiri tidak
+    sengaja scroll pakai ketik manual aja atau klik atas bawah").
+
+    Event wheel DICONSUME (return True) → spinbox tak berubah saat scroll.
+    User tetap bisa: ketik angka manual, klik panah atas/bawah spinbox.
+    Filter dipasang per-spinbox via installEventFilter.
+    """
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Wheel:
+            return True  # consume — abaikan scroll
+        return False
+
+
 class DetailPanel(Card):
     """Panel detail satu baris anomali: identitas + sinyal + drill-down.
 
@@ -356,6 +374,11 @@ class DetailPanel(Card):
         self._day_orig: dict[str, float] = {}
         self._cur_src_row: int | None = None
         self._save_btn: QPushButton | None = None
+        # v2.16.1 — no-wheel filter (blok scroll di spinbox) + save worker
+        # (background thread supaya UI tak "Not Responding" saat tulis Excel).
+        self._no_wheel = _NoWheelFilter(self)
+        self._save_worker: SaveEditsWorker | None = None
+        self._pending_edits: dict[str, float] | None = None  # utk done handler
         ctx.followup_changed.connect(self._on_fu_state_changed)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 10, 12, 10)
@@ -996,6 +1019,10 @@ class DetailPanel(Card):
             sp.setAlignment(Qt.AlignmentFlag.AlignCenter)
             sp.setMinimumWidth(74)
             sp.setMinimumHeight(24)
+            # v2.16.1 — blok scroll wheel (permintaan user: ketik/klik aja,
+            # jangan scroll — khawatir tidak sengaja ubah nilai).
+            sp.installEventFilter(self._no_wheel)
+            sp.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
             if hari == tersangka:
                 sp.setStyleSheet(
                     "QDoubleSpinBox { background:#fee2e2; color:#dc2626; "
@@ -1050,23 +1077,29 @@ class DetailPanel(Card):
     def _on_save_edits(self) -> None:
         """Handler klik "Simpan koreksi" — tulis hari yg diubah ke Excel.
 
-        Alur JUJUR (anti silent-error):
+        v2.16.1 — ASYNC via SaveEditsWorker (background thread). UI TIDAK
+        membeku ("Not Responding" hilang). Alur:
           1. Kumpulkan HANYA hari yg berubah (banding spinbox vs orig).
-             Bila tidak ada perubahan → info dialog (bukan error).
-          2. Validasi __SRC_ROW + workbook_path ada.
-          3. Dialog konfirmasi: daftar perubahan + jalur file + peringatan
-             TOTAL akan diupdate.
-          4. Panggil source_writer.write_day_edits (backup otomatis +
-             verifikasi post-write + log).
-          5. SUKSES: update ctx.df + model df (hari + TOTAL) utk baris
-             ini; emit dataChanged supaya tabel re-render; status OK.
-             Beritahu user: skor anomali/AVG/MAX STALE sampai re-run
-             pipeline (transparan — jangan pura-pura sudah update).
-          6. GAGAL (SourceWriteError): dialog error eksplisit + log;
-             JANGAN sentuh df (file tidak tertulis).
+          2. Validasi __SRC_ROW + workbook_path.
+          3. Dialog konfirmasi (transparan — daftar perubahan + file + baris).
+          4. Start SaveEditsWorker(backup=False). Tombol di-disable, status
+             "Menyimpan…". Worker selesai → signal done/failed ke UI thread.
+          5. _on_save_done: update ctx.df + emit day_edited + dialog sukses.
+          6. _on_save_failed: dialog error + log.
+
+        backup=False (permintaan user: "Gak perlu ada back up file aja biar
+        cepat dan aku sudah aku yakin dengan perubahan nku"). Verifikasi
+        post-write TETAP jalan di worker (anti silent-error).
         """
         if self._save_btn is None:
             return  # tombol mayat — jangan sentuh
+        # Jangan mulai worker kedua saat satu lagi jalan
+        if self._save_worker is not None:
+            QMessageBox.information(
+                self, "Simpan sedang berjalan",
+                "Penyimpanan koreksi sebelumnya masih berjalan di background.\n"
+                "Tunggu sebentar lalu coba lagi.")
+            return
         # 1. Kumpulkan perubahan
         if not self._day_edits:
             QMessageBox.information(
@@ -1111,7 +1144,7 @@ class DetailPanel(Card):
                 "Tidak ada nilai hari yang berubah dari nilai asli.\n"
                 "Ubah minimal satu hari di grid atas lalu klik Simpan.")
             return
-        # 2. Dialog konfirmasi (transparan — tampilkan apa yg akan ditulis)
+        # 2. Dialog konfirmasi (transparan)
         changes_txt = "\n".join(
             f"  Hari {d}: {fmt_cell(self._day_orig.get(d, 0.0))} → "
             f"{fmt_color_styled_write_day_value(day_edits[d])}"
@@ -1127,7 +1160,7 @@ class DetailPanel(Card):
             f"  Baris Excel: #{src_row}\n\n"
             f"Perubahan:\n{changes_txt}\n\n"
             f"TOTAL akan dihitung ulang = sum hari 1-31.\n"
-            f"Backup otomatis dibuat (.bak-*.xlsx).\n\n"
+            f"Tanpa backup (langsung tulis — cepat).\n\n"
             f"Lanjutkan?")
         confirm.setStandardButtons(
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
@@ -1136,72 +1169,89 @@ class DetailPanel(Card):
             self._ctx.set_status("Simpan koreksi dibatalkan user.", "info")
             return
 
-        # 3. Tulis ke file (source_writer: backup + verifikasi + log)
-        try:
-            result = write_day_edits(
-                src_path, src_row, day_edits,
-                logger=lambda m: self._ctx.log(m))
-        except SourceWriteError as exc:
-            QMessageBox.critical(
-                self, "GAGAL Simpan Koreksi",
-                f"Penulisan ke file Excel GAGAL:\n\n{exc}\n\n"
-                f"File sumber TIDAK berubah (atau backup tersedia bila "
-                f"sebagian tertulis). Lihat log utk detail.")
-            self._ctx.log(f"[edit-pop-up] GAGAL simpan: {exc}")
-            self._ctx.set_status(f"Gagal simpan koreksi: {exc}", "error")
-            return
-        except Exception as exc:  # noqa: BLE001 — catch-all transparan
-            import traceback
-            QMessageBox.critical(
-                self, "Error Tak Terduga",
-                f"Error tak terduga saat simpan:\n\n{exc}\n\n"
-                f"Traceback:\n{traceback.format_exc()}")
-            self._ctx.log(f"[edit-pop-up] ERROR tak terduga: {exc}\n"
-                          f"{traceback.format_exc()}")
-            self._ctx.set_status(f"Error tak terduga: {exc}", "error")
-            return
+        # 3. Start worker (background thread — UI tak membeku)
+        self._pending_edits = dict(day_edits)
+        self._save_worker = SaveEditsWorker(src_path, src_row, day_edits,
+                                            parent=self)
+        self._save_worker.done.connect(self._on_save_done)
+        self._save_worker.failed.connect(self._on_save_failed)
+        # Disable tombol + status "Menyimpan…"
+        if self._save_btn is not None:
+            self._save_btn.setEnabled(False)
+            self._save_btn.setText("⏳ Menyimpan…")
+        # Disable semua spinbox (anti edit saat write berjalan)
+        for sp in self._day_edits.values():
+            try:
+                sp.setEnabled(False)
+            except RuntimeError:
+                pass
+        self._ctx.set_status(
+            f"Menyimpan {len(day_edits)} koreksi ke '{Path(src_path).name}' "
+            f"baris #{src_row} (background)…", "info")
+        self._ctx.log(f"[edit-pop-up] mulai simpan (background): "
+                      f"{len(day_edits)} hari ke baris #{src_row}")
+        self._save_worker.start()
 
-        # 4. SUKSES — update df in-memory + refresh UI
-        n_written = result["cells_written"]
+    def _on_save_done(self, result: dict) -> None:
+        """Worker selesai SUKSES — update df + emit signal + dialog hasil.
+
+        Dipanggil di UI thread (signal Qt cross-thread). result = dict dari
+        write_day_edits (ok/sheet/src_row/cells_written/total_new/...).
+        """
+        if self._save_worker is not None:
+            self._save_worker.deleteLater()
+            self._save_worker = None
+        src_row = result.get("src_row")
+        day_edits = self._pending_edits or {}
+        self._pending_edits = None
+        n_written = result.get("cells_written", 0)
         total_new = result.get("total_new")
-        backup = result.get("backup", "")
-        # 4a. Update ctx.df (sumber kebenaran UI) utk baris ini
+        src_path = (self._ctx.summary.get("workbook_path")
+                    if self._ctx.summary else "")
+        from pathlib import Path
+        # Re-enable tombol + spinbox
+        self._reset_save_ui()
+        # Update ctx.df utk baris ini
         ctx_df = self._ctx.df
-        ctx_label = self._find_df_label_by_src_row(ctx_df, src_row)
-        if ctx_label is not None and ctx_df is not None:
+        if src_row is not None:
+            ctx_label = self._find_df_label_by_src_row(ctx_df, src_row)
+            if ctx_label is not None and ctx_df is not None:
+                for day, val in day_edits.items():
+                    if day in ctx_df.columns:
+                        ctx_df.at[ctx_label, day] = val
+                if total_new is not None and "TOTAL" in ctx_df.columns:
+                    ctx_df.at[ctx_label, "TOTAL"] = total_new
+            else:
+                self._ctx.log(
+                    f"[edit-pop-up] WARNING: baris __SRC_ROW={src_row} tak "
+                    f"ketemu di ctx.df — update tabel dilewati. File Excel "
+                    f"SUDAH tersimpan; re-run pipeline utk sinkron.")
+        # Pancar signal — view pemilik update model df + emit dataChanged
+        if src_row is not None:
+            self.day_edited.emit(src_row, dict(day_edits), total_new)
+        # Update spinbox "original" HANYA bila pop-up masih tampilkan record
+        # yg sama (user tak klik baris lain saat worker jalan). Bila record
+        # berganti, spinbox sekarang = record baru — jangan sentuh style-nya.
+        same_record = (self._cur_src_row is not None
+                       and src_row is not None
+                       and self._cur_src_row == src_row)
+        if same_record:
             for day, val in day_edits.items():
-                if day in ctx_df.columns:
-                    ctx_df.at[ctx_label, day] = val
-            if total_new is not None and "TOTAL" in ctx_df.columns:
-                ctx_df.at[ctx_label, "TOTAL"] = total_new
-        else:
-            self._ctx.log(
-                f"[edit-pop-up] WARNING: baris __SRC_ROW={src_row} tak "
-                f"ketemu di ctx.df — update tabel dilewati. File Excel "
-                f"SUDAH tersimpan; re-run pipeline utk sinkron.")
-        # 4b. Pancar signal — view pemilik (AnomaliView) update model df +
-        # emit dataChanged utk re-render sel baris ini. DetailPanel TIDAK
-        # menyentuh model tabel (bukan tanggung jawabnya; hindari coupling
-        # mayat saat tabel di-reparent ke jendela layar penuh).
-        self.day_edited.emit(src_row, dict(day_edits), total_new)
-        # 4c. Update spinbox "original" supaya tidak tampak "berubah" lagi
-        for day, val in day_edits.items():
-            self._day_orig[day] = float(val)
-            sp = self._day_edits.get(day)
-            if sp is not None:
-                try:
-                    sp.setStyleSheet(
-                        "QDoubleSpinBox { background:#dcfce7; color:#166534; "
-                        "border:1px solid #86efac; border-radius:4px; "
-                        "font-weight:600; }")
-                except RuntimeError:
-                    pass
-        # 4d. Status + log transparan
+                self._day_orig[day] = float(val)
+                sp = self._day_edits.get(day)
+                if sp is not None:
+                    try:
+                        sp.setStyleSheet(
+                            "QDoubleSpinBox { background:#dcfce7; color:#166534; "
+                            "border:1px solid #86efac; border-radius:4px; "
+                            "font-weight:600; }")
+                    except RuntimeError:
+                        pass
+        # Status + log transparan
         self._ctx.log(
             f"[edit-pop-up] SIMPAN OK: {n_written} sel hari ditulis ke "
             f"'{Path(src_path).name}' baris #{src_row}. "
-            f"TOTAL: {result.get('prev_total')!r} → {total_new!r}. "
-            f"Backup: {Path(backup).name if backup else '(tak ada)'}.")
+            f"TOTAL: {result.get('prev_total')!r} → {total_new!r}.")
         self._ctx.set_status(
             f"Tersimpan: {n_written} hari ke baris #{src_row} "
             f"({Path(src_path).name}). TOTAL={fmt_cell(total_new)}. "
@@ -1213,13 +1263,43 @@ class DetailPanel(Card):
             f"  {Path(src_path).name}\n"
             f"  Baris #{src_row} (sheet '{result.get('sheet', '?')}')\n\n"
             f"TOTAL diperbarui: {fmt_cell(result.get('prev_total'))} → "
-            f"{fmt_cell(total_new)}\n"
-            f"Backup: {Path(backup).name if backup else '(tak ada)'}\n\n"
+            f"{fmt_cell(total_new)}\n\n"
             f"PERHATIAN: Skor anomali, AVG, MAX, dan metrik turunan di "
             f"tabel masih pakai nilai LAMA (dihitung pipeline sebelum "
             f"koreksi).\n"
             f"Untuk recompute penuh: jalankan ulang pipeline (tab Pipeline "
             f"→ Mulai).")
+
+    def _on_save_failed(self, msg: str, tb: str) -> None:
+        """Worker GAGAL — dialog error eksplisit + log. JANGAN sentuh df."""
+        if self._save_worker is not None:
+            self._save_worker.deleteLater()
+            self._save_worker = None
+        self._pending_edits = None
+        self._reset_save_ui()
+        self._ctx.log(f"[edit-pop-up] GAGAL simpan: {msg}")
+        if tb:
+            self._ctx.log(f"[edit-pop-up] traceback:\n{tb}")
+        self._ctx.set_status(f"Gagal simpan koreksi: {msg}", "error")
+        QMessageBox.critical(
+            self, "GAGAL Simpan Koreksi",
+            f"Penulisan ke file Excel GAGAL:\n\n{msg}\n\n"
+            + (f"Detail teknis:\n{tb}\n\n" if tb else "")
+            + f"File sumber TIDAK berubah. Lihat log utk detail.")
+
+    def _reset_save_ui(self) -> None:
+        """Re-enable tombol Simpan + spinbox setelah worker selesai."""
+        if self._save_btn is not None:
+            try:
+                self._save_btn.setEnabled(self._cur_src_row is not None)
+                self._save_btn.setText("💾 Simpan koreksi hari ke file Excel")
+            except RuntimeError:
+                pass
+        for sp in self._day_edits.values():
+            try:
+                sp.setEnabled(True)
+            except RuntimeError:
+                pass
 
 
 def fmt_color_styled_write_day_value(v: float) -> str:
@@ -1419,6 +1499,11 @@ class AnomaliView(FollowupTableMixin, QWidget):
         lay.addWidget(ctrl)
         self._ctrl = ctrl  # v2.12.2: toggle ⤢ (KPI + bar kontrol)
 
+        # v2.16.1 — SortControl di bar kontrol (dibuat setelah self._table
+        # ada, lalu disisipkan ke layout ctrl). Kolom di-refresh tiap render.
+        # (self._table dibuat di bawah — SortControl dibuat setelahnya.)
+        self._sort: SortControl | None = None
+
         # Kartu tabel — memenuhi SELURUH sisa tinggi view (v2.8.1: tanpa
         # splitter/panel inline; detail hadir sebagai pop-up saat baris
         # diklik).
@@ -1494,6 +1579,12 @@ class AnomaliView(FollowupTableMixin, QWidget):
         # v2.16.0: dengarkan signal koreksi hari dari pop-up — update model
         # df + emit dataChanged supaya tabel re-render sel baris ini.
         self._popup._panel.day_edited.connect(self._on_day_edited)
+
+        # v2.16.1 — SortControl (tombol sort eksplisit di bar kontrol).
+        # Dibuat setelah self._table ada; disisipkan ke ctrl layout.
+        self._sort = SortControl(self._table, self._ctrl)
+        self._ctrl.layout().insertWidget(self._ctrl.layout().count() - 1,
+                                         self._sort)
 
         # Reaksi state — pola lazy H2: view tak terlihat → tandai dirty,
         # render saat dibuka (on_shown). View default biasanya terlihat saat
@@ -1751,6 +1842,9 @@ class AnomaliView(FollowupTableMixin, QWidget):
                                   narrow_hide=["JENIS", "KETERANGAN",
                                                "BULAN LALU", "PERUBAHAN"],
                                   visible_cols=[CHECK_COL] + cols)
+        # v2.16.1 — refresh pilihan kolom SortControl sesuai dataset baru
+        if self._sort is not None:
+            self._sort.refresh_columns()
         full = len(self._ctx.df) if self._ctx.df is not None else 0
         if len(shown) == 0:
             self._lbl_count.setText("0 anomali lolos filter — longgarkan filter atau ambang skor.")

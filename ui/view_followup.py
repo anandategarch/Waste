@@ -65,7 +65,7 @@ from waste_anomaly.period_history import change_vs_history
 from .shared import fmt_id
 from .state import AppContext
 from .view_anomali import DetailDialog
-from .widgets import Card, DataTable, WLabel, busy_feedback
+from .widgets import Card, DataTable, SortControl, WLabel, busy_feedback
 
 # v2.12.4: funnel di header = SEMUA kolom (termasuk hari 1–31) — filter
 # LOKAL tampilan (BUKAN ctx: shortlist menetap by design — hanya
@@ -170,6 +170,9 @@ class FollowUpView(QWidget):
 
         # Pop-up detail — instance dipakai ulang (pola tab Anomali).
         self._popup = DetailDialog(ctx, self)
+        # v2.16.1 — SortControl (tombol sort eksplisit di bar kontrol).
+        self._sort = SortControl(self._table, ctrl)
+        ctrl.layout().insertWidget(ctrl.layout().count() - 1, self._sort)
 
         # State ekspor (df baris + penanda warna) dari refresh terakhir.
         self._rows: pd.DataFrame | None = None
@@ -323,6 +326,9 @@ class FollowUpView(QWidget):
             self._table.setup_header_filters(
                 None, self._on_header_filter, self._hfilters.get,
                 all_cols=True, skip=_HF_SKIP)
+            # v2.16.1 — refresh pilihan kolom SortControl
+            if self._sort is not None:
+                self._sort.refresh_columns()
             n = len(shown)
             total = (pd.to_numeric(rows.get("TOTAL"), errors="coerce")
                      .fillna(0).sum() if "TOTAL" in rows.columns else 0)

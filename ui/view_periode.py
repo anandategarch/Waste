@@ -54,7 +54,7 @@ from waste_anomaly.period_history import (
 
 from .shared import fmt_id, friendly_file_error
 from .state import AppContext
-from .widgets import Card, DataTable, WLabel, busy_feedback
+from .widgets import Card, DataTable, SortControl, WLabel, busy_feedback
 from .workers import HistoryWorker
 
 _PAGES = [
@@ -167,6 +167,9 @@ class BandTableDialog(QDialog):
                 lambda row, checked, _cb=check_cb: _cb(
                     self, row, checked, self._level, self._payload))
         lay.addWidget(self._table, 1)
+        # v2.16.1 — SortControl (tombol sort eksplisit di dialog banding).
+        self._sort = SortControl(self._table, self)
+        lay.addWidget(self._sort)
         btn = QPushButton("Tutup (Esc)", self)
         btn.clicked.connect(self.close)
         row = QWidget(self)
@@ -228,6 +231,9 @@ class BandTableDialog(QDialog):
                            "Menampilkan tabel banding"):
             self._table.set_dataframe(df, sort_desc=sort_desc,
                                       visible_cols=visible_cols)
+        # v2.16.1 — refresh pilihan kolom SortControl sesuai tabel baru
+        if self._sort is not None:
+            self._sort.refresh_columns()
         # Breadcrumb jendela (maks 3 segmen + elipsis) — konteks tak hilang.
         crumbs = " › ".join(self._path[-3:])
         self.setWindowTitle(f"Banding Periode — {crumbs}")
