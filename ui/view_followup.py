@@ -61,6 +61,7 @@ from waste_anomaly.followup import (
     suspicious_days,
 )
 from waste_anomaly.period_history import change_vs_history
+from waste_anomaly.rekap_import import SRC_ROW_COL
 
 from .shared import fmt_id
 from .state import AppContext
@@ -70,7 +71,7 @@ from .widgets import Card, DataTable, SortControl, WLabel, busy_feedback
 # v2.12.4: funnel di header = SEMUA kolom (termasuk hari 1–31) — filter
 # LOKAL tampilan (BUKAN ctx: shortlist menetap by design — hanya
 # menyaring yang tampil; daftar ✓ & ekspor tak tersentuh).
-_HF_SKIP = (CHECK_COL, FP_COL)
+_HF_SKIP = (CHECK_COL, FP_COL, SRC_ROW_COL)
 
 
 class FollowUpView(QWidget):

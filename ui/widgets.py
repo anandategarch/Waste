@@ -1481,7 +1481,13 @@ class SortControl(QWidget):
 
     def refresh_columns(self) -> None:
         """Isi combo dgn kolom VISIBLE tabel saat ini. Dipanggil view
-        setelah set_dataframe supaya pilihan sort selalu relevan."""
+        setelah set_dataframe supaya pilihan sort selalu relevan.
+
+        v2.16.2 FIX: combo menampilkan DISPLAY NAME (alias header_map jika
+        ada) supaya user lihat nama yg sama dgn judul kolom tabel, TAPI
+        currentData() = nama KANONIK (cocok df.columns) supaya _apply
+        sortByColumn jalan (sebelumnya: sort by alias = silent no-op).
+        """
         table = self._table_ref() if self._table_ref else None
         if table is None:
             return
@@ -1494,13 +1500,16 @@ class SortControl(QWidget):
         # Sembunyikan kolom internal (__FP, __SRC_ROW, ✓)
         cols = [c for c in cols if not str(c).startswith("__")
                 and c not in ("✓",)]
-        cur = self._cb.currentData()
+        # v2.16.2: ambil header_map (canonical → alias display) dari model.
+        header_map = getattr(model, "_header_map", None) or {}
+        cur = self._cb.currentData()  # canonical name (data, bukan display)
         self._cb.blockSignals(True)
         self._cb.clear()
         self._cb.addItem("(urut default)", "")
         for c in cols:
-            self._cb.addItem(str(c), str(c))
-        # Pertahankan pilihan bila masih ada
+            display = header_map.get(c, str(c))  # alias jika ada, else canonical
+            self._cb.addItem(str(display), str(c))  # data = canonical
+        # Pertahankan pilihan bila masih ada (match by data=canonical)
         if cur:
             idx = self._cb.findData(cur)
             if idx >= 0:

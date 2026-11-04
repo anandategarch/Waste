@@ -70,7 +70,8 @@ from waste_anomaly.period_history import CHANGE_CATEGORIES, change_vs_history
 from waste_anomaly.profile import annotate_profile_vs_history
 from waste_anomaly.rekap_import import SRC_ROW_COL
 from waste_anomaly.signals import SIGNAL_PARTS
-from waste_anomaly.source_writer import SourceWriteError, write_day_edits
+# v2.16.2: SourceWriteError & write_day_edits tidak lagi di-import di sini
+# (SaveEditsWorker import sendiri secara lazy di run(); UI tak panggil langsung).
 from .workers import SaveEditsWorker
 
 from .followup_table import FollowupTableMixin, HF_COLS as _HF_COLS
@@ -1175,6 +1176,11 @@ class DetailPanel(Card):
                                             parent=self)
         self._save_worker.done.connect(self._on_save_done)
         self._save_worker.failed.connect(self._on_save_failed)
+        # v2.16.2: safety net — finished→deleteLater supaya worker di-cleanup
+        # meski done/failed handler tak jalan (mis. panel di-destroy saat
+        # worker masih running). Qt auto-disconnect signal saat receiver
+        # destroy; deleteLater pastikan worker objek tak leak.
+        self._save_worker.finished.connect(self._save_worker.deleteLater)
         # Disable tombol + status "Menyimpan…"
         if self._save_btn is not None:
             self._save_btn.setEnabled(False)
@@ -1257,18 +1263,23 @@ class DetailPanel(Card):
             f"({Path(src_path).name}). TOTAL={fmt_cell(total_new)}. "
             f"Skor anomali/AVG/MAX STALE — re-run pipeline utk update.",
             "done")
-        QMessageBox.information(
-            self, "Koreksi Tersimpan",
-            f"Berhasil menulis {n_written} koreksi hari ke file Excel:\n"
-            f"  {Path(src_path).name}\n"
-            f"  Baris #{src_row} (sheet '{result.get('sheet', '?')}')\n\n"
-            f"TOTAL diperbarui: {fmt_cell(result.get('prev_total'))} → "
-            f"{fmt_cell(total_new)}\n\n"
-            f"PERHATIAN: Skor anomali, AVG, MAX, dan metrik turunan di "
-            f"tabel masih pakai nilai LAMA (dihitung pipeline sebelum "
-            f"koreksi).\n"
-            f"Untuk recompute penuh: jalankan ulang pipeline (tab Pipeline "
-            f"→ Mulai).")
+        # v2.16.2: dialog sukses HANYA bila panel masih visible. Bila user
+        # sudah pindah baris / filter berganti (panel di-clear+hide saat
+        # refresh), dialog dari parent hidden membingungkan. Log+status sudah
+        # cukup notifikasi; ctx.df + signal sudah diupdate di atas.
+        if self.isVisible():
+            QMessageBox.information(
+                self, "Koreksi Tersimpan",
+                f"Berhasil menulis {n_written} koreksi hari ke file Excel:\n"
+                f"  {Path(src_path).name}\n"
+                f"  Baris #{src_row} (sheet '{result.get('sheet', '?')}')\n\n"
+                f"TOTAL diperbarui: {fmt_cell(result.get('prev_total'))} → "
+                f"{fmt_cell(total_new)}\n\n"
+                f"PERHATIAN: Skor anomali, AVG, MAX, dan metrik turunan di "
+                f"tabel masih pakai nilai LAMA (dihitung pipeline sebelum "
+                f"koreksi).\n"
+                f"Untuk recompute penuh: jalankan ulang pipeline (tab Pipeline "
+                f"→ Mulai).")
 
     def _on_save_failed(self, msg: str, tb: str) -> None:
         """Worker GAGAL — dialog error eksplisit + log. JANGAN sentuh df."""
@@ -1553,7 +1564,7 @@ class AnomaliView(FollowupTableMixin, QWidget):
         # kolom mapping = state global ctx, lainnya = filter lokal view.
         self._table.setup_header_filters(
             _HF_COLS, self._on_header_filter, self._hf_state,
-            all_cols=True, skip=(CHECK_COL, FP_COL))
+            all_cols=True, skip=(CHECK_COL, FP_COL, SRC_ROW_COL))
         self._table.selectionModel().currentRowChanged.connect(
             lambda *_: self._on_selection())
         # v2.13.5: sinyal QTableView.clicked memicu di SETIAP klik — termasuk
@@ -1903,34 +1914,29 @@ class AnomaliView(FollowupTableMixin, QWidget):
                 f"sudah diupdate.")
             return
         label = mdf.index[mask][0]
-        try:
-            row_pos = mdf.index.get_loc(label)
-        except KeyError:
-            return
-        # Update sel hari + TOTAL di model df, emit dataChanged per sel.
+        # v2.16.2 FIX: pakai model.notify_column_changed(name) BUKAN manual
+        # mdf.at + dataChanged.emit. Sebelumnya: _texts cache model TIDAK
+        # di-invalidasi → sel tabel tampilkan nilai LAMA pasca-save.
+        # notify_column_changed sync _arr + clear _texts + emit dataChanged
+        # utk seluruh kolom (API benar, lihat models.py:531).
         for day, val in day_edits.items():
             if day in mdf.columns:
                 mdf.at[label, day] = val
                 try:
-                    col_pos = mdf.columns.get_loc(day)
-                    model.dataChanged.emit(
-                        model.index(row_pos, col_pos),
-                        model.index(row_pos, col_pos))
+                    model.notify_column_changed(day)
                 except Exception as exc:  # noqa: BLE001 — log, jangan crash
                     self._ctx.log(
-                        f"[edit-pop-up] WARNING: dataChanged hari {day} "
-                        f"gagal ({exc}) — tabel mungkin perlu manual refresh.")
+                        f"[edit-pop-up] WARNING: notify_column_changed hari "
+                        f"{day} gagal ({exc}) — tabel mungkin perlu manual "
+                        f"refresh.")
         if total_new is not None and "TOTAL" in mdf.columns:
             mdf.at[label, "TOTAL"] = total_new
             try:
-                col_pos = mdf.columns.get_loc("TOTAL")
-                model.dataChanged.emit(
-                    model.index(row_pos, col_pos),
-                    model.index(row_pos, col_pos))
+                model.notify_column_changed("TOTAL")
             except Exception as exc:  # noqa: BLE001 — log, jangan crash
                 self._ctx.log(
-                    f"[edit-pop-up] WARNING: dataChanged TOTAL gagal "
-                    f"({exc}) — tabel mungkin perlu manual refresh.")
+                    f"[edit-pop-up] WARNING: notify_column_changed TOTAL "
+                    f"gagal ({exc}) — tabel mungkin perlu manual refresh.")
 
     # ------------------------------------------------------------
     # v2.13.8 (gel-C): 10 metode ✓-follow-up + funnel (dulu §v2.12.0

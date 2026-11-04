@@ -303,7 +303,9 @@ class SaveEditsWorker(QThread):
                 logger=None, backup=False)
             self.done.emit(result)
         except SourceWriteError as e:
-            self.failed.emit(str(e), "")
+            # v2.16.2: sertakan traceback supaya root cause (chained
+            # OSError/openpyxl) tak hilang dari log. Sebelumnya: "" (kosong).
+            self.failed.emit(str(e), traceback.format_exc())
         except Exception as e:  # noqa: BLE001 — error ke UI, bukan crash thread
             self.failed.emit(f"{type(e).__name__}: {e}",
                              traceback.format_exc())

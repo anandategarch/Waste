@@ -54,6 +54,7 @@ from waste_anomaly.period_history import (
     month_sort_key,
 )
 from waste_anomaly.followup import CHECK_COL, FP_COL
+from waste_anomaly.rekap_import import SRC_ROW_COL
 
 # Kolom tabel hari-mencurigakan (ramping — detail lengkap di pop-up).
 # v2.10.0: 3 kolom bukti vs bulan lalu HANYA muncul bila data pembanding
@@ -199,7 +200,7 @@ class HariView(FollowupTableMixin, QWidget):
         # v2.13.5: kolom ✓ juga di-skip (pola AnomaliView).
         self._table.setup_header_filters(
             _HF_COLS, self._on_header_filter, self._hf_state,
-            all_cols=True, skip=(CHECK_COL, FP_COL))
+            all_cols=True, skip=(CHECK_COL, FP_COL, SRC_ROW_COL))
         self._table.selectionModel().currentRowChanged.connect(
             lambda *_: self._on_selection())
         # v2.13.5: klik baris SAMA saat pop-up sempat ditutup harus

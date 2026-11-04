@@ -55,8 +55,7 @@ from xml.etree import ElementTree as ET
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
-from .loader import find_sheet, list_sheets, _read_excel_fast, _normalize_columns
-from .rekap_import import _DAY_SET, RekapImportError, SRC_ROW_COL
+from .rekap_import import SRC_ROW_COL
 from .utils import load_config
 
 _LOG = logging.getLogger("waste_anomaly.source_writer")
@@ -107,88 +106,32 @@ def make_backup(source_path: str | os.PathLike,
     return bak
 
 
-def _resolve_sheet(path: Path, config: dict | None = None
+def _resolve_sheet(path: Path, config: dict | None = None,
+                   logger: Callable[[str], None] | None = None
                    ) -> tuple[str, int]:
     """Resolve nama sheet rekap di workbook sumber + baris header (0-based).
 
-    Mirror find_rekap_sheet — dipakai pipeline fase LOAD. Return (sheet,
-    header_row). Header_row selalu 0 untuk file standar (header baris-1
-    Excel → 0-based row 0). Bila tidak ketemu → SourceWriteError jelas.
+    v2.16.2 BUG FIX: sebelumnya hardcoded `return name, 0` (header_row=0
+    selalu) → SHIFTED-HEADER file (title row 1, header row 3, data row 4+)
+    diproses dgn header_row=0 → writer baca Excel row 1 (title) sbg header
+    → 0 kolom hari ditemukan → SourceWriteError menyesatkan.
+    Fix: panggil find_rekap_sheet (rekap_import) yg memakai _detect_header_row
+    utk scan ≤6 baris pertama + temukan header SESUNGGUHNYA. Return header_row
+    0-based yg benar.
     """
-    sheets = list_sheets(path)
-    if not sheets:
-        raise SourceWriteError(
-            f"Workbook sumber tidak punya sheet terbaca: {path.name}")
+    from .rekap_import import find_rekap_sheet, RekapImportError
     config = config if config is not None else load_config()
-    candidates = list(config.get("input_sheets", {}).get("rekap_mentah", []))
-    for extra in ("REKAP MENTAH", "rekap mentah"):
-        if extra not in candidates:
-            candidates.append(extra)
-    name = None
     try:
-        name = find_sheet(candidates, sheets)
-    except ValueError:
-        name = None
-    if name is None:
-        # Fallback: scan sheet pertama yang punya schema rekap
-        for sn in sheets:
-            try:
-                df0 = _read_excel_fast(path, sheet_name=sn,
-                                       header=0, nrows=6)
-            except Exception as exc:  # noqa: BLE001 — log + lanjut sheet lain
-                _LOG.warning("sheet %r gagal dibaca saat resolve: %s",
-                             sn, exc)
-                continue
-            if df0 is None or df0.empty:
-                continue
-            df0 = _normalize_columns(df0)
-            cols = [str(c).strip().upper() for c in df0.columns]
-            if all(rc in cols for rc in ("NAMA RESTO", "JENIS", "NAMA BARANG")) \
-                    and sum(1 for c in cols if c in _DAY_SET) >= 3:
-                name = sn
-                break
-    if name is None:
+        name, header_row_0 = find_rekap_sheet(path, config, logger=logger)
+    except RekapImportError as exc:
         raise SourceWriteError(
-            f"Tidak ada sheet rekap di '{path.name}' (cari: "
-            f"{', '.join(candidates[:3])}…). Sheet tersedia: "
-            f"{', '.join(sheets[:5])}")
-    return name, 0
+            f"Tidak bisa resolve sheet rekap di '{path.name}': {exc}"
+        ) from exc
+    return name, header_row_0
 
 
-def _find_day_columns(ws, header_row: int = 1
-                      ) -> dict[str, int]:
-    """Map nama hari "1".."31" → nomor kolom Excel (1-based) di sheet.
-
-    Baca header row (default baris 1) — cari sel berisi integer/teks hari
-    1..31. Layout standar = col 9..39, tapi fungsi ini JUJUR membaca header
-    sesungguhnya supaya robust terhadap layout non-standar (kolom
-    ditambah/dihapus user). Hari yang tak ada di header → tidak di-map
-    (koreksi hari itu akan ditolak eksplisit).
-    """
-    mapping: dict[str, int] = {}
-    for col in range(1, ws.max_column + 1):
-        v = ws.cell(row=header_row, column=col).value
-        if v is None:
-            continue
-        # Normalisasi: float integral (1.0) → "1"; selain itu str().strip()
-        if isinstance(v, float) and v.is_integer():
-            v = int(v)
-        s = str(v).strip()
-        if s in DAY_COLUMNS:
-            mapping[s] = col
-    return mapping
-
-
-def _find_total_column(ws, header_row: int = 1) -> int | None:
-    """Cari kolom TOTAL di header row. Return nomor kolom atau None."""
-    for col in range(1, ws.max_column + 1):
-        v = ws.cell(row=header_row, column=col).value
-        if v is None:
-            continue
-        s = str(v).strip().upper()
-        if s == "TOTAL":
-            return col
-    return None
+# v2.16.2: _find_day_columns & _find_total_column DIHAPUS (dead code —
+# write_day_edits baca header inline via iter_rows, bukan helper ini).
 
 
 # ============================================================
@@ -268,12 +211,16 @@ def _resolve_sheet_xml_path(zip_reader: zipfile.ZipFile,
     # Target dari rels bisa: "worksheets/sheet1.xml" (relatif ke xl/),
     # "/xl/worksheets/sheet1.xml" (absolut dgn leading slash), atau
     # "xl/worksheets/sheet1.xml" (sudah absolut tanpa leading slash).
-    # Normalisasi: hilangkan leading slash, pastikan prefix "xl/".
+    # v2.16.2: normalisasi lengkap — handle leading slash, ../ , duplikasi.
+    import posixpath
     target = target.lstrip("/")
     if not target.startswith("xl/"):
         target = f"xl/{target}"
-    # Hilangkan duplikasi "xl/xl/" bila terjadi (edge case rels aneh)
-    target = target.replace("xl/xl/", "xl/", 1) if target.startswith("xl/xl/") else target
+    # posixpath.normpath resolve ../ dan ./ (ZIP flat namespace tak resolve)
+    target = posixpath.normpath(target)
+    # Pastikan masih di bawah xl/ (normpath bisa naik ke atas)
+    if not target.startswith("xl/"):
+        target = f"xl/{target.split('/')[-1]}"
     return target
 
 
@@ -286,25 +233,33 @@ def _replace_cell_v_xml(xml_str: str, cell_ref: str,
       - Sel dgn <v>: ganti nilai, PRESERVE <f> formula (TOTAL shared formula).
       - Sel tanpa <v> (hanya <f> atau kosong): tambah <v>.
       - Sel self-closing (<c r="X" .../>): konversi ke sel lengkap dgn <v>.
-      - Sel tipe string (t="s"/"str"): RAISE (sel hari seharusnya numerik).
+      - Sel tipe string (t="s"/"str"/"inlineStr"/"b"/"e"): RAISE.
       - Sel tak ditemukan: found=False (caller putuskan: raise vs skip).
+
+    v2.16.2 BUG FIX: regex lama `[^>]*` menelan `/` di self-closing cell
+    (`<c r="I3" s="5"/>`) → match `</c>` cell SEBELAHNYA → korupsi cell lain.
+    Fix: attrs pattern `[^>/]*` exclude `/` → self-closing tak match full-cell
+    pattern, jatuh ke self-closing handler di bawah.
     """
-    # Cari sel lengkap: <c r="REF" ...> ... </c>
+    # Cari sel lengkap: <c r="REF" attrs> inner </c>
+    # attrs = [^>/]* (exclude / supaya self-closing tak match di sini)
     cell_pat = re.compile(
-        r'<c r="' + re.escape(cell_ref) + r'"([^>]*)>(.*?)</c>',
+        r'<c r="' + re.escape(cell_ref) + r'"([^>/]*?)>(.*?)</c>',
         re.DOTALL)
     m = cell_pat.search(xml_str)
     old_val: str | None = None
     if m:
         attrs = m.group(1)
         inner = m.group(2)
-        # Tolak sel string (shared/inline) — sel hari harus numerik
-        if 't="s"' in attrs or 't="str"' in attrs or 't="e"' in attrs:
+        # v2.16.2: tolak SEMUA tipe non-numerik (s/str/inlineStr/b/e).
+        # Sebelumnya: substring check 't="s"' lolos 't="inlineStr"' & 't="b"'.
+        # Kini: regex extract t= value, tolak jika bukan "n" (numeric).
+        t_match = re.search(r'\st="([^"]*)"', attrs)
+        if t_match and t_match.group(1) != "n":
             raise SourceWriteError(
-                f"Sel {cell_ref} bertipe string/error "
-                f"(atribut {attrs.strip()}) — tidak bisa tulis nilai "
-                f"numerik. Sel hari seharusnya numerik; periksa file Excel "
-                f"sumber (mungkin header hari terbaca sebagai teks).")
+                f"Sel {cell_ref} bertipe non-numerik (t=\"{t_match.group(1)}\") "
+                f"— tidak bisa tulis nilai numerik. Sel hari seharusnya "
+                f"numerik; periksa file Excel sumber.")
         # Cari <v>...</v> di inner
         v_pat = re.compile(r'<v>([^<]*)</v>')
         v_m = v_pat.search(inner)
@@ -317,15 +272,16 @@ def _replace_cell_v_xml(xml_str: str, cell_ref: str,
             new_inner = inner + f'<v>{new_value_str}</v>'
         new_cell = f'<c r="{cell_ref}"{attrs}>{new_inner}</c>'
         return xml_str[:m.start()] + new_cell + xml_str[m.end():], True, old_val
-    # Coba self-closing: <c r="REF" .../>
+    # Coba self-closing: <c r="REF" attrs/>
     sc_pat = re.compile(r'<c r="' + re.escape(cell_ref) + r'"([^>]*)/>')
     sc = sc_pat.search(xml_str)
     if sc:
         attrs = sc.group(1)
-        if 't="s"' in attrs or 't="str"' in attrs or 't="e"' in attrs:
+        t_match = re.search(r'\st="([^"]*)"', attrs)
+        if t_match and t_match.group(1) != "n":
             raise SourceWriteError(
-                f"Sel {cell_ref} (self-closing) bertipe string/error "
-                f"— tidak bisa tulis numerik.")
+                f"Sel {cell_ref} (self-closing) bertipe non-numerik "
+                f"(t=\"{t_match.group(1)}\") — tidak bisa tulis numerik.")
         attrs_clean = re.sub(r'\s+t="[^"]*"', '', attrs)
         new_cell = f'<c r="{cell_ref}"{attrs_clean}><v>{new_value_str}</v></c>'
         return xml_str[:sc.start()] + new_cell + xml_str[sc.end():], True, None
@@ -453,7 +409,7 @@ def write_day_edits(
                else "(backup dilewati — TIDAK ada cadangan)")
 
     # ---- RESOLVE SHEET ----
-    sheet_name, header_row_0 = _resolve_sheet(src, config=config)
+    sheet_name, header_row_0 = _resolve_sheet(src, config=config, logger=logger)
     header_row_1 = header_row_0 + 1  # 1-based untuk openpyxl
     _log(logger, f"[source_writer] sheet target: '{sheet_name}' "
                  f"(header baris {header_row_1})")
@@ -625,7 +581,9 @@ def write_day_edits(
                          f"{prev_total!r} → {total_new!r}")
 
     # 4. Tulis ZIP baru (semua entry disalin, sheet XML diganti)
-    tmp_out = src.with_suffix(src.suffix + ".tmp_write")
+    # v2.16.2: tmp file name unik per-PID supaya tak race jika 2 thread
+    # tulis file sama bersamaan (mitigated UI guard, tapi defense-in-depth).
+    tmp_out = src.with_suffix(f".tmp_write.{os.getpid()}")
     try:
         _write_zip_replaced_sheet(src, sheet_xml_path, sheet_xml, tmp_out)
     except SourceWriteError:
