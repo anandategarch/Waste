@@ -105,6 +105,15 @@ _REQUIRED_COLS = ("SOURCE DATA", "JENIS", "KETERANGAN", "NAMA BARANG",
 # calamine 1.0 → "1").
 _DAY_SET = {str(d) for d in range(1, 32)}
 
+# v2.16.0 — fitur "edit dari pop-up": kolom tersembunyi di df yang menyimpan
+# NOMOR BARIS FISIK sheet sumber (1-based; baris 1 = header, data mulai
+# baris 2). Dipasang di ensure_rekap_header() (injection point tunggal —
+# row-accounting terjadi di sana). Disurvive pipeline stages (kolom biasa,
+# tidak di-drop). Tidak ditampilkan (bukan anggota TABLE_COLS/DETAIL_COLS).
+# Dipakai waste_anomaly.source_writer.write_day_edits() untuk menulis
+# koreksi nilai hari ke baris yang BENAR di file Excel sumber.
+SRC_ROW_COL = "__SRC_ROW"
+
 # Urutan 53 kolom standar README (bagian opsional diisi nilai hitungan /
 # dibiarkan kosong; hari mengikuti kolom yang ADA di sumber — jujur,
 # tanpa fabrikasi kolom hari yang tidak ada di rekap).
@@ -235,7 +244,11 @@ def find_rekap_sheet(path: Path, config: dict,
     if name is not None:
         try:
             df0 = _read_excel_fast(path, sheet_name=name, header=0, nrows=6)
-        except Exception:
+        except Exception as exc:  # v2.16.0: log, bukan diam jadi None
+            # Sebelumnya: sheet gagal dibaca → None diam-dia → fallback scan
+            # sheet lain. Kini di-log supaya user tahu sheet kandidat bermasalah.
+            _log(logger, f"[rekap_import] WARNING: sheet kandidat {name!r} "
+                         f"gagal dibaca saat validasi schema: {exc}")
             df0 = None
         if df0 is not None and not df0.empty:
             df0 = _normalize_columns(df0)
@@ -250,7 +263,11 @@ def find_rekap_sheet(path: Path, config: dict,
         try:
             raw = pd.read_excel(path, sheet_name=sn, header=None, nrows=8,
                                 dtype=object)
-        except Exception:
+        except Exception as exc:  # v2.16.0: log, bukan skip diam-diam
+            # Sebelumnya: sheet gagal dibaca → continue tanpa jejak. Kini
+            # di-log supaya user tahu ada sheet yg tak bisa diakses.
+            _log(logger, f"[rekap_import] WARNING: sheet {sn!r} tak bisa "
+                         f"dibaca saat scan fallback: {exc}")
             continue
         hr = _detect_header_row(raw)
         if hr is not None:
@@ -342,12 +359,21 @@ def ensure_rekap_header(df: pd.DataFrame, logger=None) -> pd.DataFrame:
          Ketemu → _promote_at + _normalize_columns; TIDAK ketemu →
          passthrough apa adanya (validate_rekap_schema akan memberi
          pesan error jujur — fungsi ini bukan tempat menebak).
+
+    v2.16.0 — fitur "edit dari pop-up": pasang kolom tersembunyi
+    SRC_ROW_COL ("__SRC_ROW") = nomor baris FISIK sheet sumber (1-based;
+    baris 1 = header, data mulai baris 2). Row-accounting di sini (titik
+    tunggal — kedua jalur tahu offset Excel). Passthrough: df row i =
+    Excel row i+2. Promote jalur: output row j = grid row hr+1+j = Excel
+    row hr+j+2. Kolom ini survive pipeline stages (biasa, tidak di-drop)
+    dan dipakai source_writer.write_day_edits() untuk tulis koreksi ke
+    baris yang BENAR. Idempoten: bila sudah ada, tidak ditimpa.
     """
     if df is None or df.empty:
         return df
     cols_upper = [str(c).strip().upper() for c in df.columns]
     if _looks_like_rekap_header(cols_upper):
-        return df
+        return _attach_src_row(df, offset_first=2, logger=logger)
 
     n = len(df.columns)
     head = pd.DataFrame([list(df.columns)], columns=list(range(n)))
@@ -356,10 +382,40 @@ def ensure_rekap_header(df: pd.DataFrame, logger=None) -> pd.DataFrame:
     grid = pd.concat([head, body], ignore_index=True)
     hr = _detect_header_row(grid)
     if hr is None:
-        return df
+        return _attach_src_row(df, offset_first=2, logger=logger)
     out = _normalize_columns(_promote_at(grid, hr))
     _log(logger, f"[rekap_import] header tergeser — baris {hr} data "
                  f"dipromosi jadi header (pola fn_rekap_mentah)")
+    # Promote jalur: output row j = grid row hr+1+j = Excel row hr+j+2.
+    # offset_first = hr+2 (baris Excel pertama data setelah header dipromosi).
+    return _attach_src_row(out, offset_first=hr + 2, logger=logger)
+
+
+def _attach_src_row(df: pd.DataFrame, offset_first: int,
+                    logger=None) -> pd.DataFrame:
+    """v2.16.0: pasang kolom SRC_ROW_COL = baris fisik Excel (1-based).
+
+    offset_first = nomor baris Excel untuk df row 0 (baris-1 Excel =
+    header; data mulai baris 2 → offset_first=2 utk passthrough).
+    Idempoten: bila kolom sudah ada & berupa numerik, TIDAK ditimpa
+    (re-run pipeline / re-load tidak merusak mapping). Bukan inplace
+    (salin dulu — anti side-effect ke df pemanggil).
+    """
+    if df is None or df.empty:
+        return df
+    if SRC_ROW_COL in df.columns:
+        # Sudah ada — validasi numerik; bila bukan numerik, bangun ulang.
+        ok = pd.api.types.is_numeric_dtype(df[SRC_ROW_COL])
+        if ok and not df[SRC_ROW_COL].isna().any():
+            return df  # mapping utuh — jangan ganggu
+        _log(logger, f"[rekap_import] {SRC_ROW_COL} ada tapi rusak "
+                     f"(non-numerik/NaN) — bangun ulang")
+        df = df.drop(columns=[SRC_ROW_COL])
+    out = df.copy()
+    n = len(out)
+    out[SRC_ROW_COL] = range(offset_first, offset_first + n)
+    _log(logger, f"[rekap_import] pasang {SRC_ROW_COL}: baris Excel "
+                 f"{offset_first}..{offset_first + n - 1} ({n} baris)")
     return out
 
 

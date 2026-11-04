@@ -88,15 +88,31 @@ _DAYS = [str(d) for d in range(1, 32)]
 class TestEnsureRekapHeader:
 
     def test_passthrough_header_normal(self, tmp_path):
-        """Kolom sudah valid → IDENTITAS objek (file standar tak
-        tersentuh — nol biaya di jalur normal)."""
+        """Kolom sudah valid → nilai existing tak tersentuh + __SRC_ROW
+        dipasang (v2.16.0: passthrough kini menambah kolom __SRC_ROW =
+        baris fisik Excel 1-based; baris 1 = header, data mulai baris 2).
+        Sebelum v2.16.0: passthrough identitas objek (out is df). Kini
+        out = salinan df + kolom __SRC_ROW (anti side-effect ke pemanggil)."""
         from waste_anomaly.loader import _read_excel_fast, _normalize_columns
-        from waste_anomaly.rekap_import import ensure_rekap_header
+        from waste_anomaly.rekap_import import ensure_rekap_header, SRC_ROW_COL
         src = _build_rekap(tmp_path / "r.xlsx")
         df = _normalize_columns(
             _read_excel_fast(src, sheet_name="REKAP MENTAH", header=0))
+        n = len(df)
         out = ensure_rekap_header(df)
-        assert out is df, "header normal harus passthrough identitas"
+        # __SRC_ROW dipasang
+        assert SRC_ROW_COL in out.columns, "__SRC_ROW harus dipasang"
+        # Nilai existing tak tersentuh (kolom & data sama)
+        assert list(out.columns[:-1]) == list(df.columns), (
+            "kolom existing tak boleh berubah")
+        pd.testing.assert_frame_equal(
+            out.drop(columns=[SRC_ROW_COL]), df)
+        # __SRC_ROW = 2..n+1 (baris Excel: header=row1, data=row2+)
+        assert list(out[SRC_ROW_COL]) == list(range(2, n + 2)), (
+            "__SRC_ROW harus = baris Excel 2..n+1")
+        # Idempoten: panggil ulang tak merusak
+        out2 = ensure_rekap_header(out)
+        assert list(out2[SRC_ROW_COL]) == list(range(2, n + 2))
 
     def test_repair_header_tergeser(self, tmp_path):
         """Baris judul + kosong di atas header → dipromosi; kolom hari
@@ -118,14 +134,18 @@ class TestEnsureRekapHeader:
 
     def test_header_tak_terdeteksi_passthrough(self):
         """Frame tanpa schema rekap di 6 baris pertama → passthrough
-        apa adanya (bukan nebak — validate_rekap_schema yang bicara)."""
-        from waste_anomaly.rekap_import import ensure_rekap_header
+        apa adanya + __SRC_ROW dipasang (v2.16.0). Kolom existing tak
+        berubah; __SRC_ROW = 2..n+1 (asumsi header baris-1 Excel)."""
+        from waste_anomaly.rekap_import import ensure_rekap_header, SRC_ROW_COL
         df = pd.DataFrame({"A": [1, 2], "B": ["x", "y"]})
         out = ensure_rekap_header(df)
-        assert out is df
-        assert list(out.columns) == ["A", "B"]
+        assert SRC_ROW_COL in out.columns
+        assert list(out.columns[:-1]) == ["A", "B"]
+        assert list(out[SRC_ROW_COL]) == [2, 3]
 
     def test_frame_kosong_passthrough(self):
+        """Frame kosong/None → dikembalikan apa adanya (tak ada baris
+        utk dipasangi __SRC_ROW)."""
         from waste_anomaly.rekap_import import ensure_rekap_header
         df = pd.DataFrame()
         assert ensure_rekap_header(df) is df
@@ -359,8 +379,14 @@ class TestPipelineSekaliJalan:
 
     def test_file_standar_tak_tersentuh(self):
         """File standar (sample_workbook.xlsx — JENIS bersih + BOM via
-        sheet terpisah): TIGA helper no-op — log tanpa baris rekap_import,
-        hasil == perilaku pra-v2.15.0 (golden lama tak bergeser)."""
+        sheet terpisah): TIGA helper REPAIR no-op — log tanpa pesan repair,
+        hasil == perilaku pra-v2.15.0 (golden lama tak bergeser).
+
+        v2.16.0: __SRC_ROW dipasang UNIVERSAL (semua file, including
+        standar) — pesan "[rekap_import] pasang __SRC_ROW" BOLEH muncul
+        (injeksi metadata, bukan repair data). Fragmen repair spesifik
+        ('header tergeser', 'TOTAL BOM inline', 'dinormalisasi') tetap
+        tak boleh muncul di file standar."""
         sample = REPO / "sample_workbook.xlsx"
         if not sample.exists():
             pytest.skip("sample_workbook.xlsx tidak ada")
@@ -368,9 +394,11 @@ class TestPipelineSekaliJalan:
         s = run_pipeline(str(sample), key_akhir=31)
         assert s["success"], s.get("error")
         assert s["total_rows"] > 0
-        for frag in ("rekap_import", "header tergeser", "TOTAL BOM inline",
-                     "dinormalisasi"):
-            assert frag not in s["log"], f"file standar tersentuh: {frag}"
+        # Fragmen REPAIR spesifik — tak boleh muncul di file standar.
+        # (v2.16.0: "rekap_import" dihapus dari daftar — modul itu kini
+        # selalu dipanggil utk injeksi __SRC_ROW, bukan tanda repair.)
+        for frag in ("header tergeser", "TOTAL BOM inline", "dinormalisasi"):
+            assert frag not in s["log"], f"file standar tersentuh repair: {frag}"
 
     def test_status_baris_kosong_selamat(self, tmp_path):
         """Baris WASTE tanpa nilai hari (sheet mentah: sel kosong) →
