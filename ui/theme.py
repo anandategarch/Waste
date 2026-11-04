@@ -36,8 +36,13 @@ SELECT_FG = "#134e4a"
 # kolom di DataTable._auto_columns): widget.font() TIDAK mewarisi font
 # QSS (Windows: default 9pt vs QSS 13px → lantai header kurang ukur
 # ~8% → "nama header terpotong" oleh funnel).
+# v2.17.1 (zoom out sedikit): 13 → 12 px (permintaan user "agak sedikit
+# zoom out tampilan program di semua tab"). Semua font-size eksplisit
+# turun 1px proporsional (hint/log 12→11, toolbar 13→12, title 15→14,
+# KPI value 20→18, sort btn 14→13). Padding dibiarkan — widget frame
+# tetap, teks lebih kecil = efek zoom-out dengan whitespace ringan.
 UI_FONT_FAMILY = '"Segoe UI", "Tahoma", "DejaVu Sans", sans-serif'
-UI_FONT_PX = 13
+UI_FONT_PX = 12
 UI_HEADER_WEIGHT = 600
 
 
@@ -70,7 +75,7 @@ QLabel#cardTitle {{
     background: transparent;
     border: none;
 }}
-QLabel#hint {{ color: {C_TEXT_MUTED}; background: transparent; border: none; font-size: 12px; }}
+QLabel#hint {{ color: {C_TEXT_MUTED}; background: transparent; border: none; font-size: 11px; }}
 QLabel#muted {{ color: {C_TEXT_MUTED}; background: transparent; border: none; }}
 
 QPushButton {{
@@ -155,7 +160,7 @@ QPlainTextEdit#log {{
     background: #0b1220;
     color: #cbd5e1;
     font-family: "Consolas", "DejaVu Sans Mono", monospace;
-    font-size: 12px;
+    font-size: 11px;
     border: 1px solid {C_BORDER};
     border-radius: 6px;
 }}
@@ -168,7 +173,7 @@ QToolBar QToolButton {{
     border: none;
     border-radius: 6px;
     padding: 6px 12px;
-    font-size: 13px;
+    font-size: 12px;
 }}
 QToolBar QToolButton:hover {{ background: #1e293b; }}
 QToolBar QToolButton:pressed {{ background: #334155; }}

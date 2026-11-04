@@ -280,7 +280,7 @@ class MainWindow(QMainWindow):
         title_icon = Icon("chart_bar", 18, QColor("#f1f5f9"))
         thl.addWidget(title_icon)
         title = QLabel(APP_TITLE)
-        title.setStyleSheet("color:#f1f5f9; font-size:15px; font-weight:700; background:transparent;")
+        title.setStyleSheet("color:#f1f5f9; font-size:14px; font-weight:700; background:transparent;")
         thl.addWidget(title)
         bar.addWidget(title_host)
         sep = QWidget()

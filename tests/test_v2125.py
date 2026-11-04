@@ -6,14 +6,14 @@ Keluhan (WhatsApp-style, bahasa user):
     pop up muncul atau drill down detail muncul"
 
 Akar terukur (bukti piksel data asli 1366×700):
-(1) Judul kolom dilukis QSS dgn font-weight 600 + font *{} 13px —
+(1) Judul kolom dilukis QSS dgn font-weight 600 + font *{} 12px —
     ``self.fontMetrics()`` (weight 400, font default widget) mengukur
     8-12% lebih pendek → lantai header kurang; ekor judul masuk zona
     backing funnel v2.12.3-4 [right-32, right-12] → tampak terpotong.
     Fix: paintSection melukis judul di rect YANG DISEMPITKAN sebesar
     _HF_STRIP (22px) — teks ter-elide SEBELUM strip; strip dilukis
     manual (bg + ikon + border replica QSS); lantai diukur dgn font
-    QSS asli (_header_font: family chain + 13px + DemiBold).
+    QSS asli (_header_font: family chain + 12px + DemiBold).
 (2) Klik penutup menu funnel yang jatuh di tabel DI-REPLAY Qt sebagai
     tekan#1 pada baris; klik ke-2 user = tekan#2 → Qt menyintesis
     klik-ganda → doubleClicked → DetailDialog terbuka sendiri.

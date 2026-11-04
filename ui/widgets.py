@@ -1451,7 +1451,7 @@ class KpiCard(QFrame):
             self.setToolTip(tooltip)
         self._value = WLabel("0", self)
         self._value.setStyleSheet(
-            f"color:{color}; font-size:20px; font-weight:700; border:none;")
+            f"color:{color}; font-size:18px; font-weight:700; border:none;")
         lay.addWidget(self._value)
         self._context = WLabel("", self)
         self._context.setObjectName("hint")
@@ -1639,7 +1639,7 @@ class SortControl(QWidget):
             "Klik utk balik arah sort.\n↓ = Turun (besar→kecil / Z→A)\n"
             "↑ = Naik (kecil→besar / A→Z)")
         self._dir.setStyleSheet(
-            "QPushButton { font-weight:700; font-size:14px; "
+            "QPushButton { font-weight:700; font-size:13px; "
             "padding:2px 0; }")
         self._dir.clicked.connect(self._toggle_dir)
         lay.addWidget(self._dir)
