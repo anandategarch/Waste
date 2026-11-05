@@ -52,6 +52,7 @@ widgets.py::_menu_value_fmt
 widgets.py::status_chip_for
 widgets.py::icon_header
 workers.py::ExportWorker
+workers.py::FolderScanWorker
 workers.py::HistoryWorker
 workers.py::PipelineWorker
 workers.py::RekapImportWorker

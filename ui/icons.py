@@ -379,6 +379,26 @@ def _building(p: QPainter, r: QRectF, c: QColor) -> None:
             p.drawRect(QRectF(x, y, w, w))
 
 
+def _folder(p: QPainter, r: QRectF, c: QColor) -> None:
+    pen = _pen(c, r, 0.09)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    # Tab atas (kiri) + body bawah (kanan, lebih tinggi).
+    body = QRectF(r.left(), r.top() + r.height() * 0.25,
+                  r.width(), r.height() * 0.75)
+    p.drawRect(body)
+    # Tab: dari pojok kiri-atas body → naik → ke kanan (sepertiga) → turun.
+    tab = QPainterPath()
+    tw = r.width() * 0.4
+    th = r.height() * 0.25
+    tab.moveTo(r.left(), r.top() + th)
+    tab.lineTo(r.left() + tw, r.top() + th)
+    tab.lineTo(r.left() + tw + r.width() * 0.08, r.top())
+    tab.lineTo(r.left() + r.width(), r.top())
+    tab.lineTo(r.left() + r.width(), r.top() + th)
+    p.drawPath(tab)
+
+
 # Registry nama → fungsi draw.
 _ICONS: dict[str, callable] = {
     "chart_bar": _chart_bar,
@@ -399,6 +419,7 @@ _ICONS: dict[str, callable] = {
     "calculator": _calculator,
     "eye": _eye,
     "building": _building,
+    "folder": _folder,
 }
 
 # Alias emoji → nama ikon (pemetaan migrasi cepat).

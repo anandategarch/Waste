@@ -282,6 +282,181 @@ def find_rekap_sheet(path: Path, config: dict,
         f"{'…' if len(sheets) > 8 else ''}).")
 
 
+# ============================================================
+# v2.17.2 — FOLDER FLOW: proses file BJMHAS-style dari folder
+# (permintaan user: "proses file langsung dari folder DEVIASI WEEKLY").
+# File BJMHAS = sheet REKAP MENTAH TANPA kolom NAMA RESTO (resto identity
+# = nama file). Deteksi lenient + sintesis NAMA RESTO dari filename.
+# ============================================================
+
+def _detect_header_row_lenient(peek: pd.DataFrame) -> int | None:
+    """Cari baris header rekap — VARIAN LENIENT (TANPA NAMA RESTO wajib).
+
+    File format BJMHAS (folder DEVIASI WEEKLY): sheet REKAP MENTAH punya
+    JENIS + NAMA BARANG + hari 1-31 TAPI tanpa kolom NAMA RESTO (resto
+    identity = nama file). Schema lenient: JENIS + NAMA BARANG + ≥3 hari.
+    NAMA RESTO disintesis dari nama file di load_rekap_folder.
+    """
+    if peek is None or peek.empty:
+        return None
+    for hr in range(min(6, len(peek))):
+        headers = [_hdr_norm(h) for h in peek.iloc[hr].tolist()]
+        if any(rc not in headers for rc in ("JENIS", "NAMA BARANG")):
+            continue
+        n_days = sum(1 for h in headers
+                     if h not in ("", "NONE", "NAN") and h in _DAY_SET)
+        if n_days >= 3:
+            return hr
+    return None
+
+
+def find_rekap_sheet_lenient(path, config: dict | None = None,
+                             logger=None) -> tuple[str, int]:
+    """Resolve sheet rekap + header row — VARIAN LENIENT (TANPA NAMA RESTO).
+
+    Pola sama dgn find_rekap_sheet tapi schema validasi TIDAK mewajibkan
+    NAMA RESTO (file BJMHAS tidak punya kolom itu — resto dari filename).
+    Dipakai load_rekap_folder. Return (nama_sheet, header_row).
+    Raise RekapImportError bila tak ada sheet rekap.
+    """
+    path = Path(path)
+    sheets = list_sheets(path)
+    if not sheets:
+        raise RekapImportError(
+            f"Workbook tidak punya sheet yang bisa dibaca: {path.name}")
+    if config is None:
+        config = load_config()
+    candidates = list(config.get("input_sheets", {}).get("rekap_mentah", []))
+    for extra in ("REKAP MENTAH", "rekap mentah"):
+        if extra not in candidates:
+            candidates.append(extra)
+    # 1. Kandidat nama — validasi lenient (JENIS + NAMA BARANG + ≥3 hari)
+    try:
+        name = find_sheet(candidates, sheets)
+    except ValueError:
+        name = None
+    if name is not None:
+        try:
+            df0 = _read_excel_fast(path, sheet_name=name, header=0, nrows=6)
+        except Exception as exc:
+            _log(logger, f"[rekap_folder] WARNING: sheet kandidat {name!r} "
+                         f"gagal dibaca: {exc}")
+            df0 = None
+        if df0 is not None and not df0.empty:
+            df0 = _normalize_columns(df0)
+            cols = [str(c).strip().upper() for c in df0.columns]
+            if all(rc in cols for rc in ("JENIS", "NAMA BARANG")) \
+                    and sum(1 for c in cols if c in _DAY_SET) >= 3:
+                _log(logger, f"[rekap_folder] sheet '{name}' (kandidat, "
+                             f"lenient)")
+                return name, 0
+    # 2. Fallback scan lenient
+    for sn in sheets:
+        try:
+            raw = pd.read_excel(path, sheet_name=sn, header=None, nrows=8,
+                                dtype=object)
+        except Exception as exc:
+            _log(logger, f"[rekap_folder] WARNING: sheet {sn!r} tak bisa "
+                         f"dibaca: {exc}")
+            continue
+        hr = _detect_header_row_lenient(raw)
+        if hr is not None:
+            _log(logger, f"[rekap_folder] sheet '{sn}' (deteksi lenient, "
+                         f"header baris {hr + 1})")
+            return sn, hr
+    raise RekapImportError(
+        f"Sheet REKAP MENTAH (lenient) tidak ditemukan di {path.name}. "
+        f"Cari sheet ber-kolom JENIS + NAMA BARANG + hari 1-31.")
+
+
+def load_rekap_folder(folder_path, config: dict | None = None,
+                      logger=None) -> dict:
+    """Scan folder file .xlsx → baca sheet REKAP MENTAH tiap file →
+    SINTESIS NAMA RESTO dari nama file (bila kolom absen) → GABUNG semua
+    → tulis temp .xlsx (sheet "REKAP MENTAH") → return summary.
+
+    Untuk file format BJMHAS (folder DEVIASI WEEKLY): tiap file = 1 resto,
+    NAMA RESTO diambil dari stem filename (BJMHAS.xlsx → "BJMHAS"). File
+    dgn kolom NAMA RESTO sendiri (format TEGAR) tetap dipakai apa adanya.
+
+    ANTI SILENT-ERROR:
+      - File tanpa sheet REKAP MENTAH → dicatat di "skipped" (bukan diam).
+      - NAMA RESTO disintesis → dicatat di "synthesized" (transparan).
+      - Temp file path dikembalikan — EDIT nilai via pop-up akan menyimpan
+        ke temp file INI, BUKAN file asli di folder (file asli utuh). Untuk
+        edit file asli, gunakan "Pilih File Sendiri" (format TEGAR).
+
+    Return: {"temp_path": str, "files": [str,...], "rows_total": int,
+             "rows_per_file": {name: int}, "synthesized": [name,...],
+             "skipped": [(name, reason),...]}.
+    Raise RekapImportError bila folder tak ada / kosong / tak ada file rekap.
+    """
+    import tempfile
+    folder = Path(folder_path)
+    if not folder.is_dir():
+        raise RekapImportError(
+            f"Folder tidak ditemukan: {folder_path}")
+    if config is None:
+        config = load_config()
+    # Scan .xlsx (skip Excel lock temp ~$ + hidden)
+    xlsx_files = sorted(
+        p for p in folder.glob("*.xlsx")
+        if not p.name.startswith("~$") and not p.name.startswith("."))
+    if not xlsx_files:
+        raise RekapImportError(
+            f"Tidak ada file .xlsx di folder: {folder}")
+    _log(logger, f"[rekap_folder] scan {len(xlsx_files)} file .xlsx di "
+                 f"{folder}")
+    frames: list[tuple[str, pd.DataFrame, bool]] = []  # (name, df, synth?)
+    skipped: list[tuple[str, str]] = []
+    for fp in xlsx_files:
+        try:
+            sn, hr = find_rekap_sheet_lenient(fp, config, logger)
+        except RekapImportError as exc:
+            skipped.append((fp.name, str(exc)))
+            continue
+        try:
+            raw = pd.read_excel(fp, sheet_name=sn, header=hr, dtype=object)
+        except Exception as exc:
+            skipped.append((fp.name, f"gagal baca sheet {sn!r}: {exc}"))
+            continue
+        raw = _normalize_columns(raw)
+        synth = False
+        if "NAMA RESTO" not in raw.columns:
+            raw["NAMA RESTO"] = fp.stem
+            synth = True
+            _log(logger, f"[rekap_folder] {fp.name}: NAMA RESTO "
+                         f"disintesis = {fp.stem!r} (kolom absen di sheet)")
+        frames.append((fp.name, raw, synth))
+        _log(logger, f"[rekap_folder] {fp.name}: {len(raw)} baris "
+                     f"(sheet {sn!r})")
+    if not frames:
+        names = ", ".join(n for n, _ in skipped) or "(none)"
+        raise RekapImportError(
+            f"Tidak ada file dengan sheet REKAP MENTAH di folder {folder}. "
+            f"File dilewati: {names}")
+    # Gabung semua frame (kolom union — fillna NaN bila beda struktur)
+    combined = pd.concat([f for _, f, _ in frames], ignore_index=True,
+                         sort=False)
+    # Tulis temp file (sheet "REKAP MENTAH" — siap di-feed ke run_pipeline;
+    # find_rekap_sheet STRICT akan deteksi karena NAMA RESTO kini ada).
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        suffix=".xlsx", prefix="rekap_folder_")
+    os.close(tmp_fd)
+    with pd.ExcelWriter(tmp_path, engine="openpyxl") as w:
+        combined.to_excel(w, sheet_name="REKAP MENTAH", index=False)
+    _log(logger, f"[rekap_folder] gabungan {len(combined)} baris → "
+                 f"{tmp_path} ({len(frames)} file)")
+    return {
+        "temp_path": tmp_path,
+        "files": [n for n, _, _ in frames],
+        "rows_total": len(combined),
+        "rows_per_file": {n: len(f) for n, f, _ in frames},
+        "synthesized": [n for n, _, s in frames if s],
+        "skipped": skipped,
+    }
+
+
 def _sanitize_label(text: str) -> str:
     """Bersihkan label untuk nama file output (buang karakter aneh,
     rapikan spasi ganda; label dari nama file sudah aman — ini jaga

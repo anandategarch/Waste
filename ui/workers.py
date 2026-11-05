@@ -10,6 +10,11 @@ tidak freeze) — pola QThread + Signal:
 - RekapImportWorker : olah REKAP MENTAH mentah → workbook DATA_WASTE standar
                    (v2.14.0 — menggantikan olahan manual Excel user;
                    jalur waste_anomaly/rekap_import)
+- FolderScanWorker  : v2.17.2 — scan folder file BJMHAS-style (.xlsx tanpa
+                   kolom NAMA RESTO) → sintesis NAMA RESTO dari nama file →
+                   gabung → temp .xlsx (siap di-feed PipelineWorker). Untuk
+                   opsi "Proses dari Folder" (permintaan user: folder
+                   DEVIASI WEEKLY berisi file bjmhas-style).
 
 v2.15.0 — SEKALI JALAN: tombol 🧮 UI kini menjalankan pipeline LANGSUNG
 pada file mentah (rekap_import dipanggil pipeline.py di fase LOAD —
@@ -31,7 +36,11 @@ from PySide6.QtCore import QThread, Signal
 from waste_anomaly.exporter import export_to_excel
 from waste_anomaly.period_history import load_history_file
 from waste_anomaly.pipeline import run_pipeline
-from waste_anomaly.rekap_import import RekapImportError, convert_rekap_mentah
+from waste_anomaly.rekap_import import (
+    RekapImportError,
+    convert_rekap_mentah,
+    load_rekap_folder,
+)
 from waste_anomaly.utils import load_config
 
 from waste_anomaly.followup import fingerprint_series
@@ -306,6 +315,47 @@ class SaveEditsWorker(QThread):
             # v2.16.2: sertakan traceback supaya root cause (chained
             # OSError/openpyxl) tak hilang dari log. Sebelumnya: "" (kosong).
             self.failed.emit(str(e), traceback.format_exc())
+        except Exception as e:  # noqa: BLE001 — error ke UI, bukan crash thread
+            self.failed.emit(f"{type(e).__name__}: {e}",
+                             traceback.format_exc())
+
+
+class FolderScanWorker(QThread):
+    """v2.17.2 — scan folder file .xlsx → gabung → temp .xlsx (background).
+
+    Untuk opsi "Proses dari Folder" (permintaan user: folder DEVIASI WEEKLY
+    berisi file bjmhas-style). Memanggil waste_anomaly.rekap_import
+    .load_rekap_folder — scan .xlsx, deteksi sheet REKAP MENTAH (lenient —
+    tanpa NAMA RESTO wajib), sintesis NAMA RESTO dari nama file bila kolom
+    absen, gabung semua, tulis temp .xlsx.
+
+    done → dict hasil load_rekap_folder (temp_path, files, rows_total,
+    rows_per_file, synthesized, skipped). UI mengisi kolom workbook dgn
+    temp_path lalu "Mulai Pipeline" (PipelineWorker) memprosesnya.
+    failed → (pesan singkat, traceback). RekapImportError sudah ramah
+    (pesan siap tampil); traceback kosong untuk kasus itu.
+
+    Anti silent-error: file tanpa sheet REKAP MENTAH dicatat di
+    result["skipped"] (bukan diam-dalam dibuang). NAMA RESTO disintesis
+    dicatat di result["synthesized"] (transparan).
+    """
+
+    done = Signal(dict)
+    failed = Signal(str, str)
+
+    def __init__(self, folder_path: str, config: dict | None = None,
+                 parent=None) -> None:
+        super().__init__(parent)
+        self._folder = str(folder_path)
+        self._config = config if config is not None else load_config()
+
+    def run(self) -> None:
+        try:
+            result = load_rekap_folder(
+                self._folder, self._config, logger=None)
+            self.done.emit(result)
+        except RekapImportError as e:
+            self.failed.emit(str(e), "")
         except Exception as e:  # noqa: BLE001 — error ke UI, bukan crash thread
             self.failed.emit(f"{type(e).__name__}: {e}",
                              traceback.format_exc())

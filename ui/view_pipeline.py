@@ -51,8 +51,9 @@ from PySide6.QtWidgets import (
 
 from .shared import APP_DIR, LOG_RUN_LINES, fmt_id, friendly_file_error
 from .state import AppContext
+from .icons import make_qicon
 from .widgets import Card, WLabel, busy_feedback
-from .workers import PipelineWorker
+from .workers import PipelineWorker, FolderScanWorker
 from waste_anomaly.pipeline import PIPELINE_N_STAGES
 
 _SUMMARY_LABELS = {
@@ -154,6 +155,9 @@ class PipelineView(QWidget):
         self._ctx = ctx
         self._worker: PipelineWorker | None = None
         self._running = False
+        # v2.17.2 — folder flow (scan+combine BJMHAS-style files → temp).
+        self._folder_worker: FolderScanWorker | None = None
+        self._folder_temp: str | None = None  # temp path utk cleanup
         # v2.15.0 — tombol 🧮 kini SEKALI JALAN (dialog → _start; pipeline
         # sendiri memanggil rekap_import di fase LOAD): tidak ada lagi
         # worker olah terpisah / file antara (jalur RekapImportWorker
@@ -214,6 +218,22 @@ class PipelineView(QWidget):
         b_import.clicked.connect(self._on_import_rekap)
         rl.addWidget(b_import)
         self._btn_import = b_import
+        # v2.17.2 — Proses dari Folder (file BJMHAS-style: tanpa kolom
+        # NAMA RESTO → disintesis dari nama file; folder DEVIASI WEEKLY).
+        b_folder = QPushButton(make_qicon("folder", 16), "Proses dari Folder…", row)
+        b_folder.setToolTip(
+            "Pilih FOLDER berisi file .xlsx (format BJMHAS — sheet REKAP "
+            "MENTAH tanpa kolom NAMA RESTO; resto diambil dari NAMA FILE). "
+            "Semua file .xlsx di folder dipindai, sheet REKAP MENTAH "
+            "diekstrak, NAMA RESTO disintesis dari nama file (bila kolom "
+            "absen), lalu DIGABUNG jadi satu dataset. Hasil gabungan = "
+            "file sementara — edit nilai via pop-up menyimpan ke file "
+            "sementara INI, bukan file asli di folder (untuk edit file "
+            "asli, gunakan tombol 🧮 Pilih File Sendiri dengan format "
+            "REKAP MENTAH_..._TEGAR).")
+        b_folder.clicked.connect(self._on_import_folder)
+        rl.addWidget(b_folder)
+        self._btn_folder = b_folder
         b_sample = QPushButton("Pakai Sample", row)
         b_sample.setToolTip("Isi kolom dengan DATA_WASTE.xlsx dari folder repo")
         b_sample.clicked.connect(self._use_sample)
@@ -440,6 +460,114 @@ class PipelineView(QWidget):
             f"=== Olah & jalankan REKAP MENTAH sekali proses: "
             f"{Path(path).name} ===")
         self._start()
+
+    # ------------------------------------------------------------
+    # v2.17.2 — FOLDER FLOW (scan BJMHAS-style files → temp → pipeline)
+    # ------------------------------------------------------------
+    def _on_import_folder(self) -> None:
+        """Pilih FOLDER → scan .xlsx → gabung → temp → MULAI PIPELINE.
+
+        Untuk file format BJMHAS (folder DEVIASI WEEKLY): tiap file .xlsx
+        punya sheet REKAP MENTAH TANPA kolom NAMA RESTO (resto = nama file).
+        FolderScanWorker memindai, sintesis NAMA RESTO dari filename,
+        gabung semua jadi temp .xlsx, lalu _start() menjalankan pipeline
+        pada temp (PipelineWorker). Edit nilai via pop-up menyimpan ke
+        temp file INI (bukan file asli — file asli di folder utuh).
+        """
+        if self._running:
+            QMessageBox.information(
+                self, "Pipeline Sedang Berjalan",
+                "Tunggu pipeline selesai (atau batalkan) sebelum memproses "
+                "folder baru.")
+            return
+        if self._folder_worker is not None:
+            QMessageBox.information(
+                self, "Scan Folder Sedang Berjalan",
+                "Tunggu scan folder selesai sebelum memilih folder lain.")
+            return
+        start_dir = str(APP_DIR)
+        cur = self.current_workbook()
+        if cur:
+            cur_dir = str(Path(cur).parent)
+            if Path(cur_dir).is_dir():
+                start_dir = cur_dir
+        folder = QFileDialog.getExistingDirectory(
+            self, "Pilih Folder berisi file .xlsx (REKAP MENTAH)",
+            start_dir)
+        if not folder:
+            return
+        # Bersihkan temp folder-flow sebelumnya (bila ada).
+        self._cleanup_folder_temp()
+        # Mulai worker scan folder (background — baca N file .xlsx bisa
+        # beberapa detik; UI tetap responsif).
+        self._folder_worker = FolderScanWorker(folder, self._ctx.config, self)
+        self._folder_worker.done.connect(self._on_folder_done)
+        self._folder_worker.failed.connect(self._on_folder_failed)
+        self._folder_worker.finished.connect(
+            self._folder_worker.deleteLater)
+        # Disable tombol import+folder selama scan (anti klik-ganda).
+        self._btn_import.setEnabled(False)
+        self._btn_folder.setEnabled(False)
+        self._ctx.set_status(
+            f"⏳ Memindai folder {Path(folder).name}…", "running")
+        self._ctx.log(f"=== Proses dari Folder: {folder} ===")
+        self._folder_worker.start()
+
+    def _on_folder_done(self, result: dict) -> None:
+        """Scan folder selesai → isi workbook dgn temp_path → MULAI PIPELINE."""
+        self._folder_worker = None
+        self._btn_import.setEnabled(True)
+        self._btn_folder.setEnabled(True)
+        temp = result.get("temp_path", "")
+        if not temp:
+            self._ctx.set_status("⚠ Scan folder: temp file tidak dibuat.", "error")
+            return
+        self._folder_temp = temp  # simpan utk cleanup nanti
+        files = result.get("files", [])
+        synth = result.get("synthesized", [])
+        skipped = result.get("skipped", [])
+        rows_total = result.get("rows_total", 0)
+        # Log transparan (anti silent-error).
+        self._ctx.log(
+            f"✓ Folder dipindai: {len(files)} file, {fmt_id(rows_total)} "
+            f"baris gabungan.")
+        for fn in files:
+            tag = " (NAMA RESTO dari nama file)" if fn in synth else ""
+            n = result.get("rows_per_file", {}).get(fn, 0)
+            self._ctx.log(f"  • {fn}: {fmt_id(n)} baris{tag}")
+        for fn, reason in skipped:
+            self._ctx.log(f"  ✕ {fn} dilewati: {reason}")
+        self._ctx.log(
+            f"  File gabungan (sementara): {Path(temp).name}")
+        if synth:
+            self._ctx.log(
+                "  ⚠ Edit nilai via pop-up menyimpan ke file sementara INI, "
+                "BUKAN file asli di folder.")
+        # Isi kolom workbook dgn temp path → _start pipeline.
+        self._ent_workbook.setText(temp)
+        self._ctx.set_status(
+            f"✓ {len(files)} file digabung ({fmt_id(rows_total)} baris) — "
+            "menjalankan pipeline…", "done")
+        self._start()
+
+    def _on_folder_failed(self, msg: str, tb: str) -> None:
+        """Scan folder gagal → pulihkan UI + tampilkan error ramah."""
+        self._folder_worker = None
+        self._btn_import.setEnabled(True)
+        self._btn_folder.setEnabled(True)
+        self._ctx.log(f"!!! Scan folder gagal: {msg}\n{tb}")
+        friendly_file_error(self, msg, tb, "Scan Folder Gagal")
+        self._ctx.set_status(f"⚠ Scan folder gagal: {msg}", "error")
+
+    def _cleanup_folder_temp(self) -> None:
+        """Hapus temp file folder-flow sebelumnya (bila ada)."""
+        if self._folder_temp:
+            try:
+                from os import unlink
+                unlink(self._folder_temp)
+            except OSError:
+                pass  # best-effort — tak perlu crash
+            self._folder_temp = None
 
     # ------------------------------------------------------------
     # RUN / CANCEL
