@@ -367,6 +367,31 @@ class TestUIFolderButton:
         finally:
             win.close()
 
+    def test_start_guard_saat_scan_jalan(self, monkeypatch):
+        """v2.17.4 — _start() HARUS di-guard bila folder scan sedang jalan
+        (tidak error 'workbook belum dipilih'). Bug: user klik Mulai
+        Pipeline / Enter di workbook field SEBELUM scan selesai → workbook
+        kosong → error menyesatkan."""
+        from PySide6.QtWidgets import QMessageBox
+        # Suppress dialog (guard pakai QMessageBox.information).
+        monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: None))
+        monkeypatch.setattr(QMessageBox, "critical", staticmethod(lambda *a, **k: None))
+        win = self._win()
+        try:
+            pv = win._views[0][1]
+            # Simulasi: folder scan sedang jalan (worker != None) +
+            # workbook field KOSONG (temp belum terisi).
+            pv._folder_worker = object()  # mock worker running
+            pv._ent_workbook.setText("")  # workbook kosong
+            # _start() HARUS return early (guard), TIDAK raise / error.
+            pv._start()
+            # Tidak ada exception = pass. Workbook tetap kosong (pipeline
+            # belum jalan — menunggu scan selesai).
+            assert pv._ent_workbook.text() == ""
+            assert not pv._running  # pipeline belum jalan
+        finally:
+            win.close()
+
 
 # ============================================================
 # [F172-9] ikon folder di registry

@@ -512,19 +512,31 @@ class PipelineView(QWidget):
         self._folder_worker.failed.connect(self._on_folder_failed)
         self._folder_worker.finished.connect(
             self._folder_worker.deleteLater)
-        # Disable tombol import+folder selama scan (anti klik-ganda).
+        # Disable tombol + kolom workbook selama scan (v2.17.4 — FIX bug
+        # "Workbook belum dipilih" saat user klik Mulai Pipeline / tekan
+        # Enter di kolom workbook SEBELUM scan selesai. Scan butuh beberapa
+        # detik (20 file ~9-13s calamine); workbook belum terisi temp path
+        # → _start() melihat workbook kosong → error menyesatkan. Pipeline
+        # jalan OTOMATIS setelah scan selesai (_on_folder_done → _start).
         self._btn_import.setEnabled(False)
         self._btn_folder.setEnabled(False)
+        self._btn_run.setEnabled(False)
+        self._ent_workbook.setEnabled(False)
+        self._btn_run.setText("⏳ Memindai folder…")
         self._ctx.set_status(
-            f"⏳ Memindai folder {Path(folder).name}…", "running")
+            f"⏳ Memindai folder {Path(folder).name}… (tunggu — pipeline "
+            f"jalan otomatis setelah selesai)", "running")
         self._ctx.log(f"=== Proses dari Folder: {folder} ===")
         self._folder_worker.start()
 
     def _on_folder_done(self, result: dict) -> None:
         """Scan folder selesai → isi workbook dgn temp_path → MULAI PIPELINE."""
         self._folder_worker = None
+        # Re-enable tombol + kolom workbook (di-disable saat scan).
         self._btn_import.setEnabled(True)
         self._btn_folder.setEnabled(True)
+        self._ent_workbook.setEnabled(True)
+        self._btn_run.setEnabled(True)  # _start akan set text→Batalkan
         temp = result.get("temp_path", "")
         if not temp:
             self._ctx.set_status("⚠ Scan folder: temp file tidak dibuat.", "error")
@@ -562,8 +574,15 @@ class PipelineView(QWidget):
     def _on_folder_failed(self, msg: str, tb: str) -> None:
         """Scan folder gagal → pulihkan UI + tampilkan error ramah."""
         self._folder_worker = None
+        # Re-enable tombol + kolom workbook + restore _btn_run text.
         self._btn_import.setEnabled(True)
         self._btn_folder.setEnabled(True)
+        self._ent_workbook.setEnabled(True)
+        self._btn_run.setEnabled(True)
+        self._btn_run.setText("▶ Mulai Pipeline")
+        self._btn_run.setObjectName("accent")
+        self._btn_run.style().unpolish(self._btn_run)
+        self._btn_run.style().polish(self._btn_run)
         self._ctx.log(f"!!! Scan folder gagal: {msg}\n{tb}")
         friendly_file_error(self, msg, tb, "Scan Folder Gagal")
         self._ctx.set_status(f"⚠ Scan folder gagal: {msg}", "error")
@@ -589,6 +608,16 @@ class PipelineView(QWidget):
 
     def _start(self) -> None:
         if self._running:
+            return
+        # v2.17.4 — guard: bila scan folder sedang jalan, JANGAN mulai
+        # pipeline (workbook belum terisi temp path). Pipeline jalan
+        # OTOMATIS via _on_folder_done setelah scan selesai.
+        if self._folder_worker is not None:
+            QMessageBox.information(
+                self, "Scan Folder Sedang Berjalan",
+                "Folder sedang dipindai — tunggu sebentar.\n"
+                "Pipeline akan jalan OTOMATIS setelah scan selesai "
+                "(tidak perlu klik Mulai Pipeline).")
             return
         wb = self.current_workbook()
         if not wb or not Path(wb).exists():
