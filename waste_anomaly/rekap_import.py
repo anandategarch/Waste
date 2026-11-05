@@ -462,12 +462,26 @@ def load_rekap_folder(folder_path, config: dict | None = None,
                          sort=False)
     # Tulis temp file (sheet "REKAP MENTAH" — siap di-feed run_pipeline;
     # find_rekap_sheet STRICT akan deteksi karena NAMA RESTO kini ada).
+    # v2.17.5 — openpyxl WRITE-ONLY mode (~5-10x lebih cepat dari normal
+    # pd.ExcelWriter untuk data besar: 52k baris × 42 kolom = ~20s→~3s).
+    # calamine tidak bisa TULIS (hanya baca), jadi openpyxl write-only =
+    # tercepat utk menulis. Write-only: append per-baris, tak simpan sel
+    # di memori — hemat RAM + cepat.
     import tempfile
+    from openpyxl import Workbook
     tmp_fd, tmp_path = tempfile.mkstemp(
         suffix=".xlsx", prefix="rekap_folder_")
     os.close(tmp_fd)
-    with pd.ExcelWriter(tmp_path, engine="openpyxl") as w:
-        combined.to_excel(w, sheet_name="REKAP MENTAH", index=False)
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("REKAP MENTAH")
+    ws.append(list(combined.columns))
+    for row in combined.itertuples(index=False, name=None):
+        # NaN → None (openpyxl tulis sel kosong, bukan "nan" string).
+        # np.integer/np.floating → Python native (openpyxl write-only
+        # terima int/float/str/None/bool).
+        ws.append([None if (isinstance(v, float) and v != v) else v
+                   for v in row])
+    wb.save(tmp_path)
     _log(logger, f"[rekap_folder] gabungan {len(combined)} baris → "
                  f"{tmp_path} ({len(frames)} file, {elapsed:.1f}s, "
                  f"engine={engine_used})")
@@ -699,7 +713,18 @@ def normalize_rekap_values(df: pd.DataFrame, logger=None) -> pd.DataFrame:
     if df is None or df.empty or "JENIS" not in df.columns:
         return df
     s = df["JENIS"]
-    norm = s.where(s.isna(), s.astype(str).str.strip().str.upper())
+    # v2.17.5 — strip prefix angka kategori ('2.WASTE'→'WASTE',
+    # '3.SUSUT'→'SUSUT', '4.TRIAL'→'TRIAL'). File resto tertentu pakai
+    # JENIS ber-prefix angka (template Power Query variant — '1.DEVIASI',
+    # '2.WASTE', '3.SUSUT', '4.TRIAL', '5.LOSS SURPLUS', dst.). Tanpa
+    # strip ini, '2.WASTE' dianggap BUKAN WASTE → dibuang filter Stage 1
+    # → resto hilang dari analisa (bug 17/20 — hanya 17 resto masuk dari
+    # 20 file). Strip dilakukan SETELAH upper+strip supaya '2.waste '→
+    # 'WASTE' (prefix+spasi keduanya dibersihkan).
+    norm = s.where(
+        s.isna(),
+        s.astype(str).str.strip().str.upper()
+        .str.replace(r"^\d+\.\s*", "", regex=True))
     # Sheet mentah = ada nilai JENIS eksplisit di luar {W,S,T}
     # (BOM/SO/stok — baris ini memang akan dibuang stage_01) ATAU ada
     # varian tak-kanonik ('waste '). NaN TIDAK memicu (bukan ciri mentah).

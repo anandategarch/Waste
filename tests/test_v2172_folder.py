@@ -482,3 +482,63 @@ class TestPipelineOnFolderTemp:
         # TOTAL BOM hidup (baris BOM di fixture → inject_bom_from_raw_rows).
         assert out["TOTAL BOM"].notna().any()
         os.unlink(res["temp_path"])
+
+
+# ============================================================
+# [F172-12] v2.17.5 — JENIS prefix angka distrip ('2.WASTE'→'WASTE')
+# (bug 17/20 resto: file dgn JENIS ber-prefix angka dibuang Stage 1)
+# ============================================================
+class TestJenisPrefixStrip:
+    def test_normalize_strip_prefix_angka(self):
+        """normalize_rekap_values: '2.WASTE'→'WASTE', '3.SUSUT'→'SUSUT',
+        '4.TRIAL'→'TRIAL'. Tanpa strip, '2.WASTE' dianggap non-WASTE →
+        dibuang Stage 1 → resto hilang dari analisa."""
+        from waste_anomaly.rekap_import import normalize_rekap_values, _KEEP_JENIS
+        import pandas as pd
+        df = pd.DataFrame({
+            "JENIS": ["2.WASTE", "3.SUSUT", "4.TRIAL", "1.DEVIASI",
+                      "WASTE", "waste ", "5.LOSS SURPLUS", "BOM"],
+            "SATUAN": ["GR"] * 8,
+        })
+        out = normalize_rekap_values(df)
+        jenis = list(out["JENIS"])
+        # Prefix distrip → canonical.
+        assert jenis[0] == "WASTE", f"2.WASTE→WASTE, got {jenis[0]}"
+        assert jenis[1] == "SUSUT", f"3.SUSUT→SUSUT, got {jenis[1]}"
+        assert jenis[2] == "TRIAL", f"4.TRIAL→TRIAL, got {jenis[2]}"
+        # Non-W/S/T prefix distrip tapi tetap non-canonical (dibuang Stage 1).
+        assert jenis[3] == "DEVIASI"
+        assert jenis[6] == "LOSS SURPLUS"
+        # Canonical tetap utuh.
+        assert jenis[4] == "WASTE"
+        assert jenis[5] == "WASTE"  # 'waste ' → strip+upper
+        # 5 baris W/S/T canonical (lolos Stage 1): sebelumnya hanya 2.
+        n_keep = sum(1 for v in jenis if v in _KEEP_JENIS)
+        assert n_keep == 5, f"5 W/S/T canonical, got {n_keep}"
+
+    def test_folder_dgn_jenis_prefix_20_resto_masuk(self, tmp_path):
+        """Simulasi bug user: 3 file ber-prefix JENIS ('2.WASTE') + 17 file
+        canonical. Sebelum fix: 3 resto hilang (17 masuk). Setelah fix:
+        20 resto masuk (prefix distrip → WASTE → lolos Stage 1)."""
+        from waste_anomaly.rekap_import import load_rekap_folder
+        from waste_anomaly.utils import load_config
+        from waste_anomaly.pipeline import run_pipeline
+        # 17 file canonical (JENIS='WASTE') + 3 file ber-prefix ('2.WASTE')
+        for i in range(17):
+            _write_xlsx(_bjmhas_rows(f"CANON{i:02d}"), tmp_path / f"CANON{i:02d}.xlsx")
+        for i in range(3):
+            df_pre = _bjmhas_rows(f"PRE{i}")
+            # Override JENIS: 'WASTE' → '2.WASTE' (prefix angka)
+            df_pre.loc[df_pre["JENIS"] == "WASTE", "JENIS"] = "2.WASTE"
+            df_pre.loc[df_pre["JENIS"] == "SUSUT", "JENIS"] = "3.SUSUT"
+            df_pre.loc[df_pre["JENIS"] == "TRIAL", "JENIS"] = "4.TRIAL"
+            _write_xlsx(df_pre, tmp_path / f"PRE{i}.xlsx")
+        res = load_rekap_folder(tmp_path, load_config())
+        assert len(res["files"]) == 20
+        out = run_pipeline(res["temp_path"], key_akhir=31)["df"]
+        restos = set(out["NAMA RESTO"].dropna().unique())
+        # SEMUA 20 resto masuk (termasuk 3 ber-prefix — JENIS distrip).
+        assert len(restos) == 20, f"20 resto harus masuk, got {len(restos)}"
+        for i in range(3):
+            assert f"PRE{i}" in restos, f"PRE{i} harus masuk (JENIS prefix distrip)"
+        os.unlink(res["temp_path"])
