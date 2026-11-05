@@ -103,16 +103,16 @@ file mentah tersebut — <b>tanpa file olahan antara</b> dan tanpa klik Mulai
 Pipeline lagi (dulu dua proses terpisah: olah dulu, baru jalankan). Progres,
 log per-stage, tombol ⏹ Batalkan, dan ringkasan run bekerja seperti biasa.
 Jalur file DATA_WASTE standar (Telusuri… → Mulai Pipeline) tetap didukung.</li>
-<li><b>📁 Proses dari Folder…</b> (v2.17.2): punya <b>FOLDER</b> berisi file
+<li><b>📁 Proses dari Folder…</b>: punya <b>FOLDER</b> berisi file
 .xlsx format <b>BJMHAS</b> (sheet "REKAP MENTAH" <b>TANPA</b> kolom NAMA
 RESTO — resto identity = nama file; mis. folder "DEVIASI WEEKLY" berisi
 BJMHAS.xlsx, BDGUKU.xlsx, dst.)? Klik tombol ini, pilih foldernya —
 <b>semua file .xlsx dipindai</b>, sheet REKAP MENTAH diekstrak, <b>NAMA
 RESTO disintesis dari nama file</b> (BJMHAS.xlsx → "BJMHAS"), lalu
 <b>DIGABUNG</b> jadi satu dataset multi-resto. Pipeline berjalan pada
-file gabungan (sementara). <b>Engine tercepat</b> (v2.17.3): calamine
+file gabungan (sementara). <b>Engine tercepat</b>: calamine
 (Rust, 8,5× openpyxl) bila terpasang + baca <b>paralel</b> 4 worker — 20
-file ±9-13 dtk. <b>Default folder</b>: C:\KERJA\1. RESTO\9.NEW QUERY\1.
+file ±9-13 dtk. <b>Default folder</b>: C:\\KERJA\\1. RESTO\\9.NEW QUERY\\1.
 DEVIASI WEEKLY (bisa diganti di config.json key "default_deviasi_folder";
 dialog folder tetap bisa pilih folder lain). Catatan: <b>edit nilai via
 pop-up menyimpan ke file sementara INI</b>, bukan file asli di folder

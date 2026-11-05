@@ -211,7 +211,6 @@ class TestLoadRekapFolder:
 
     def test_config_default_deviasi_folder_ada(self):
         """v2.17.3 — config.json punya key default_deviasi_folder."""
-        import json
         from waste_anomaly.utils import load_config
         cfg = load_config()
         assert "default_deviasi_folder" in cfg
@@ -274,7 +273,6 @@ class TestLoadRekapFolder:
 class TestFolderScanWorker:
     def test_qthread_subclass_dgn_sinyal(self):
         from PySide6.QtCore import QThread
-        from PySide6.QtWidgets import QApplication
         from ui.workers import FolderScanWorker
         _qapp()
         assert issubclass(FolderScanWorker, QThread)
@@ -286,7 +284,6 @@ class TestFolderScanWorker:
 
     def test_done_emits_dict(self, tmp_path, monkeypatch):
         """Worker jalan di thread — drain processEvents sampai done."""
-        from PySide6.QtWidgets import QApplication
         from ui.workers import FolderScanWorker
         import time
         app = _qapp()
@@ -313,7 +310,6 @@ class TestFolderScanWorker:
         os.unlink(r["temp_path"])
 
     def test_failed_emits_bila_folder_tidak_ada(self):
-        from PySide6.QtWidgets import QApplication
         from ui.workers import FolderScanWorker
         import time
         app = _qapp()
@@ -382,6 +378,64 @@ class TestFolderIcon:
         assert "folder" in icon_names()
         pm = icon_pixmap("folder", 24)
         assert not pm.isNull(), "pixmap folder harus ter-render"
+
+
+# ============================================================
+# [F172-11] v2.17.3 — edit DISABLED utk file folder-temp
+# (permintaan user: "revisi file hanya tersedia jika aku pilih file
+# sendiri bukan dari folder")
+# ============================================================
+class TestEditDisabledForFolderTemp:
+    def test_detect_folder_temp_by_name(self):
+        from ui.view_anomali import _workbook_is_folder_temp
+        assert _workbook_is_folder_temp("/tmp/rekap_folder_abc123.xlsx") is True
+        assert _workbook_is_folder_temp("C:/x/rekap_folder_XYZ.xlsx") is True
+        # File asli (mode Pilih File Sendiri) → False.
+        assert _workbook_is_folder_temp(
+            "C:/data/REKAP MENTAH_01-31 AGUSTUS 2026_TEGAR.xlsx") is False
+        assert _workbook_is_folder_temp("BJMHAS.xlsx") is False
+        # None / kosong → False.
+        assert _workbook_is_folder_temp(None) is False
+        assert _workbook_is_folder_temp("") is False
+
+    def test_save_button_disabled_saat_folder_temp(self, tmp_path):
+        """Pop-up detail: save button DISABLED bila workbook = folder temp."""
+        from ui.state import AppContext
+        from ui.view_anomali import DetailPanel, _FOLDER_TEMP_PREFIX
+        import pandas
+        _qapp()
+        # ctx dgn summary workbook_path = folder temp.
+        ctx = AppContext({})
+        ctx.summary = {"workbook_path": f"/tmp/{_FOLDER_TEMP_PREFIX}xyz.xlsx"}
+        # Record minimal dgn __SRC_ROW (supaya kondisi lain True, isolasi
+        # efek folder-temp).
+        rec = pandas.Series({"NAMA RESTO": "X", "NAMA BARANG": "Y",
+                             "__SRC_ROW": 5, "ANOMALY STATUS": "Normal",
+                             "ANOMALY SCORE": 0})
+        panel = DetailPanel(ctx)
+        panel.show_record(rec)
+        # Tombol Simpan harus DISABLED (folder temp) meski __SRC_ROW ada.
+        assert panel._save_btn is not None
+        assert panel._save_btn.isEnabled() is False
+        tip = panel._save_btn.toolTip()
+        assert "SEMENTERARA" in tip or "sementara" in tip.lower()
+
+    def test_save_button_enabled_untuk_file_asli(self, tmp_path):
+        """Pop-up detail: save button ENABLED bila workbook = file asli
+        (mode Pilih File Sendiri) + __SRC_ROW ada."""
+        from ui.state import AppContext
+        from ui.view_anomali import DetailPanel
+        import pandas
+        _qapp()
+        ctx = AppContext({})
+        ctx.summary = {"workbook_path": str(tmp_path / "REKAP MENTAH_TEGAR.xlsx")}
+        rec = pandas.Series({"NAMA RESTO": "X", "NAMA BARANG": "Y",
+                             "__SRC_ROW": 5, "ANOMALY STATUS": "Normal",
+                             "ANOMALY SCORE": 0})
+        panel = DetailPanel(ctx)
+        panel.show_record(rec)
+        assert panel._save_btn is not None
+        assert panel._save_btn.isEnabled() is True
 
 
 # ============================================================

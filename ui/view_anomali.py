@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import weakref
 from collections import OrderedDict
+from pathlib import Path
 
 import pandas as pd
 from PySide6.QtCore import QEvent, QObject, Qt, Signal
@@ -318,6 +319,25 @@ class _NoWheelFilter(QObject):
         if event.type() == QEvent.Type.Wheel:
             return True  # consume — abaikan scroll
         return False
+
+
+# v2.17.3 — deteksi workbook = file sementara folder-flow (rekap_folder_*).
+# Edit nilai HANYA utk file asli (mode "Pilih File Sendiri" / format TEGAR).
+# File folder-flow = temp gabungan — edit akan tulis ke temp (bukan asli),
+# jadi tombol Simpan di-DISABLE + pesan jujur arahkan ke mode Pilih File.
+_FOLDER_TEMP_PREFIX = "rekap_folder_"
+
+
+def _workbook_is_folder_temp(src_path: str | None) -> bool:
+    """True bila workbook_path = file sementara folder-flow (rekap_folder_*).
+
+    load_rekap_folder menulis temp dgn tempfile.mkstemp(prefix=
+    "rekap_folder_") → nama file selalu diawali "rekap_folder_". Deteksi
+    nama file = cara andal (tanpa thread flag lewat ctx/summary).
+    """
+    if not src_path:
+        return False
+    return Path(src_path).name.startswith(_FOLDER_TEMP_PREFIX)
 
 
 class DetailPanel(Card):
@@ -752,7 +772,22 @@ class DetailPanel(Card):
             "border-radius:5px; }"
             "QPushButton:hover { background:#b91c1c; }"
             "QPushButton:disabled { background:#cbd5e1; color:#94a3b8; }")
-        if self._cur_src_row is not None and src_path:
+        # v2.17.3 — edit DISABLED utk file folder-flow (temp gabungan).
+        # Edit nilai HANYA utk file asli (mode Pilih File Sendiri / TEGAR).
+        is_temp = _workbook_is_folder_temp(src_path)
+        if is_temp:
+            save.setEnabled(False)
+            save.setToolTip(
+                "Nonaktif — file ini adalah file SEMENTERARA hasil gabungan "
+                "folder (mode Proses dari Folder).\n"
+                "Edit nilai akan tersimpan ke file sementara INI, BUKAN file "
+                "asli di folder (file asli utuh — tapi edit tidak permanen).\n\n"
+                "Untuk edit nilai permanen ke file asli:\n"
+                "  1. Tutup pop-up ini.\n"
+                "  2. Tab Pipeline → 🧮 Pilih File Sendiri (format REKAP "
+                "MENTAH_..._TEGAR dgn kolom NAMA RESTO).\n"
+                "  3. Pilih file asli → Mulai Pipeline → edit via pop-up.")
+        elif self._cur_src_row is not None and src_path:
             save.setEnabled(True)
             save.setToolTip(
                 f"Tulis nilai hari yang diubah ke file Excel sumber:\n"
@@ -1104,6 +1139,24 @@ class DetailPanel(Card):
         """
         if self._save_btn is None:
             return  # tombol mayat — jangan sentuh
+        # v2.17.3 — guard: edit DISABLED utk file folder-flow (temp).
+        # Tombol sudah di-disable di construction, tapi guard ini jaga
+        # ekstra bila state berubah / shortcut keyboard memicu.
+        src_path = (self._ctx.summary.get("workbook_path")
+                    if self._ctx.summary else None)
+        if _workbook_is_folder_temp(src_path):
+            QMessageBox.information(
+                self, "Edit tidak tersedia",
+                "File ini adalah file SEMENTERARA hasil gabungan folder "
+                "(mode Proses dari Folder).\n\n"
+                "Edit nilai tidak tersedia karena akan tersimpan ke file "
+                "sementara INI, BUKAN file asli di folder (file asli utuh, "
+                "tapi edit tidak permanen).\n\n"
+                "Untuk edit nilai permanen ke file asli:\n"
+                "  Tab Pipeline → 🧮 Pilih File Sendiri → pilih file format "
+                "REKAP MENTAH_..._TEGAR (dgn kolom NAMA RESTO) → edit via "
+                "pop-up.")
+            return
         # Jangan mulai worker kedua saat satu lagi jalan
         if self._save_worker is not None:
             QMessageBox.information(
@@ -1312,7 +1365,13 @@ class DetailPanel(Card):
         """Re-enable tombol Simpan + spinbox setelah worker selesai."""
         if self._save_btn is not None:
             try:
-                self._save_btn.setEnabled(self._cur_src_row is not None)
+                # v2.17.3 — tetap disabled bila workbook = folder temp.
+                src_path = (self._ctx.summary.get("workbook_path")
+                            if self._ctx.summary else None)
+                if _workbook_is_folder_temp(src_path):
+                    self._save_btn.setEnabled(False)
+                else:
+                    self._save_btn.setEnabled(self._cur_src_row is not None)
                 self._save_btn.setText("💾 Simpan koreksi hari ke file Excel")
             except RuntimeError:
                 pass
