@@ -82,6 +82,7 @@ import numpy as np
 import pandas as pd
 
 from .loader import (
+    _EXCEL_ENGINE,
     _guard_xls,
     _key_str,
     _normalize_columns,
@@ -388,7 +389,7 @@ def load_rekap_folder(folder_path, config: dict | None = None,
 
     Return: {"temp_path": str, "files": [str,...], "rows_total": int,
              "rows_per_file": {name: int}, "synthesized": [name,...],
-             "skipped": [(name, reason),...]}.
+             "skipped": [(name, reason),...], "engine": str, "elapsed_s": float}.
     Raise RekapImportError bila folder tak ada / kosong / tak ada file rekap.
     """
     import tempfile
@@ -405,31 +406,52 @@ def load_rekap_folder(folder_path, config: dict | None = None,
     if not xlsx_files:
         raise RekapImportError(
             f"Tidak ada file .xlsx di folder: {folder}")
+    # Engine detection (transparan — log engine yg dipakai).
+    engine_used = _EXCEL_ENGINE if _EXCEL_ENGINE else "openpyxl"
     _log(logger, f"[rekap_folder] scan {len(xlsx_files)} file .xlsx di "
-                 f"{folder}")
-    frames: list[tuple[str, pd.DataFrame, bool]] = []  # (name, df, synth?)
-    skipped: list[tuple[str, str]] = []
-    for fp in xlsx_files:
+                 f"{folder} (engine={engine_used}, parallel)")
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    t0 = time.monotonic()
+
+    def _process_one(fp: Path):
+        """Baca 1 file → (name, df|None, synth, error|None). Thread-safe:
+        calamine (Rust) aman paralel; openpyxl I/O release GIL sebagian."""
         try:
-            sn, hr = find_rekap_sheet_lenient(fp, config, logger)
+            sn, hr = find_rekap_sheet_lenient(fp, config, None)
         except RekapImportError as exc:
-            skipped.append((fp.name, str(exc)))
-            continue
+            return (fp.name, None, False, str(exc))
         try:
-            raw = pd.read_excel(fp, sheet_name=sn, header=hr, dtype=object)
+            # _read_excel_fast: calamine bila ada (8,5x cepat), fallback
+            # openpyxl. dtype=object jaga nilai mentah (hari 0/teks).
+            raw = _read_excel_fast(fp, sheet_name=sn, header=hr,
+                                   dtype=object)
         except Exception as exc:
-            skipped.append((fp.name, f"gagal baca sheet {sn!r}: {exc}"))
-            continue
+            return (fp.name, None, False, f"gagal baca sheet {sn!r}: {exc}")
         raw = _normalize_columns(raw)
         synth = False
         if "NAMA RESTO" not in raw.columns:
             raw["NAMA RESTO"] = fp.stem
             synth = True
-            _log(logger, f"[rekap_folder] {fp.name}: NAMA RESTO "
-                         f"disintesis = {fp.stem!r} (kolom absen di sheet)")
-        frames.append((fp.name, raw, synth))
-        _log(logger, f"[rekap_folder] {fp.name}: {len(raw)} baris "
-                     f"(sheet {sn!r})")
+        return (fp.name, raw, synth, None)
+
+    # PARALLEL — baca multiple file sekaligus (max 4 worker).
+    max_w = min(4, len(xlsx_files))
+    proc_results: list[tuple] = []
+    with ThreadPoolExecutor(max_workers=max_w) as ex:
+        proc_results = list(ex.map(_process_one, xlsx_files))
+    elapsed = time.monotonic() - t0
+
+    frames: list[tuple[str, pd.DataFrame, bool]] = []
+    skipped: list[tuple[str, str]] = []
+    for name, df, synth, err in proc_results:
+        if err is not None:
+            skipped.append((name, err))
+            _log(logger, f"[rekap_folder] {name} dilewati: {err}")
+        else:
+            frames.append((name, df, synth))
+            tag = " (NAMA RESTO dari nama file)" if synth else ""
+            _log(logger, f"[rekap_folder] {name}: {len(df)} baris{tag}")
     if not frames:
         names = ", ".join(n for n, _ in skipped) or "(none)"
         raise RekapImportError(
@@ -438,15 +460,17 @@ def load_rekap_folder(folder_path, config: dict | None = None,
     # Gabung semua frame (kolom union — fillna NaN bila beda struktur)
     combined = pd.concat([f for _, f, _ in frames], ignore_index=True,
                          sort=False)
-    # Tulis temp file (sheet "REKAP MENTAH" — siap di-feed ke run_pipeline;
+    # Tulis temp file (sheet "REKAP MENTAH" — siap di-feed run_pipeline;
     # find_rekap_sheet STRICT akan deteksi karena NAMA RESTO kini ada).
+    import tempfile
     tmp_fd, tmp_path = tempfile.mkstemp(
         suffix=".xlsx", prefix="rekap_folder_")
     os.close(tmp_fd)
     with pd.ExcelWriter(tmp_path, engine="openpyxl") as w:
         combined.to_excel(w, sheet_name="REKAP MENTAH", index=False)
     _log(logger, f"[rekap_folder] gabungan {len(combined)} baris → "
-                 f"{tmp_path} ({len(frames)} file)")
+                 f"{tmp_path} ({len(frames)} file, {elapsed:.1f}s, "
+                 f"engine={engine_used})")
     return {
         "temp_path": tmp_path,
         "files": [n for n, _, _ in frames],
@@ -454,6 +478,8 @@ def load_rekap_folder(folder_path, config: dict | None = None,
         "rows_per_file": {n: len(f) for n, f, _ in frames},
         "synthesized": [n for n, _, s in frames if s],
         "skipped": skipped,
+        "engine": engine_used,
+        "elapsed_s": round(elapsed, 2),
     }
 
 

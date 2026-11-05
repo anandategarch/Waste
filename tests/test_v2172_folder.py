@@ -182,6 +182,44 @@ class TestLoadRekapFolder:
         assert "BJMHAS" in restos and "BDGUKU" in restos
         os.unlink(res["temp_path"])
 
+    def test_folder_engine_dan_elapsed_dilog(self, tmp_path):
+        """v2.17.3 — result punya 'engine' (calamine/openpyxl) + 'elapsed_s'."""
+        from waste_anomaly.rekap_import import load_rekap_folder
+        from waste_anomaly.utils import load_config
+        _write_xlsx(_bjmhas_rows("BJMHAS"), tmp_path / "BJMHAS.xlsx")
+        res = load_rekap_folder(tmp_path, load_config())
+        assert res["engine"] in ("calamine", "openpyxl")
+        assert isinstance(res["elapsed_s"], float)
+        assert res["elapsed_s"] >= 0.0
+        os.unlink(res["temp_path"])
+
+    def test_folder_20_file_paralel_cepat(self, tmp_path):
+        """v2.17.3 — 20 file diproses paralel (ThreadPoolExecutor max 4).
+        Semua diproses, NAMA RESTO disintesis per-file, gabungan utuh."""
+        from waste_anomaly.rekap_import import load_rekap_folder
+        from waste_anomaly.utils import load_config
+        restos = [f"R{i:02d}" for i in range(20)]
+        for r in restos:
+            _write_xlsx(_bjmhas_rows(r), tmp_path / f"{r}.xlsx")
+        res = load_rekap_folder(tmp_path, load_config())
+        assert len(res["files"]) == 20
+        assert sorted(res["synthesized"]) == sorted(f"{r}.xlsx" for r in restos)
+        assert res["rows_total"] > 0
+        # Engine dilog + elapsed masuk akal (< 30s utk 20 file kecil).
+        assert res["elapsed_s"] < 30.0
+        os.unlink(res["temp_path"])
+
+    def test_config_default_deviasi_folder_ada(self):
+        """v2.17.3 — config.json punya key default_deviasi_folder."""
+        import json
+        from waste_anomaly.utils import load_config
+        cfg = load_config()
+        assert "default_deviasi_folder" in cfg
+        val = cfg["default_deviasi_folder"]
+        assert isinstance(val, str) and val
+        # Path user: C:\KERJA\1. RESTO\9.NEW QUERY\1. DEVIASI WEEKLY
+        assert "DEVIASI WEEKLY" in val
+
     def test_folder_campuran_bjmhas_dan_tegar(self, tmp_path):
         from waste_anomaly.rekap_import import load_rekap_folder
         from waste_anomaly.utils import load_config

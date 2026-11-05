@@ -485,7 +485,14 @@ class PipelineView(QWidget):
                 self, "Scan Folder Sedang Berjalan",
                 "Tunggu scan folder selesai sebelum memilih folder lain.")
             return
+        # v2.17.3 — default folder dari config (permintaan user: "secara
+        # default pkai alamat C:\KERJA\1. RESTO\9.NEW QUERY\1. DEVIASI
+        # WEEKLY"; bisa diganti — edit config.json key
+        # "default_deviasi_folder"). Fallback: folder workbook aktif / APP_DIR.
         start_dir = str(APP_DIR)
+        default_folder = self._ctx.config.get("default_deviasi_folder", "")
+        if default_folder and Path(default_folder).is_dir():
+            start_dir = default_folder
         cur = self.current_workbook()
         if cur:
             cur_dir = str(Path(cur).parent)
@@ -527,10 +534,12 @@ class PipelineView(QWidget):
         synth = result.get("synthesized", [])
         skipped = result.get("skipped", [])
         rows_total = result.get("rows_total", 0)
-        # Log transparan (anti silent-error).
+        engine = result.get("engine", "?")
+        elapsed = result.get("elapsed_s", 0.0)
+        # Log transparan (anti silent-error) — engine + waktu + per-file.
         self._ctx.log(
             f"✓ Folder dipindai: {len(files)} file, {fmt_id(rows_total)} "
-            f"baris gabungan.")
+            f"baris gabungan ({elapsed}s, engine={engine}).")
         for fn in files:
             tag = " (NAMA RESTO dari nama file)" if fn in synth else ""
             n = result.get("rows_per_file", {}).get(fn, 0)

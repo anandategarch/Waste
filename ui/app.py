@@ -110,10 +110,14 @@ BJMHAS.xlsx, BDGUKU.xlsx, dst.)? Klik tombol ini, pilih foldernya —
 <b>semua file .xlsx dipindai</b>, sheet REKAP MENTAH diekstrak, <b>NAMA
 RESTO disintesis dari nama file</b> (BJMHAS.xlsx → "BJMHAS"), lalu
 <b>DIGABUNG</b> jadi satu dataset multi-resto. Pipeline berjalan pada
-file gabungan (sementara). Catatan: <b>edit nilai via pop-up menyimpan
-ke file sementara INI</b>, bukan file asli di folder (file asli utuh) —
-untuk edit file asli, gunakan tombol 🧮 Pilih File Sendiri dgn format
-REKAP MENTAH_..._TEGAR.</li>
+file gabungan (sementara). <b>Engine tercepat</b> (v2.17.3): calamine
+(Rust, 8,5× openpyxl) bila terpasang + baca <b>paralel</b> 4 worker — 20
+file ±9-13 dtk. <b>Default folder</b>: C:\KERJA\1. RESTO\9.NEW QUERY\1.
+DEVIASI WEEKLY (bisa diganti di config.json key "default_deviasi_folder";
+dialog folder tetap bisa pilih folder lain). Catatan: <b>edit nilai via
+pop-up menyimpan ke file sementara INI</b>, bukan file asli di folder
+(file asli utuh) — untuk edit file asli, gunakan tombol 🧮 Pilih File
+Sendiri dgn format REKAP MENTAH_..._TEGAR.</li>
 <li><b>Key Akhir (1–31)</b>: hanya hari 1..N yang dianalisa — bulan berjalan
 yang belum penuh cukup diisi sampai tanggal terakhirnya.</li>
 <li>Kartu <b>Threshold &amp; Konfigurasi</b> (config.json): nilai ambang

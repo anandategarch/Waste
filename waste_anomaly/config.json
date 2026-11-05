@@ -37,6 +37,7 @@
     "Over Stock"
   ],
   "default_key_akhir": 31,
+  "default_deviasi_folder": "C:\\KERJA\\1. RESTO\\9.NEW QUERY\\1. DEVIASI WEEKLY",
   "input_sheets": {
     "rekap_mentah": [
       "DATA_WASTE",
