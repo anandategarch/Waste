@@ -71,7 +71,15 @@ def setup_logging(
 
     if log_dir_path is None:
         # Tidak ada lokasi writable — console-only, jangan ganggu aplikasi.
-        logging.basicConfig(level=level, format=LOG_FORMAT)
+        # v2.17.6 — pythonw (no console, ui_app.pyw) → sys.stderr None.
+        # basicConfig StreamHandler(None) akan crash saat tulis log.
+        # Guard: NullHandler bila stderr None (log ditelan, app tetap jalan).
+        if sys.stderr is not None:
+            logging.basicConfig(level=level, format=LOG_FORMAT)
+        else:
+            root = logging.getLogger()
+            root.addHandler(logging.NullHandler())
+            root.setLevel(level)
         return None
 
     log_path = log_dir_path / "waste_anomaly.log"

@@ -1,51 +1,29 @@
 @echo off
 setlocal EnableExtensions
-chcp 65001 >nul
-title Waste Anomaly Detection
-color 0A
-cls
-echo ============================================================
-echo   WASTE ANOMALY DETECTION - v2.17.0
-echo ============================================================
-echo.
-echo  PySide6 anomaly workbench - 6 tab:
-echo    1. Anomali    - tabel anomali ter-ranked skor + % to BOM
-echo                   + detail pop-up 12 sinyal + tombol fokus
-echo    2. Follow Up  - shortlist baris mencurigakan + ekspor/impor TL
-echo    3. Hari Mencurigakan - bukti tanggal + follow-up
-echo    4. Scorecard Cabang - urutan kunjungan audit
-echo    5. Banding    - compare periode bulan-ke-bulan
-echo    6. Pipeline   - run/batal + editor threshold + log
-echo.
-echo  Filter = ikon funnel di judul kolom tabel (semua kolom).
-echo  Klik baris = detail pop-up (12 sinyal, peer, uang).
-echo.
-echo  Pastikan SETUP.bat sudah dijalankan minimal sekali.
-echo.
-echo  Tekan ENTER untuk membuka UI...
-pause >nul
-
 cd /d "%~dp0"
 
-if exist ".venv\Scripts\python.exe" (
-    ".venv\Scripts\python.exe" ui_app.py
+REM v2.17.0 - Waste Anomaly Detection (6 tab: Anomali, Follow Up,
+REM Hari Mencurigakan, Scorecard Cabang, Banding Periode, Pipeline).
+REM
+REM v2.17.6 - jalankan TANPA jendela CMD hitam (pythonw + ui_app.pyw).
+REM Double-click ui_app.pyw JUGA langsung buka GUI (no console).
+REM Untuk DEBUG dgn console (lihat log stdout): python ui_app.py
+
+if exist ".venv\Scripts\pythonw.exe" (
+    start "" ".venv\Scripts\pythonw.exe" ui_app.pyw
 ) else (
-    REM v2.7.0: fallback launcher "py -3" bila "python" tidak ada di PATH
-    REM (konsisten dgn SETUP.bat).
-    where python >nul 2>&1
+    where pythonw >nul 2>&1
     if errorlevel 1 (
-        py -3 ui_app.py
+        where py >nul 2>&1
+        if errorlevel 1 (
+            echo [ERROR] pythonw / py tidak ditemukan.
+            echo   Jalankan SETUP.bat dulu, atau install Python 3.10+.
+            pause
+        ) else (
+            start "" py -3 ui_app.pyw
+        )
     ) else (
-        python ui_app.py
+        start "" pythonw ui_app.pyw
     )
-)
-if errorlevel 1 (
-    echo.
-    echo [ERROR] Gagal menjalankan UI. Pastikan:
-    echo   - Python terinstall: python --version
-    echo   - SETUP.bat sudah dijalankan minimal sekali
-    echo   - Kalau SETUP.bat selesai tanpa error tapi UI tetap gagal,
-    echo     jalankan ulang SETUP.bat agar .venv dibuat dengan benar.
-    pause
 )
 endlocal
