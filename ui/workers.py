@@ -348,11 +348,19 @@ class FolderScanWorker(QThread):
         super().__init__(parent)
         self._folder = str(folder_path)
         self._config = config if config is not None else load_config()
+        self._cancel = False
+
+    def cancel(self) -> None:
+        """v2.18.0 audit (UI-2): batalkan scan — efektif ANTAR-FILE
+        (pola HistoryWorker; dipakai closeEvent supaya close saat scan
+        berjalan tidak menghancurkan QThread hidup → qFatal)."""
+        self._cancel = True
 
     def run(self) -> None:
         try:
             result = load_rekap_folder(
-                self._folder, self._config, logger=None)
+                self._folder, self._config, logger=None,
+                cancel_check=lambda: self._cancel)
             self.done.emit(result)
         except RekapImportError as e:
             self.failed.emit(str(e), "")

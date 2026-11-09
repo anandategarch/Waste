@@ -316,14 +316,14 @@ class FollowUpView(QWidget):
             # Tanpa sort_desc (urutan dataset — deterministik) & tanpa
             # narrow_hide: format rekap = sheet lebar + scrollbar
             # horizontal (konvensi anti-terpotong: scroll ≠ terpotong).
-            self._table.set_dataframe(disp, visible_cols=visible)
-            # v2.12.3: simpan bahan render + terapkan filter lokal
-            # (mask murah — tanpa hitung ulang suspicious_days).
+            # v2.18.0 audit (UI-10): hitung funnel lokal SEBELUM
+            # set_dataframe — dulu render GANDA saat funnel aktif
+            # (set_dataframe penuh + auto-fit, lalu set_dataframe LAGI
+            # utk hasil filter; pola AnomaliView._refresh_table_impl).
             self._disp = disp
             self._visible = list(visible)
             shown = self._apply_hfilter(disp)
-            if shown is not disp:
-                self._table.set_dataframe(shown, visible_cols=visible)
+            self._table.set_dataframe(shown, visible_cols=visible)
             self._table.setup_header_filters(
                 None, self._on_header_filter, self._hfilters.get,
                 all_cols=True, skip=_HF_SKIP)

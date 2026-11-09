@@ -15,9 +15,12 @@
 #   dashboard.py / chart_helpers.py) dihapus bersama tab Jelajah & Waktu;
 #   aplikasi tidak lagi mengimpor matplotlib di mana pun (instalasi lebih
 #   ringan & cepat).
+# - v2.18.0 (audit): BATAS ATAS eksplisit numpy & PySide6 — minor release
+#   Qt pernah merusak perilaku QSS/widget & numpy 2.x ganti ABI; tanpa
+#   batas, install baru bisa dapat versi yang tak pernah diverifikasi.
 
 pandas>=2.2,<3
-numpy>=1.26
+numpy>=1.26,<3
 openpyxl>=3.1
 python-calamine>=0.2
-PySide6>=6.6
+PySide6>=6.6,<7

@@ -188,6 +188,21 @@ def _counts_has(counts: dict, v) -> bool:
     return v in counts
 
 
+def _nk(v):
+    """v2.18.0 audit (UI-4) — normalisasi kunci dict ``_checked`` menu
+    funnel: None / NaN apa pun → None.
+
+    Bug: UserRole round-trip ``item.data()`` mengembalikan objek float NaN
+    BARU — hash NaN id-based & NaN != NaN → kunci TAK pernah cocok dgn
+    NaN asli ``counts``. Akibatnya: uncheck "(kosong)" diabaikan senyap;
+    restore state membaca salah → apply berikutnya MEMBALIK filter.
+    (Kelas bug yang sama dgn _counts_has gel-4 A6 — kini dipakai di sisi
+    _checked/_on_item/_apply_now/_pick_all/_populate.)"""
+    if v is None or (isinstance(v, float) and v != v):
+        return None
+    return v
+
+
 class _HeaderFilterMenu(QMenu):
     """Menu filter per kolom (v2.12.3) — filter nilai + opsi sort.
 
@@ -213,8 +228,12 @@ class _HeaderFilterMenu(QMenu):
         self._fmt = fmt if callable(fmt) else fmt_cell
         self._checked: dict[object, bool] = {}
         st = set(state) if state else None
+        # v2.18.0 (UI-4): kunci dinormalisasi _nk — NaN objek beda (state
+        # vs counts) & None harus menyatu jadi SATU kunci kosong.
+        st_nk = {_nk(s) for s in st} if st is not None else None
         for v in counts:
-            self._checked[v] = True if st is None else (v in st)
+            self._checked[_nk(v)] = (True if st_nk is None
+                                     else _nk(v) in st_nk)
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(120)
@@ -321,7 +340,7 @@ class _HeaderFilterMenu(QMenu):
             it.setFlags(Qt.ItemFlag.ItemIsUserCheckable
                         | Qt.ItemFlag.ItemIsEnabled)
             it.setCheckState(
-                Qt.CheckState.Checked if self._checked.get(v, True)
+                Qt.CheckState.Checked if self._checked.get(_nk(v), True)
                 else Qt.CheckState.Unchecked)
             self._lw.addItem(it)
             shown += 1
@@ -350,23 +369,26 @@ class _HeaderFilterMenu(QMenu):
         v = item.data(Qt.ItemDataRole.UserRole)
         if v is None and "(kosong)" not in item.text():
             return  # baris catatan non-interaktif
-        self._checked[v] = (item.checkState() == Qt.CheckState.Checked)
+        # v2.18.0 (UI-4): kunci _nk — NaN round-trip Qt adalah objek BARU
+        # (hash id-based) — tanpa ini uncheck "(kosong)" hilang senyap.
+        self._checked[_nk(v)] = (item.checkState() == Qt.CheckState.Checked)
         self._timer.start()  # debounce — centang beruntun = 1 broadcast
 
     def _pick_all(self) -> None:
         for v in self._counts:
-            self._checked[v] = True
+            self._checked[_nk(v)] = True
         self._populate(self._ed.text())
         self._apply_now()
 
     def _apply_now(self) -> None:
         if self._apply is None:
             return
-        allc = all(self._checked.get(v, True) for v in self._counts)
+        allc = all(self._checked.get(_nk(v), True) for v in self._counts)
         if allc:
             self._apply(self._col, self._key, None)
         else:
-            vals = [v for v in self._counts if self._checked.get(v, True)]
+            vals = [v for v in self._counts
+                    if self._checked.get(_nk(v), True)]
             self._apply(self._col, self._key, vals)
 
     def _sort(self, order: Qt.SortOrder) -> None:
@@ -524,6 +546,14 @@ class FilterHeader(QHeaderView):
                 if not _counts_has(counts, v):
                     counts[v] = 0
         key = t._hf_cols.get(name, name)
+        # v2.18.0 audit (UI-6): menu funnel LAMA di-pensiunkan sebelum
+        # buat baru — QMenu parented (C++ ownership) tak pernah dihapus
+        # otomatis; QListWidget ≤400 item + 2 dict menumpuk per buka
+        # (funnel = mekanisme filter utama di semua tabel). deleteLater
+        # aman: menu lama sudah tertutup saat funnel lain diklik.
+        if getattr(self, "_menu", None) is not None:
+            self._menu.deleteLater()
+            self._menu = None
         menu = _HeaderFilterMenu(t, name, key, counts, state,
                                   t._hf_apply, self,
                                   fmt=_menu_value_fmt(name))
@@ -760,6 +790,9 @@ class DataTable(QTableView):
         act_all.setToolTip("Salin seluruh baris terfilter terlihat di tabel "
                            "(TSV — tempel langsung ke Excel/Sheets).")
         chosen = menu.exec(self.viewport().mapToGlobal(pos))
+        # v2.18.0 audit (UI-6): menu parented tak pernah dihapus otomatis
+        # (per klik-kanan) — pensiunkan pasca exec (pola funnel _open_menu).
+        menu.deleteLater()
         if chosen is act_sel:
             self._copy_selection_to_clipboard()
         elif chosen is act_all:

@@ -14,6 +14,10 @@ from waste_anomaly.schema import SchemaValidationError, validate_rekap_schema
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = REPO_ROOT / "DATA_WASTE.xlsx"
+# v2.18.0: DATA_WASTE.xlsx dihapus dari repo (51d042f) — test cancel ENGINE
+# tidak butuh data asli (hanya workbook valid); fallback sample sintetis
+# supaya kontrak tetap teruji di CI (pola test_v21313).
+WORKBOOK = FIXTURE if FIXTURE.exists() else REPO_ROOT / "sample_workbook.xlsx"
 
 
 def _good_df(**override) -> pd.DataFrame:
@@ -37,6 +41,11 @@ class TestSchemaValid:
         assert warnings == []
 
     def test_fixture_asli_lolos(self):
+        # v2.18.0: DATA_WASTE.xlsx dihapus dari repo (51d042f) — skip
+        # bermartabat bila fixture lokal tak ada (pola test_pipeline_
+        # regression), bukan FileNotFoundError merah di CI.
+        if not FIXTURE.exists():
+            pytest.skip(f"fixture lokal tak ada: {FIXTURE.name}")
         df = pd.read_excel(FIXTURE, sheet_name=0, nrows=5)
         warnings = validate_rekap_schema(df, key_akhir=31)
         # fixture lengkap 53 kolom — tidak boleh ada warning skema
@@ -117,8 +126,10 @@ class TestSchemaEndToEnd:
 class TestCancelHook:
     def test_cancel_langsung(self):
         """cancel_check True sejak awal → dibatalkan di gate pertama."""
+        if not FIXTURE.exists():
+            pytest.skip(f"fixture lokal tak ada: {FIXTURE.name} (v2.18.0)")
         result = run_pipeline(
-            workbook_path=str(FIXTURE),
+            workbook_path=str(WORKBOOK),
             key_akhir=31,
             cancel_check=lambda: True,
         )
@@ -141,7 +152,7 @@ class TestCancelHook:
                 state["cancel"] = True
 
         result = run_pipeline(
-            workbook_path=str(FIXTURE),
+            workbook_path=str(WORKBOOK),
             key_akhir=31,
             progress_callback=on_progress,
             cancel_check=cancel_check,
@@ -153,7 +164,12 @@ class TestCancelHook:
         assert "Stage 11" not in result["log"]
 
     def test_tanpa_cancel_check_perilaku_tidak_berubah(self):
+        # v2.18.0: GOLDEN 25.901 baris — butuh fixture DATA_WASTE.xlsx
+        # asli (dihapus 51d042f); skip jujur bila tak ada (bukan fallback
+        # sample — angka golden tak berlaku utk data sintetis).
+        if not FIXTURE.exists():
+            pytest.skip("fixture DATA_WASTE.xlsx (golden 25.901) tidak ada")
         """Backward-compat: tanpa cancel_check, pipeline jalan normal penuh."""
-        result = run_pipeline(workbook_path=str(FIXTURE), key_akhir=31)
+        result = run_pipeline(workbook_path=str(WORKBOOK), key_akhir=31)
         assert result["success"] is True
         assert result["total_rows"] == 25901

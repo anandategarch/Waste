@@ -489,15 +489,21 @@ class PipelineView(QWidget):
         # default pkai alamat C:\KERJA\1. RESTO\9.NEW QUERY\1. DEVIASI
         # WEEKLY"; bisa diganti — edit config.json key
         # "default_deviasi_folder"). Fallback: folder workbook aktif / APP_DIR.
+        # v2.18.0 audit (UI-7): PRESEDEN DIBALIK — dulu folder workbook aktif
+        # SELALU menang setelah run pertama (kolom workbook terisi temp path
+        # %TEMP% folder-flow → dialog terbuka di %TEMP%, bukan folder config
+        # yang diminta user). Config default valid menang; workbook dir hanya
+        # fallback bila config tak di-set/tak ada.
         start_dir = str(APP_DIR)
         default_folder = self._ctx.config.get("default_deviasi_folder", "")
         if default_folder and Path(default_folder).is_dir():
             start_dir = default_folder
-        cur = self.current_workbook()
-        if cur:
-            cur_dir = str(Path(cur).parent)
-            if Path(cur_dir).is_dir():
-                start_dir = cur_dir
+        else:
+            cur = self.current_workbook()
+            if cur:
+                cur_dir = str(Path(cur).parent)
+                if Path(cur_dir).is_dir():
+                    start_dir = cur_dir
         folder = QFileDialog.getExistingDirectory(
             self, "Pilih Folder berisi file .xlsx (REKAP MENTAH)",
             start_dir)
@@ -539,6 +545,12 @@ class PipelineView(QWidget):
         self._btn_run.setEnabled(True)  # _start akan set text→Batalkan
         temp = result.get("temp_path", "")
         if not temp:
+            # v2.18.0 audit (UI-8): early return dulu membiarkan teks tombol
+            # "⏳ Memindai folder…" selamanya — pulihkan label + aksen dulu.
+            self._btn_run.setText("▶ Mulai Pipeline")
+            self._btn_run.setObjectName("accent")
+            self._btn_run.style().unpolish(self._btn_run)
+            self._btn_run.style().polish(self._btn_run)
             self._ctx.set_status("⚠ Scan folder: temp file tidak dibuat.", "error")
             return
         self._folder_temp = temp  # simpan utk cleanup nanti
@@ -584,7 +596,12 @@ class PipelineView(QWidget):
         self._btn_run.style().unpolish(self._btn_run)
         self._btn_run.style().polish(self._btn_run)
         self._ctx.log(f"!!! Scan folder gagal: {msg}\n{tb}")
-        friendly_file_error(self, msg, tb, "Scan Folder Gagal")
+        # v2.18.0 audit (HIGH): friendly_file_error HANYA menerima 1 arg &
+        # return string — pemanggilan 4-arg lama raise TypeError DI DALAM
+        # slot → dialog tak muncul & status error tak terpasang (gagal
+        # senyap). Kini: pesan ramah → dialog critical + status.
+        QMessageBox.critical(
+            self, "Scan Folder Gagal", friendly_file_error(msg))
         self._ctx.set_status(f"⚠ Scan folder gagal: {msg}", "error")
 
     def _cleanup_folder_temp(self) -> None:
@@ -809,6 +826,15 @@ class PipelineView(QWidget):
         if not target.parent.exists():  # frozen exe: sidecar di samping exe
             target = APP_DIR / "config.json"
         try:
+            # v2.18.0 audit (UI-5): TRANSAKSIONAL — dulu ctx.config termutasi
+            # SEBELUM tulis disk; write gagal (file locked editor/permission/
+            # disk penuh) → sesi jalan dgn threshold BARU yang tak pernah
+            # tersimpan, padahal run berikutnya load_config() baca file LAMA
+            # → tab saling kontradiksi senyap. Kini: stage ke salinan, commit
+            # ctx.config HANYA setelah replace() sukses.
+            staged = {k: (v.copy() if isinstance(v, (dict, list)) else v)
+                      for k, v in self._ctx.config.items()}
+            staged.setdefault("thresholds", {})
             for key, ent in self._config_vars.items():
                 text = ent.text().strip()
                 try:
@@ -825,7 +851,7 @@ class PipelineView(QWidget):
                     QMessageBox.critical(self, "Config Error",
                                          f"Nilai {key} harus > 0 (dapat: {text})")
                     return
-                self._ctx.config.setdefault("thresholds", {})[key] = val
+                staged["thresholds"][key] = val
             tmp_path = target.with_suffix(".json.tmp")
             with open(tmp_path, "w", encoding="utf-8") as f:
                 # v2.13.14 (gel-5 D26): kunci RUNTIME dikecualikan saat
@@ -834,12 +860,15 @@ class PipelineView(QWidget):
                 # default; v2.3.1 H5). Dulu json.dump menulis kunci itu
                 # ke disk → config "diperbaiki" user malah membawa error
                 # lama permanen + key aneh di file yang user edit manual
-                # (audit D26). Salinan difilter — ctx.config tak termutasi
+                # (audit D26). Salinan difilter — staged tak termutasi
                 # (pesan error tetap hidup di sesi ini utk _on_done).
-                out_cfg = {k: v for k, v in self._ctx.config.items()
+                out_cfg = {k: v for k, v in staged.items()
                            if k != "_config_load_error"}
                 json.dump(out_cfg, f, ensure_ascii=False, indent=2)
             tmp_path.replace(target)  # F2: atomic save
+            # Commit in-memory SETELAH file sukses tersimpan.
+            self._ctx.config.clear()
+            self._ctx.config.update(staged)
             self._ctx.set_status(f"✓ config.json tersimpan: {target}", "done")
             self._ctx.log(f"=== Threshold disimpan → {target} (berlaku mulai run berikutnya) ===")
             QMessageBox.information(self, "Config", f"config.json tersimpan:\n{target}")

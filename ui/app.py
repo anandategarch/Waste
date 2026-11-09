@@ -373,9 +373,9 @@ class MainWindow(QMainWindow):
         # v2.13.11 (gel-2 D4): first-run — currentChanged terpasang SETELAH
         # addTab, jadi tab 0 TIDAK PERNAH memicu on_shown otomatis. v2.17.0:
         # tab 0 kini Pipeline (entry point muat data) — picu SEKALI pasca-
-        # wiring supaya PipelineView.on_shown() jalan sejak awal (tombol
-        # Mulai/Olah siap, bukan layar kosong). Kontrak lazy-render tetap:
-        # pindah tab → on_shown per-view.
+        # wiring. (v2.18.0 audit: PipelineView TIDAK punya on_shown — semua
+        # widget dibangun di __init__, jadi pemanggilan ini no-op hari ini;
+        # tetap dipertahankan demi kontrak lazy-render generik per-view.)
         self._on_tab_changed(self._tabs.currentIndex())
         # Anti-terpotong: bila tab bar sempit, teks di-elide dengan '…'
         # (konvensi jelas) + tombol panah scroll — TIDAK pernah dipotong
@@ -623,6 +623,10 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------
     def _show_help(self) -> None:
         dlg = QDialog(self)
+        # v2.18.0 audit (UI-6): dialog baru per tekan F1 tak pernah dihapus
+        # (parented → C++ ownership) — QTextBrowser ber-HTML penuh menumpuk
+        # per sesi. WA_DeleteOnClose: objek dibebankan Qt saat ditutup.
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         dlg.setWindowTitle("Bantuan — Waste Anomaly Detection")
         dlg.resize(640, 560)
         lay = QVBoxLayout(dlg)
@@ -639,12 +643,32 @@ class MainWindow(QMainWindow):
         # pipeline view + export yang dicek; worker banding periode
         # (kini HistoryWorker, v2.10.0) tercakup lewat atribut kontrak
         # _running/_worker milik view — iterasi _views = tahan urutan.
+        #
+        # v2.18.0 audit (UI-2/UI-3) — DUA CELAH TUTUP:
+        # (a) FolderScanWorker (v2.17.2) TIDAK meng-set _running — close
+        #     saat scan 9-13 dtk berjalan = QThread destroyed while
+        #     running → qFatal abort ("QThread: Destroyed while thread is
+        #     still running"). Kini dikumpulkan lewat _folder_worker
+        #     + cancel() kooperatif antar-file (workers.py).
+        # (b) SaveEditsWorker (v2.16.1) hidup di DetailPanel._save_worker
+        #     DI DALAM pop-up 3 view (Anomali/Hari/Follow Up) — tak
+        #     tersentuh kontrak _running/_worker. Close saat menulis
+        #     koreksi Excel (~2 dtk) = qFatal yang sama + tulis hilang.
+        #     Kini dikumpulkan lewat rute duck-type _popup._panel.
         busy: list[tuple[str, object]] = []
         for name, view in self._views:
             if getattr(view, "_running", False):
                 worker = getattr(view, "_worker", None)
                 if worker is not None:
                     busy.append((name, worker))
+            fw = getattr(view, "_folder_worker", None)
+            if fw is not None:
+                busy.append((f"{name} (scan folder)", fw))
+            popup = getattr(view, "_popup", None)
+            panel = getattr(popup, "_panel", None) if popup is not None else None
+            sw = getattr(panel, "_save_worker", None) if panel is not None else None
+            if sw is not None:
+                busy.append((f"{name} (simpan koreksi)", sw))
         if self._exporting and self._export_worker is not None:
             busy.append(("Ekspor Excel", self._export_worker))
         if busy:
@@ -654,7 +678,8 @@ class MainWindow(QMainWindow):
             # padahal worker masih berjalan (audit D28).
             ans = QMessageBox.question(
                 self, "Proses masih berjalan",
-                "Pipeline/export/perbandingan masih berjalan. Tetap keluar?",
+                "Pipeline/ekspor/pembandingan/scan folder/simpan koreksi "
+                "masih berjalan di belakang. Tetap keluar?",
                 QMessageBox.StandardButton.Yes
                 | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No)

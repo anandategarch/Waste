@@ -40,7 +40,7 @@ import calendar
 import numpy as np
 import pandas as pd
 
-from .period_history import month_sort_key
+from .period_history import label_parseable, month_sort_key
 from .profile import PEER_KEYS
 
 # Nama bulan Indonesia + varian → nomor bulan (konsisten dgn period_history).
@@ -265,6 +265,29 @@ def _active_pairs(df: pd.DataFrame) -> pd.DataFrame:
     return sub.drop_duplicates().reset_index(drop=True)
 
 
+def _latest_month(months: list[dict]) -> dict | None:
+    """Bulan pembanding TERBARU — label terparse terbesar (audit v2.18.0).
+
+    Dua bug lama pada konsumen "bulan terbaru":
+    - scorecard BARU/PULIH: max() LEKSIKOGRAFIS ("Mei" > "Juni" krn
+      M > J) → angka banding bulan SALAH & kontradiksi dgn TREN di
+      baris yang sama (TREN sudah benar pakai month_sort_key).
+    - max(month_sort_key) TANPA filter: label tak terparse dapat
+      sentinel (9999, 0) yang MENANG max() — file bernama aneh
+      terpilih jadi "terbaru".
+    Kini: label tak terparse DIKECUALikan; fallback bulan apa pun bila
+    tak ada yang terparse (perilaku lama utk kasus 1-file-aneh).
+    """
+    ok = [m for m in (months or [])
+          if m and not m.get("error") and m.get("agg") is not None
+          and not m["agg"].empty]
+    if not ok:
+        return None
+    parseable = [m for m in ok if label_parseable(m.get("label"))]
+    return max(parseable or ok,
+               key=lambda m: month_sort_key(m.get("label")))
+
+
 def coverage_report(
     df: pd.DataFrame,
     months: list[dict] | None = None,
@@ -313,20 +336,23 @@ def coverage_report(
     }
 
     # pembanding terbaru utk verdict
+    # v2.18.0 audit (L-1): dulu UNION semua bulan pembanding — item aktif
+    # 3 bulan lalu tapi absen bulan lalu & sekarang tetap divonis
+    # "Berhenti Input" (dokumen & kontrak scorecard: pembanding TERBARU;
+    # kontradiksi dgn BARU/PULIH baris yang sama).
     last_pairs: set[tuple[str, str]] = set()
     has_months = False
-    for m in (months or []):
-        if m and not m.get("error") and m.get("agg") is not None \
-                and not m["agg"].empty:
-            has_months = True
-            agg = m["agg"]
-            sub = agg.loc[pd.to_numeric(
-                agg.get("TOTAL"), errors="coerce").fillna(0) > 0,
-                ["NAMA RESTO", "NAMA BARANG"]].copy() \
-                if "TOTAL" in agg.columns else agg[["NAMA RESTO", "NAMA BARANG"]].copy()
-            last_pairs.update(
-                (str(a).strip(), str(b).strip())
-                for a, b in sub.itertuples(index=False))
+    _last_m = _latest_month(months)
+    if _last_m is not None:
+        has_months = True
+        agg = _last_m["agg"]
+        sub = agg.loc[pd.to_numeric(
+            agg.get("TOTAL"), errors="coerce").fillna(0) > 0,
+            ["NAMA RESTO", "NAMA BARANG"]].copy() \
+            if "TOTAL" in agg.columns else agg[["NAMA RESTO", "NAMA BARANG"]].copy()
+        last_pairs.update(
+            (str(a).strip(), str(b).strip())
+            for a, b in sub.itertuples(index=False))
 
     rows = []
     for r in sorted(all_restos):
@@ -597,11 +623,14 @@ def scorecard(
         g["share"] = g["v"] / g["r"].map(t).where(g["r"].map(t) > 0)
         top = g.sort_values(["r", "share"], ascending=[True, False],
                             kind="stable").groupby("r", sort=True).head(1)
-        alasan_dom = {
-            r: f"{k} ({s * 100:.1f}%)".replace(".", ",")
-            for r, k, s in zip(top["r"], top["k"], top["share"])
-            if pd.notna(s) and t.get(r, 0) > 0
-        }
+        alasan_dom = {}
+        for r, k, s in zip(top["r"], top["k"], top["share"]):
+            if pd.notna(s) and t.get(r, 0) > 0:
+                # v2.18.0 audit (L-2): format persen SATU BAGIAN — dulu
+                # .replace(".", ",") menimpa SELURUH string: KETERANGAN
+                # "MKT. PROMO 1.5" rusak jadi "MKT, PROMO 1,5".
+                pct_txt = f"{s * 100:.1f}".replace(".", ",")
+                alasan_dom[r] = f"{k} ({pct_txt}%)"
 
     profil_cnt: dict[str, int] = {}
     if "PROFIL" in df2.columns:
@@ -633,11 +662,11 @@ def scorecard(
             has_months = True
     if has_months:
         cur = _active_pairs(df)
-        last = max(
-            (m for m in (months or [])
-             if m and not m.get("error") and m.get("agg") is not None
-             and not m["agg"].empty),
-            key=lambda m: str(m.get("label") or ""))
+        # v2.18.0 audit (H-3): dulu max() LEKSIKOGRAFIS — "Mei 2026" >
+        # "Juni 2026" (M > J) → BARU/PULIH dihitung vs bulan SALAH &
+        # kontradiksi dgn TREN (blok di bawah — sudah benar pakai
+        # month_sort_key). Kini satu helper _latest_month (parse-aware).
+        last = _latest_month(months)
         agg = last["agg"]
         tot = pd.to_numeric(agg["TOTAL"], errors="coerce").fillna(0) \
             if "TOTAL" in agg.columns else None

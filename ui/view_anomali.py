@@ -1232,6 +1232,9 @@ class DetailPanel(Card):
         if confirm.exec() != QMessageBox.StandardButton.Yes:
             self._ctx.set_status("Simpan koreksi dibatalkan user.", "info")
             return
+        # v2.18.0 audit (UI-6): box parented per klik tak pernah dihapus
+        # otomatis — pensiunkan pasca exec (pola menu konteks widgets).
+        confirm.deleteLater()
 
         # 3. Start worker (background thread — UI tak membeku)
         self._pending_edits = dict(day_edits)

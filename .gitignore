@@ -42,6 +42,21 @@ data/*.xlsm
 data/*.xls
 !data/README.md
 
+# v2.18.0 (audit keamanan) — DATA BISNIS ASLI di ROOT juga dilindungi:
+# aturan lama hanya menutup data/ → BJMHAS.xlsx (7,5MB) & "REKAP MENTAH
+# …TEGAR.xlsx" (10,5MB, 54rb baris data waste resto asli + nama
+# karyawan) ter-commit di repo publik. Root xlsx di-ignore semua;
+# SATU-SATUNYA pengecualian = sample_workbook.xlsx (sintetis,
+# dibuat make_sample.py seed 42 — fixture CI).
+/*.xlsx
+!sample_workbook.xlsx
+
+# Crash file startup pythonw (v2.18.0)
+crash_startup.txt
+
+# Backup source_writer (*.bak-YYYYMMDD-HHMMSS.xlsx sudah tertutup /*.xlsx)
+*.bak-*
+
 # Logs
 *.log
 server.log

@@ -122,6 +122,23 @@ def export_to_excel(
             "output_path": str(output_path),
         }
 
+    # v2.18.0 audit (F-3): kolom internal __SRC_ROW (mapping baris fisik
+    # utk edit pop-up, dipasang ensure_rekap_header) TIDAK boleh bocor ke
+    # laporan Excel — pengguna melihat kolom teknis yang tak diminta di
+    # sheet Detail/Anomali. Drop dari df utama & tiap extra sheet (kolom
+    # internal tetap utuh di df in-memory pemanggil — ini salinan view).
+    from .rekap_import import SRC_ROW_COL
+    if SRC_ROW_COL in df.columns:
+        df = df.drop(columns=[SRC_ROW_COL])
+    if extra_sheets:
+        extra_sheets = {
+            name: (ex_df.drop(columns=[SRC_ROW_COL])
+                   if ex_df is not None and getattr(ex_df, "columns", None)
+                   is not None and SRC_ROW_COL in ex_df.columns
+                   else ex_df)
+            for name, ex_df in extra_sheets.items()
+        }
+
     # F10 (v2.4.0): pilih mode — normal (formatting penuh) vs streaming
     # (memori konstan untuk data besar). Threshold bisa di-override via
     # config["output"]["streaming_threshold"].
@@ -310,6 +327,9 @@ def _write_sheet_streaming(
     header_cells = []
     for c in cols:
         hc = WriteOnlyCell(ws, value=str(c))
+        # M-1: header dari workbook user juga bisa berawalan '='
+        if _is_dangerous_text(hc.value):
+            hc.data_type = "s"
         hc.fill = HEADER_FILL
         hc.font = HEADER_FONT
         hc.alignment = HEADER_ALIGN
@@ -337,6 +357,8 @@ def _write_sheet_streaming(
                 pc = WriteOnlyCell(ws, value=v)
                 pc.number_format = PCT_NUMBER_FORMAT
                 cells.append(pc)
+            elif _is_dangerous_text(v):  # M-1: anti formula injection
+                cells.append(_force_text_cell(ws, v))
             else:
                 cells.append(v)  # nilai plain — tercepat, tetap ter-format angka default
         ws.append(cells)
@@ -392,6 +414,39 @@ def _to_cell_value(val):
     return val
 
 
+# v2.18.0 audit (M-1) — ANTI FORMULA INJECTION: openpyxl menginferensi
+# data_type='f' (formula hidup) utk string berawalan '=' (dan Excel
+# mengevaluasi '+', '-', '@', TAB/CR juga). Sumber = workbook user
+# (nama barang/keterangan bisa ber-teks apa pun) → laporan & file serah
+# terima FOLLOW UP bisa memuat formula hidup yang mengubah tampilan/
+# memicu peringatan DDE saat dibuka. Perlindungan: paksa data_type='s'
+# (STRING) — nilai round-trip PERSIS (tanpa prefiks apostrof yang
+# mengubah data), Excel tidak mengevaluasi apa pun.
+_FORMULA_TEXT_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _is_dangerous_text(val) -> bool:
+    """String berawalan prefix formula Excel? (lihat _FORMULA_TEXT_PREFIXES)."""
+    return isinstance(val, str) and val[:1] in _FORMULA_TEXT_PREFIXES
+
+
+def _force_text_cell(ws, val):
+    """WriteOnlyCell dgn data_type='s' — teks dipaksa STRING (mode
+    streaming; nilai berbahaya TIDAK dievaluasi Excel sebagai formula)."""
+    c = WriteOnlyCell(ws, value=val)
+    c.data_type = "s"
+    return c
+
+
+def _force_text_row(ws, row: list) -> None:
+    """Mode normal: append lalu paksa data_type='s' utk sel teks berbahaya
+    (baris baru saja di-append — ws[ws.max_row])."""
+    if any(_is_dangerous_text(v) for v in row):
+        for cell in ws[ws.max_row]:
+            if _is_dangerous_text(cell.value):
+                cell.data_type = "s"
+
+
 def _column_cell_values(series: pd.Series) -> list:
     """Konversi satu kolom DataFrame -> list python scalar siap openpyxl.
 
@@ -440,6 +495,9 @@ def _write_sheet(
     # ---- Header: bulk append lalu style (hanya ~len(cols) cell) ----
     ws.append([str(c) for c in cols])
     for cell in ws[1]:
+        # M-1: header dari workbook user juga bisa berawalan '='
+        if _is_dangerous_text(cell.value):
+            cell.data_type = "s"
         cell.fill = HEADER_FILL
         cell.font = HEADER_FONT
         cell.alignment = HEADER_ALIGN
@@ -450,6 +508,8 @@ def _write_sheet(
     n_rows = len(df)
     for row in zip(*col_values):
         ws.append(row)
+        # M-1: anti formula injection — string berbahaya dipaksa STRING
+        _force_text_row(ws, row)
 
     # ---- Styling body (style objects shared, tidak ada alokasi per-cell) ----
     # Fast path: style-array body dibangun sekali lalu di-copy per cell;

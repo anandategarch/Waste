@@ -73,6 +73,12 @@ import pandas as pd
 REPO = Path(__file__).resolve().parent.parent
 UI = REPO / "ui"
 FIXTURE = REPO / "DATA_WASTE.xlsx"
+# v2.18.0: DATA_WASTE.xlsx dihapus dari repo (51d042f) — test ENGINE di
+# file ini (cancel gate antar-file D22, persen kumulatif log B14, stub
+# worker D10) TIDAK butuh data asli (hanya path yang ADA / workbook valid);
+# fallback sample sintetis supaya kontrak TETAP teruji di CI (bukan skip
+# hollow — pola anti audit-4 "golden test skip senyap").
+WORKBOOK = FIXTURE if FIXTURE.exists() else REPO / "sample_workbook.xlsx"
 
 _FRAG = "Lonjakan vs rata-rata harian | Puncak harian vs BOM | Menumpuk di hari terakhir"
 
@@ -751,7 +757,7 @@ class TestD22CancelGate:
         def cancel_check() -> bool:
             calls["n"] += 1
             return calls["n"] > 1  # lolos gate DATA_WASTE, berhenti di BOM
-        result = run_pipeline(workbook_path=str(FIXTURE), key_akhir=31,
+        result = run_pipeline(workbook_path=str(WORKBOOK), key_akhir=31,
                               cancel_check=cancel_check)
         assert result["success"] is False
         assert result.get("cancelled") is True
@@ -899,7 +905,7 @@ class TestD10DeleteLater:
         monkeypatch.setattr(vp, "PipelineWorker", _StubWorker)
         from ui.state import AppContext
         view = vp.PipelineView(AppContext({}))
-        view._ent_workbook.setText(str(FIXTURE))  # path ada (stubs tak baca)
+        view._ent_workbook.setText(str(WORKBOOK))  # path ada (stubs tak baca; v2.18.0 fallback sample)
         view._start()
         w = view._worker
         assert w is not None and isinstance(w, _StubWorker)
@@ -1054,7 +1060,7 @@ class TestB14PersenLog:
             lines.append(msg)
             if msg.startswith("Stage 1"):
                 state["cancel"] = True
-        result = run_pipeline(workbook_path=str(FIXTURE), key_akhir=31,
+        result = run_pipeline(workbook_path=str(WORKBOOK), key_akhir=31,
                               progress_callback=on_progress,
                               cancel_check=lambda: state["cancel"])
         assert result["success"] is False and result.get("cancelled")
@@ -1154,4 +1160,4 @@ class TestSweepD25QssFocus:
         # keyboard-visible: rule fokus tombol LEBIH BANYAK dari era lama
         assert QSS.count(":focus") >= 4
         from ui.shared import APP_VERSION
-        assert APP_VERSION == "2.17.0"  # pin versi file test ke-5 (gel-4; dinaikkan v2.15.0)
+        assert APP_VERSION == "2.18.0"  # pin versi file test ke-5 (gel-4; dinaikkan v2.15.0)

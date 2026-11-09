@@ -164,12 +164,15 @@ def list_sheets(workbook_path: str | os.PathLike) -> list[str]:
     """List semua sheet di workbook (openpyxl, read-only — cepat).
 
     Raise ValueError jelas untuk file .xls (Excel lama).
+    v2.18.0 audit (F-4): try/finally — bila sheetnames raise, handle
+    read-only tetap ditutup (pola list_named_ranges di bawah).
     """
     _guard_xls(workbook_path)
     wb = load_workbook(workbook_path, read_only=True, data_only=True)
-    sheets = list(wb.sheetnames)
-    wb.close()
-    return sheets
+    try:
+        return list(wb.sheetnames)
+    finally:
+        wb.close()
 
 
 def list_named_ranges(workbook_path: str | os.PathLike) -> dict[str, str] | None:
@@ -479,6 +482,21 @@ def load_rekap_mentah(
                     f"— fallback baca sheet '{sheet}' penuh"
                 )
             df = _read_excel_fast(workbook_path, sheet_name=sheet, header=0)
+        else:
+            # v2.18.0 audit (H-1/BUG 4): named range mulai baris R → df
+            # row i = baris FISIK Excel R+1+i. ensure_rekap_header
+            # mengasumsikan offset 2 (header baris 1) → __SRC_ROW salah
+            # sebesar (R-1) → edit pop-up menulis koreksi ke baris Excel
+            # yang SALAH (file sumber korup senyap). Pasang mapping BENAR
+            # di sini — idempoten: _attach_src_row tak menimpa kolom
+            # numerik utuh, promote jalur mempertahankan nilai baris.
+            try:
+                from .rekap_import import SRC_ROW_COL  # lazy: rekap_import → loader
+            except ImportError:  # pragma: no cover — struktur paket stabil
+                SRC_ROW_COL = "__SRC_ROW"
+            if SRC_ROW_COL not in df.columns:
+                df[SRC_ROW_COL] = range(row_start + 1,
+                                        row_start + 1 + len(df))
     else:
         if ref and logger:
             logger(

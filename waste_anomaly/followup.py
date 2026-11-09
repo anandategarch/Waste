@@ -356,8 +356,22 @@ def import_followup_workbook(path: str | os.PathLike,
             return {**base, "error": "Sheet 'FOLLOW UP' kosong / tidak ada "
                                      "di file ini (pakai file hasil ekspor "
                                      "tab Follow Up)."}
-        # normalisasi nama kolom (int 1..31 → '1'..'31'; strip teks)
-        df = df.rename(columns={c: str(c).strip() for c in df.columns})
+        # normalisasi nama kolom (int/float 1..31 → '1'..'31'; strip teks).
+        # v2.18.0 audit (L-4): header hari numerik terbaca float ("1.0")
+        # dulu hanya di-str() — "1.0" DITOLAK day_cols() → SEMUA sidik
+        # jari beda dgn aplikasi → hasil tindak lanjut tak pernah match.
+        # Mirror _normalize_columns loader: float integral → int → str.
+        _ren = {}
+        for c in df.columns:
+            cn = c
+            if isinstance(cn, float) and cn.is_integer():
+                cn = int(cn)
+            cn = str(cn).strip()
+            if cn != c:
+                _ren[c] = cn
+        if _ren:
+            df = df.rename(columns=_ren)
+            df = df.loc[:, ~df.columns.duplicated()]
         missing = [c for c in KEY_COLS if c not in df.columns]
         if missing:
             return {**base, "error": f"Kolom kunci hilang: {missing} — pakai "
@@ -449,6 +463,11 @@ def export_followup_xlsx(rows: pd.DataFrame, path: str,
             else:
                 v = None
             cell = ws.cell(row=excel_row, column=j + 1, value=v)
+            # v2.18.0 audit (M-1): anti formula injection — teks berawalan
+            # '='/'+','-','@' dipaksa STRING (pola exporter._force_text_row;
+            # file ini di-edit & dibuka petugas lapangan).
+            if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
+                cell.data_type = "s"
             if c in DAY_COLS and v is not None:
                 day = int(c)
                 if rday is not None and day == rday:

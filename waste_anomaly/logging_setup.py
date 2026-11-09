@@ -83,10 +83,25 @@ def setup_logging(
         return None
 
     log_path = log_dir_path / "waste_anomaly.log"
-    handler = logging.handlers.RotatingFileHandler(
-        log_path, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT,
-        encoding="utf-8",
-    )
+    # v2.18.0 audit (M-3): delay=True + try/except — RotatingFileHandler
+    # default membuka file DI KONSTRUKTOR; file terkunci (Windows: dibuka
+    # di editor/AV/instans kedua rotasi) → PermissionError → setup_logging
+    # raise → main() mati SEBELUM window muncul (pythonw: tanpa pesan apa
+    # pun). delay=True menunda pembukaan sampai log pertama; kegagalan
+    # emisi ditelan logging (bukan crash app) → fallback console-only.
+    try:
+        handler = logging.handlers.RotatingFileHandler(
+            log_path, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT,
+            encoding="utf-8", delay=True,
+        )
+    except OSError:
+        if sys.stderr is not None:
+            logging.basicConfig(level=level, format=LOG_FORMAT)
+        else:
+            root = logging.getLogger()
+            root.addHandler(logging.NullHandler())
+            root.setLevel(level)
+        return None
     handler.setLevel(level)
     handler.setFormatter(logging.Formatter(LOG_FORMAT))
 

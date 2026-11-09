@@ -1,5 +1,6 @@
 @echo off
 setlocal EnableExtensions
+chcp 65001 >nul
 cd /d "%~dp0"
 
 REM v2.17.0 - Waste Anomaly Detection (6 tab: Anomali, Follow Up,
@@ -8,6 +9,8 @@ REM
 REM v2.17.6 - jalankan TANPA jendela CMD hitam (pythonw + ui_app.pyw).
 REM Double-click ui_app.pyw JUGA langsung buka GUI (no console).
 REM Untuk DEBUG dgn console (lihat log stdout): python ui_app.py
+REM v2.18.0 - chcp 65001: pesan error UTF-8 Indonesia tidak jadi
+REM mojibake di console OEM codepage (pola SETUP/BUILD_EXE).
 
 if exist ".venv\Scripts\pythonw.exe" (
     start "" ".venv\Scripts\pythonw.exe" ui_app.pyw

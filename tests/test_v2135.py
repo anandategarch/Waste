@@ -505,6 +505,10 @@ class TestDataAsli:
         """Data asli 25.901 baris: tabel hari mencurigakan ber-✓, pop-up
         detail ber-tombol follow-up ber-sidik jari valid, klik-2× tanpa
         filter. (Golden tak tersentuh — hanya jalur UI.)"""
+        import pytest
+        if not (REPO / "DATA_WASTE.xlsx").exists():
+            pytest.skip("fixture DATA_WASTE.xlsx tidak ada "
+                        "(dihapus 51d042f; v2.18.0 skip jujur)")
         from ui.state import AppContext
         from ui.view_hari import HariView
         from waste_anomaly.followup import CHECK_COL, fingerprint_series
@@ -537,6 +541,10 @@ class TestDataAsli:
         view.close()
 
     def test_anomali_view_popup_fu_toggle_data_asli(self):
+        import pytest
+        if not (REPO / "DATA_WASTE.xlsx").exists():
+            pytest.skip("fixture DATA_WASTE.xlsx tidak ada "
+                        "(dihapus 51d042f; v2.18.0 skip jujur)")
         from ui.state import AppContext
         from ui.view_anomali import AnomaliView
         from waste_anomaly.pipeline import run_pipeline

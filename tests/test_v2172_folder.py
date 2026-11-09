@@ -390,6 +390,11 @@ class TestUIFolderButton:
             assert pv._ent_workbook.text() == ""
             assert not pv._running  # pipeline belum jalan
         finally:
+            # v2.18.0: closeEvent kini MELACAK _folder_worker (audit UI-2 —
+            # dulu close saat scan = qFatal). Mock object() tanpa wait() akan
+            # menabrak dialog "proses masih berjalan" + AttributeError di
+            # wait — reset dulu (skenario: scan selesai) sebelum close.
+            pv._folder_worker = None
             win.close()
 
 

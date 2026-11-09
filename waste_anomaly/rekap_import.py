@@ -115,6 +115,15 @@ _DAY_SET = {str(d) for d in range(1, 32)}
 # koreksi nilai hari ke baris yang BENAR di file Excel sumber.
 SRC_ROW_COL = "__SRC_ROW"
 
+# Kolom header yang dikenali & dikanonikalkan ke UPPERCASE kanonik di
+# convert_rekap_mentah (audit v2.18.0 BUG 3 — validasi kolom wajib
+# case-insensitive, tapi akses kolom berikutnya exact-case; file
+# ber-header "Jenis"/"Nama Resto" lolos validasi lalu crash KeyError).
+_CANON_HEADER_COLS = {
+    "NAMA RESTO", "JENIS", "NAMA BARANG", "SATUAN", "KETERANGAN",
+    "SOURCE DATA", "PIC", "TOTAL",
+}
+
 # Urutan 53 kolom standar README (bagian opsional diisi nilai hitungan /
 # dibiarkan kosong; hari mengikuti kolom yang ADA di sumber — jujur,
 # tanpa fabrikasi kolom hari yang tidak ada di rekap).
@@ -238,10 +247,7 @@ def find_rekap_sheet(path: Path, config: dict,
             candidates.append(extra)
 
     # 1. Kandidat — validasi schema baris-0 sebelum percaya
-    try:
-        name = find_sheet(candidates, sheets)
-    except ValueError:
-        name = None
+    name = find_sheet(candidates, sheets)
     if name is not None:
         try:
             df0 = _read_excel_fast(path, sheet_name=name, header=0, nrows=6)
@@ -332,10 +338,7 @@ def find_rekap_sheet_lenient(path, config: dict | None = None,
         if extra not in candidates:
             candidates.append(extra)
     # 1. Kandidat nama — validasi lenient (JENIS + NAMA BARANG + ≥3 hari)
-    try:
-        name = find_sheet(candidates, sheets)
-    except ValueError:
-        name = None
+    name = find_sheet(candidates, sheets)
     if name is not None:
         try:
             df0 = _read_excel_fast(path, sheet_name=name, header=0, nrows=6)
@@ -371,7 +374,7 @@ def find_rekap_sheet_lenient(path, config: dict | None = None,
 
 
 def load_rekap_folder(folder_path, config: dict | None = None,
-                      logger=None) -> dict:
+                      logger=None, cancel_check=None) -> dict:
     """Scan folder file .xlsx → baca sheet REKAP MENTAH tiap file →
     SINTESIS NAMA RESTO dari nama file (bila kolom absen) → GABUNG semua
     → tulis temp .xlsx (sheet "REKAP MENTAH") → return summary.
@@ -416,7 +419,12 @@ def load_rekap_folder(folder_path, config: dict | None = None,
 
     def _process_one(fp: Path):
         """Baca 1 file → (name, df|None, synth, error|None). Thread-safe:
-        calamine (Rust) aman paralel; openpyxl I/O release GIL sebagian."""
+        calamine (Rust) aman paralel; openpyxl I/O release GIL sebagian.
+        v2.18.0: cancel_check dicek ANTAR-FILE (pola HistoryWorker) —
+        raise RekapImportError ramah; file antrean berikutnya langsung
+        batal (cek di baris pertama tiap file)."""
+        if cancel_check is not None and cancel_check():
+            raise RekapImportError("Scan folder dibatalkan pengguna")
         try:
             sn, hr = find_rekap_sheet_lenient(fp, config, None)
         except RekapImportError as exc:
@@ -430,9 +438,18 @@ def load_rekap_folder(folder_path, config: dict | None = None,
             return (fp.name, None, False, f"gagal baca sheet {sn!r}: {exc}")
         raw = _normalize_columns(raw)
         synth = False
-        if "NAMA RESTO" not in raw.columns:
+        # v2.18.0 audit (BUG 8): deteksi case-INSENSITIVE — file dgn
+        # kolom "Nama Resto" (title-case) lolos deteksi header lenient
+        # TAPI lolos juga cek exact-case lama → nilai resto ASLI dibuang
+        # & diganti nama file + kolom kembar di concat union. Kini kolom
+        # case-variant di-rename ke kanonik; nilai asli dipertahankan.
+        resto_col = next((c for c in raw.columns
+                          if str(c).strip().upper() == "NAMA RESTO"), None)
+        if resto_col is None:
             raw["NAMA RESTO"] = fp.stem
             synth = True
+        elif resto_col != "NAMA RESTO":
+            raw = raw.rename(columns={resto_col: "NAMA RESTO"})
         return (fp.name, raw, synth, None)
 
     # PARALLEL — baca multiple file sekaligus (max 4 worker).
@@ -858,6 +875,22 @@ def convert_rekap_mentah(source: str | os.PathLike,
                                  dtype=object)
         raw = _promote_at(raw_full, header_row)
     raw = _normalize_columns(raw)
+    # v2.18.0 audit (BUG 3): KANONIKALISASI HEADER ke UPPERCASE kanonik.
+    # Validasi kolom wajib di bawah case-INSENSITIVE, tapi akses kolom
+    # berikutnya exact-case ("JENIS", "SOURCE DATA", …) — file ber-header
+    # "Jenis"/"Nama Resto" lolos validasi lalu crash KeyError mentah.
+    _ren = {}
+    for _c in raw.columns:
+        _cu = str(_c).strip().upper()
+        if _cu in _CANON_HEADER_COLS and str(_c).strip() != _cu:
+            _ren[_c] = _cu
+    if _ren:
+        raw = raw.rename(columns=_ren)
+        # case-variant kembar ("Jenis" + "JENIS") → duplikat pasca-rename;
+        # keep first (pola pandas mangling).
+        raw = raw.loc[:, ~raw.columns.duplicated()]
+        _log(logger, f"[rekap_import] header case-variant dinormalisasi: "
+                     f"{_ren}")
     rows_raw = len(raw)
     _log(logger, f"[rekap_import] terbaca {rows_raw} baris × "
                  f"{len(raw.columns)} kolom dari sheet '{sheet}'")

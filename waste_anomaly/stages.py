@@ -569,9 +569,12 @@ def stage_05_bom(
     # Defensive: drop TOTAL BOM dari df kalau sudah ada (idempotent), supaya merge tidak buat _x/_y
     if "TOTAL BOM" in df_join.columns:
         df_join = df_join.drop(columns=["TOTAL BOM"])
-    # Normalisasi kunci sisi data — None untuk sel kosong: pandas merge TIDAK
-    # akan match-kan None (TOTAL BOM tetap NaN, sinyal S6/S7 off) — dan barisnya
-    # TETAP dipertahankan di output (tidak ada dropna di sisi data!).
+    # Normalisasi kunci sisi data — None untuk sel kosong. CATATAN
+    # (audit v2.18.0, koreksi komentar lama): pandas merge JUGA
+    # mematch-kan NA==NA pada kunci — keamanan baris kosong TIDAK
+    # datang dari sini, melainkan dari dropna sisi BOM di atas
+    # (kunci None di sisi lookup sudah dibuang → baris df kosong
+    # tetap dipertahankan di output tanpa pasangan BOM).
     df_join["NAMA RESTO"] = df_join["NAMA RESTO"].map(_key_str)
     df_join["NAMA BARANG"] = df_join["NAMA BARANG"].map(_key_str)
 
@@ -767,14 +770,24 @@ def stage_09_satuan(
             df[c] = np.nan
         return df
 
-    # Strip & uppercase-lowercase untuk matching
-    sat["NAMA ITEM"] = sat["NAMA ITEM"].astype(str).str.strip()
+    # Strip & uppercase-lowercase untuk matching.
+    # v2.18.0 audit (BUG 2): kunci join NA-safe via kolom sekali-pakai —
+    # dulu ``df_join["NAMA BARANG"] = ....astype(str)`` MENIMPA kolom
+    # kanonik dengan literal "<NA>" (StringDtype pd.NA) yang lalu bocor
+    # ke seluruh output (tabel/export/join history). Kini kolom kanonik
+    # tak tersentuh; kunci kosong di-drop dari sisi lookup (pola
+    # stage_05 dropna — kunci kosong tak bisa di-join bermakna).
+    si = sat["NAMA ITEM"]
+    sat["_sat_key"] = (si.astype("object").where(si.notna(), "")
+                       .astype(str).str.strip())
     df_join = df.copy()
     # Defensive: drop helper cols dari df kalau sudah ada (idempotent case)
     for c in expected_helper_cols:
         if c in df_join.columns:
             df_join = df_join.drop(columns=[c])
-    df_join["NAMA BARANG"] = df_join["NAMA BARANG"].astype(str).str.strip()
+    nb = df_join["NAMA BARANG"]
+    df_join["_nb_key"] = (nb.astype("object").where(nb.notna(), "")
+                         .astype(str).str.strip())
 
     # C2 (v2.3.1): JANGAN merge seluruh frame sat. Dulu, kolom sat yang
     # tabrakan dengan df (SATUAN, NAMA BARANG, dst.) otomatis kena suffix
@@ -783,21 +796,25 @@ def stage_09_satuan(
     # dan buang dari proyeksi kolom yang masih ada di df (defense berlapis).
     sat_cols = ["NAMA ITEM"] + [c for c in expected_helper_cols if c in sat.columns]
     sat_cols = [c for c in sat_cols if c == "NAMA ITEM" or c not in df_join.columns]
-    sat_proj = sat[sat_cols]
+    sat_proj = sat[sat_cols + ["_sat_key"]]
     # M5 (v2.3.1): lookup merge many_to_one — NAMA ITEM di-dedupe (keep
     # first) supaya entry ganda di DATABASE_SATUAN tidak me-multiply baris df
     # (semantik lookup M: satu baris per item).
-    sat_proj = sat_proj.drop_duplicates(subset=["NAMA ITEM"], keep="first")
+    sat_proj = sat_proj.drop_duplicates(subset=["_sat_key"], keep="first")
+    # Kunci kosong (blank/NA) tak bermakna — drop dari sisi lookup
+    # (anti join palsu blank-item ↔ blank-item).
+    sat_proj = sat_proj[sat_proj["_sat_key"] != ""]
     out = df_join.merge(
         sat_proj,
-        left_on="NAMA BARANG",
-        right_on="NAMA ITEM",
+        left_on="_nb_key",
+        right_on="_sat_key",
         how="left",
         validate="many_to_one",
     )
-    # Drop kolom NAMA ITEM duplikat (dari satuan)
-    if "NAMA ITEM" in out.columns:
-        out = out.drop(columns=["NAMA ITEM"])
+    # Drop kolom join sekali-pakai + NAMA ITEM duplikat (dari satuan)
+    out = out.drop(
+        columns=[c for c in ("NAMA ITEM", "_sat_key", "_nb_key")
+                 if c in out.columns])
     # Pastikan semua helper col ada (kalau satuan tidak punya semua)
     for c in expected_helper_cols:
         if c not in out.columns:

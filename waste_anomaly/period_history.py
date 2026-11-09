@@ -222,7 +222,23 @@ def month_sort_key(label: str) -> tuple[int, int]:
     num = _parse_month_numeric(s)
     if num is not None:
         return num
-    return (9999, 0)
+    return _MONTH_UNPARSEABLE
+
+
+# Sentinel label tak terparse (audit v2.18.0 — dipakai label_parseable).
+_MONTH_UNPARSEABLE = (9999, 0)
+
+
+def label_parseable(label: str) -> bool:
+    """Label bulan bisa diparse jadi (tahun, bulan)? (audit v2.18.0).
+
+    Pemilihan "bulan TERBARU" (day_evidence_vs_history, scorecard
+    BARU/PULIH, coverage verdict) memakai max(month_sort_key) — sentinel
+    (9999, 0) untuk label aneh ("data1.xlsx") MENANG max() dan terpilih
+    sebagai "terbaru" padahal tak informatif. Konsumen kini memfilter
+    lewat helper ini sebelum max().
+    """
+    return month_sort_key(label) != _MONTH_UNPARSEABLE
 
 
 def detect_month_label(path: str | os.PathLike) -> str | None:
@@ -254,6 +270,21 @@ def detect_month_label(path: str | os.PathLike) -> str | None:
 # AGREGAT KUANTITI
 # ============================================================
 
+def _key_text(s: pd.Series) -> pd.Series:
+    """Kunci teks NA-SAFE utk join/agregat lintas sumber (audit v2.18.0).
+
+    Bug: kedua sisi join memakai ``astype(str)`` — pd.NA (StringDtype,
+    sisi df anomali hasil stage_01) menjadi literal "<NA>" sedangkan NaN
+    (object dtype, sisi agregat pembanding hasil loader mentah) menjadi
+    "nan". "<NA>" != "nan" → baris keterangan/resto kosong TIDAK PERNAH
+    match → BULAN LALU = NaN → PERUBAHAN salah "Baru" padahal ada
+    riwayat. Normalisasi: NA/NaN apa pun → "" SEBELUM astype(str),
+    kedua sisi konsisten.
+    """
+    s = s.astype("object").where(s.notna(), "")
+    return s.astype(str).str.strip()
+
+
 def _day_cols_of(df: pd.DataFrame) -> list[str]:
     """Kolom hari '1'..'31' yang benar-benar ada di frame (urut)."""
     return [str(d) for d in range(1, 32) if str(d) in df.columns]
@@ -283,8 +314,8 @@ def _aggregate(kept: pd.DataFrame, key_akhir: int,
         num = kept[day_cols].apply(pd.to_numeric, errors="coerce")
     num = num.fillna(0.0)
     tmp = pd.DataFrame({
-        "NAMA RESTO": kept["NAMA RESTO"].astype(str).str.strip(),
-        "NAMA BARANG": kept["NAMA BARANG"].astype(str).str.strip(),
+        "NAMA RESTO": _key_text(kept["NAMA RESTO"]),
+        "NAMA BARANG": _key_text(kept["NAMA BARANG"]),
     })
     for c in day_cols:
         tmp[c] = num[c].to_numpy()
@@ -341,7 +372,7 @@ def _base_keys_totals(kept: pd.DataFrame,
     num = num.fillna(0.0)
     tmp = {"TOTAL": num.sum(axis=1).to_numpy()}
     for c in cols:
-        s = kept[c].astype(str).str.strip()
+        s = _key_text(kept[c])
         if c == "JENIS":
             s = s.str.upper()
         tmp[c] = s
@@ -660,17 +691,21 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
             ascending=False).index).head(top_n)
         items = m.reset_index(drop=True)[item_cols]
         # Baru = hanya di bulan INI (tidak ada bulan lalu); hilang = sebaliknya.
+        # v2.18.0 audit: item 0 di KEDUA bulan masuk dua-duanya (pembanding
+        # ≤0 DAN bulan ini ≤0) — baris all-zero umum (23rb/25,9rb data
+        # asli) tampil ganda di tabel Baru & Hilang. Kini butuh nilai >0
+        # di sisi yang diklaim ada.
         full = ta.merge(tb, on=key, how="outer")
         # v2.13.4: coerce numerik dulu (pola compare_level).
         for _c in ("TOTAL_x", "TOTAL_y"):
             full[_c] = pd.to_numeric(full[_c], errors="coerce").fillna(0.0)
         full = full.rename(
             columns={"TOTAL_x": "Bulan Ini", "TOTAL_y": "Pembanding"})
-        new_items = full[full["Pembanding"] <= 0][
+        new_items = full[(full["Pembanding"] <= 0) & (full["Bulan Ini"] > 0)][
             key + ["Bulan Ini"]].sort_values(
             "Bulan Ini", ascending=False).head(
             top_n).reset_index(drop=True)[new_cols]
-        gone_items = full[full["Bulan Ini"] <= 0][
+        gone_items = full[(full["Bulan Ini"] <= 0) & (full["Pembanding"] > 0)][
             key + ["Pembanding"]].sort_values(
             "Pembanding", ascending=False).head(
             top_n).reset_index(drop=True)[gone_cols]
@@ -895,7 +930,7 @@ def change_vs_history(df: pd.DataFrame, baseline: dict | None,
     def _norm(frame: pd.DataFrame) -> pd.DataFrame:
         tmp = pd.DataFrame(index=frame.index)
         for k in keys:
-            s = frame[k].astype(str).str.strip()
+            s = _key_text(frame[k])
             if k in ("JENIS",):
                 s = s.str.upper()
             elif k == "KETERANGAN":
@@ -1084,10 +1119,14 @@ def day_evidence_vs_history(df: pd.DataFrame, months: list[dict],
     day_pos = np.array([day_cols.index(str(d)) for d in day_num])
     nilai = sub.to_numpy()[np.arange(len(idx)), day_pos]
 
-    resto = (out["NAMA RESTO"].astype(str).str.strip().to_numpy()
+    # Kunci join resto/barang NA-safe kedua sisi (audit v2.18.0): df
+    # anomali memegang pd.NA (StringDtype) → astype(str) literal "<NA>";
+    # agg pembanding (object dtype) → "nan". Keterangan kosong tidak
+    # pernah match walau nilai sama. _key_text → "" konsisten.
+    resto = (_key_text(out["NAMA RESTO"]).to_numpy()
              if "NAMA RESTO" in out.columns
              else np.array([""] * n))
-    barang = out["NAMA BARANG"].astype(str).str.strip().to_numpy()
+    barang = _key_text(out["NAMA BARANG"]).to_numpy()
     cand = pd.DataFrame({
         "_pos": idx,
         "_rk": resto[idx],
@@ -1104,14 +1143,20 @@ def day_evidence_vs_history(df: pd.DataFrame, months: list[dict],
         long = agg.melt(id_vars=["NAMA RESTO", "NAMA BARANG"],
                         value_vars=dcols, var_name="_day",
                         value_name="_val")
-        long["_rk"] = long["NAMA RESTO"].astype(str).str.strip()
-        long["_ik"] = long["NAMA BARANG"].astype(str).str.strip()
+        long["_rk"] = _key_text(long["NAMA RESTO"])
+        long["_ik"] = _key_text(long["NAMA BARANG"])
         m = cand.merge(long[["_rk", "_ik", "_day", "_val"]],
                        on=["_rk", "_ik", "_day"], how="left")
         return m["_val"].to_numpy(dtype=float)
 
     # Bulan lalu = bulan pembanding TERBARU (label terparse terbesar).
-    latest = max(ok, key=lambda m: month_sort_key(m.get("label")))
+    # v2.18.0 audit (BUG 5): label TAK TERPARSE dulu ikut max() — sentinel
+    # (9999, 0) MENANG, file bernama aneh "data1.xlsx" terpilih jadi
+    # "bulan lalu" mengalahkan "Juli 2026". Kini label aneh dikecualikan
+    # dari pemilihan; fallback bulan apa pun bila tak ada yang terparse.
+    _ok_parsed = [m for m in ok if label_parseable(m.get("label"))]
+    latest = max(_ok_parsed or ok,
+                 key=lambda m: month_sort_key(m.get("label")))
     last_vals = _lookup(latest)
     out.iloc[idx, out.columns.get_loc("NILAI BULAN LALU")] = last_vals
     ratio = np.where((last_vals > 0) & (nilai > 0),

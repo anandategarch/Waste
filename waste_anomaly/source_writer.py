@@ -97,6 +97,13 @@ def make_backup(source_path: str | os.PathLike,
             f"Path sumber bukan file: {src}")
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     bak = src.with_name(f"{src.stem}.bak-{stamp}{src.suffix}")
+    # v2.18.0 audit (L-9): dua backup dalam sedetik sama saling menimpa
+    # (copy2 menimpa diam-diam) — suffix penghitung bila nama sudah ada.
+    if bak.exists():
+        i = 1
+        while bak.exists():
+            bak = src.with_name(f"{src.stem}.bak-{stamp}-{i}{src.suffix}")
+            i += 1
     try:
         shutil.copy2(src, bak)
     except OSError as exc:
@@ -260,11 +267,17 @@ def _replace_cell_v_xml(xml_str: str, cell_ref: str,
                 f"Sel {cell_ref} bertipe non-numerik (t=\"{t_match.group(1)}\") "
                 f"— tidak bisa tulis nilai numerik. Sel hari seharusnya "
                 f"numerik; periksa file Excel sumber.")
-        # Cari <v>...</v> di inner
-        v_pat = re.compile(r'<v>([^<]*)</v>')
+        # Cari <v>...</v> di inner.
+        # v2.18.0 audit (M-2): pola lama r'<v>[^<]*</v>' TIDAK match
+        # bentuk self-closing '<v/>' (sel kosong bergaya dari tool lain
+        # — openpyxl menulis '<c r=.. s=../>' tapi pustaka lain bisa
+        # '<c r=..><v/></c>') → <v> baru DITAMBAHKAN setelahnya → dua
+        # anak <v> = XML invalid → file sumber KORUP sebelum verifikasi
+        # jalan. Pola baru meng-cover dua-duanya dan MENGGANTI.
+        v_pat = re.compile(r'<v(?:/>|>[^<]*</v>)')
         v_m = v_pat.search(inner)
         if v_m:
-            old_val = v_m.group(1)
+            old_val = None if v_m.group(0) == "<v/>" else v_m.group(0)[3:-4]
             new_inner = (inner[:v_m.start()] + f'<v>{new_value_str}</v>'
                          + inner[v_m.end():])
         else:
@@ -329,8 +342,10 @@ def write_day_edits(
       source_path  : path file Excel sumber (REKAP MENTAH / DATA_WASTE).
       src_row      : nomor baris FISIK sheet (1-based; ≥2 — baris 1 header).
       day_edits    : {nama_hari_str: nilai_baru} — mis. {"13": 0.0, "14": 1250}.
-                     Hari tak ada di dict TIDAK diubah. Nilai None = hapus
-                     (sel kosong). Nilai harus numerik ≥0.
+                     Hari tak ada di dict TIDAK diubah. Nilai None/NaN
+                     ditulis sebagai 0 (bukan sel kosong — konsistensi
+                     TOTAL = sum hari; audit v2.18.0 L-7: docstring lama
+                     salah menjanjikan "hapus sel"). Nilai harus numerik ≥0.
       logger       : callback pipeline-style (opsional).
       config       : config dict (opsional; default load_config()).
       backup       : v2.16.1 — bila False, LEWATI pembuatan backup (user yakin
@@ -443,14 +458,19 @@ def write_day_edits(
         except StopIteration:
             raise SourceWriteError(
                 f"Sheet '{sheet_name}' kosong — tak ada baris header")
-        # Map hari + total dari header
+        # Map hari + total dari header.
+        # v2.18.0 audit (L-5): duplikat header hari ("1" & "1.1") —
+        # dulu assignment terus menimpa (LAST wins) padahal pipeline
+        # membaca kemunculan PERTAMA (pandas mangling keep-first) →
+        # koreksi ditulis ke kolom salah & "hilang" saat re-run.
+        # Kini: kemunculan PERTAMA yang dipakai (konsisten pipeline).
         for ci, hv in enumerate(header_vals, start=1):
             if hv is None:
                 continue
             if isinstance(hv, float) and hv.is_integer():
                 hv = int(hv)
             s = str(hv).strip()
-            if s in DAY_COLUMNS:
+            if s in DAY_COLUMNS and s not in day_col_map:
                 day_col_map[s] = ci
             elif s.upper() == "TOTAL" and total_col is None:
                 total_col = ci
@@ -521,7 +541,15 @@ def write_day_edits(
             f"Gagal membaca ZIP xlsx '{src.name}': {exc}") from exc
     _log(logger, f"[source_writer] sheet XML path: {sheet_xml_path} "
                  f"({len(sheet_xml_bytes):,} bytes)")
-    sheet_xml = sheet_xml_bytes.decode("utf-8", errors="replace")
+    # v2.18.0 audit: strict decode — errors="replace" menulis U+FFFD
+    # kembali ke file (korupsi senyap) utk arsip berkarakter invalid;
+    # kini gagal JUJUR sebelum file tersentuh.
+    try:
+        sheet_xml = sheet_xml_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SourceWriteError(
+            f"Sheet XML sumber bukan UTF-8 valid ({exc}) — tolak menulis "
+            f"supaya file tidak rusak. Backup: {bak_msg}.") from exc
 
     # 2. Replace setiap sel hari
     changes: list[dict[str, Any]] = []
@@ -593,9 +621,14 @@ def write_day_edits(
         except OSError:
             pass
         raise
-    # Ganti file asli dgn tmp (atomic di Unix)
+    # Ganti file asli dgn tmp — ATOMIK di Windows juga.
+    # v2.18.0 audit (H-2): shutil.move di Windows fallback ke copy2+unlink
+    # yang MEMOTONG file asli dulu ('wb') — crash/listrik penuh di tengah
+    # copy = file sumber HANCUR. os.replace = MoveFileExW REPLACE_EXISTING
+    # (atomik); file terkunci Excel tetap PermissionError → jalur ramah
+    # yang sudah ada di bawah.
     try:
-        shutil.move(str(tmp_out), str(src))
+        os.replace(tmp_out, src)
     except OSError as exc:
         raise SourceWriteError(
             f"Gagal mengganti file asli dgn hasil tulis: {exc}. "

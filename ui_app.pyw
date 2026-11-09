@@ -42,7 +42,33 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
-from ui.app import main  # noqa: E402
+# v2.18.0 audit (L-6): kegagalan IMPORT (dependensi hilang / env rusak /
+# PySide6 versi salah) di bawah pythonw = TANPA console, TANPA window,
+# TANPA log — aplikasi mati senyap total. Tulis crash file berdampingan
+# + MessageBox Win32 (best-effort) supaya user tahu apa yang terjadi.
+try:
+    from ui.app import main
+except Exception:
+    import traceback
+    from datetime import datetime
+    _crash = Path(__file__).resolve().parent / "crash_startup.txt"
+    try:
+        _crash.write_text(
+            "Waste Anomaly gagal start — "
+            f"{datetime.now():%Y-%m-%d %H:%M:%S}\n\n"
+            + traceback.format_exc(),
+            encoding="utf-8")
+    except OSError:
+        pass
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            0, "Aplikasi gagal start (gagal impor modul).\n"
+            "Detail: lihat file crash_startup.txt di folder aplikasi.",
+            "Waste Anomaly", 0x10)
+    except Exception:
+        pass  # non-Windows / headless — crash file sudah ditulis
+    raise
 
 if __name__ == "__main__":
     raise SystemExit(main())
