@@ -1,731 +1,189 @@
 # Waste Anomaly Detection
 
-Python + PySide6 (Qt) **anomaly workbench** untuk deteksi anomali waste di cabang resto. Replika 1:1 dari **Power Query M code** untuk analisa waste per item, per cabang, per kategori — lengkap dengan **12 sinyal anomali**, composite scoring, **drill-down interaktif (klik baris = pop-up + tombol fokus; klik-2× filter dihapus v2.13.5)**, **benchmark peer aktif (pop-up detail + sinyal S8/S9)**, **kolom % to BOM (waste vs penjualan kuantiti)**, **data quality otomatis (pipeline & export)**, **compare periode bulan-ke-bulan**, **banding vs beberapa bulan lalu (multi-file, kuantiti tanpa BOM, v2.10.0)**, dan **filter funnel di judul SEMUA kolom tabel (v2.12.3/v2.12.4 — sidebar filter & slicer & filter profile dihapus)**, dan **tab Follow Up: centang ✓ baris mencurigakan → shortlist rekap + warna hari + ekspor + impor hasil tindak lanjut (v2.12.0/v2.13.3)**, dan **tab Scorecard Cabang: urutan kunjungan audit + potensi hemat + detektor input kosong + top kerugian + pola hari kalender + hari sistemik + kualitas data + tren multi-bulan (v2.13.1-3)** (6 tab; v2.13.6: tab Scorecard & Pipeline dibungkus scroll — konten panjang tetap terjangkau di layar kecil).
+**Anomaly workbench** Python + PySide6 (Qt) untuk deteksi anomali waste di cabang resto — replika 1:1 pipeline Power Query M code. Membaca rekap waste bulanan (Excel), menjalankan 14-stage pipeline in-memory, men-skor setiap baris dengan **12 sinyal anomali**, dan menyajikan hasilnya di UI 6 tab interaktif + export Excel 10 sheet.
 
-> **v2.18.0** — **DEEP AUDIT v3 (4 auditor paralel: engine / UI / security / support modules): 1 CRITICAL + 8 HIGH + 9 MEDIUM + 12 LOW** — **CRITICAL (keamanan)**: data bisnis ASLI ter-commit di repo publik — `BJMHAS.xlsx` (7,5 MB) & `REKAP MENTAH…TEGAR.xlsx` (10,5 MB, 54.161 baris data waste resto asli) **dikeluarkan dari tracking git** (`git rm --cached` — file tetap di disk lokal; aturan `.gitignore` root `/*.xlsx` + pengecualian `sample_workbook.xlsx` sintetis) — test golden data-real kini skip otomatis di CI bila file lokal tak ada (skipif sudah ada); **RISET: blob lama masih ada di history — purge penuh butuh `git filter-repo` + force-push (koordinasi; lihat catatan commit)**. **HIGH (engine)**: (1) kunci join `<NA>` vs `nan` — `astype(str)` pd.NA (StringDtype, sisi anomali) = `"<NA>"` vs NaN (object, sisi pembanding) = `"nan"` → BULAN LALU/PERUBAHAN salah "Baru" utk semua baris keterangan kosong (period_history `_key_text` NA-safe kedua sisi); (2) `__SRC_ROW` SALAH utk named-range mulai baris R>1 → edit pop-up menulis koreksi ke baris Excel SALAH (loader pasang mapping fisik yang benar); (3) `source_writer` ganti file via `shutil.move` = copy2 yang MEMOTONG file asli dulu → crash = file sumber HANCUR (kini `os.replace` atomik di Windows juga); (4) Scorecard BARU/PULIH pakai max() LEKSIKOGRAFIS ("Mei" > "Juni" krn M > J) → angka banding bulan salah & kontradiksi dgn TREN (kini `_latest_month` parse-aware); (5) `stage_09` `astype(str)` menulis literal `"<NA>"` ke kolom kanonik NAMA BARANG output (kunci join sekali-pakai NA-safe). **HIGH (UI)**: (6) `friendly_file_error()` dipanggil 4-argumen padahal 1 → TypeError DI DALAM slot handler scan-folder gagal (error tak pernah tampil); (7) closeEvent tak melacak FolderScanWorker & SaveEditsWorker → QThread destroyed-while-running = qFatal abort saat keluar (kini dikumpulkan + `FolderScanWorker.cancel()` kooperatif antar-file); (8) NaN key round-trip Qt menu funnel — uncheck "(kosong)" diabaikan senyap & restore state membalik filter (kunci dinormalisasi `_nk`, kelas bug yang sama dgn gel-4 A6). **MEDIUM**: formula injection Excel (`=`,`+`,`-`,`@` prefix → formula hidup di laporan/FOLLOW UP — kini dipaksa string via `data_type='s'`, nilai round-trip PERSIS); `<v/>` self-closing → XML invalid (regex baru men-cover & mengganti); `setup_logging` crash saat file log terkunci (delay=True + fallback); `_save_config` mutasi ctx.config sebelum write (kini transaksional); widget leak funnel menu/help/context menu (deleteLater/WA_DeleteOnClose); `default_deviasi_folder` dikecilkan oleh workbook dir (preseden dibalik — config menang); header case-variant "Jenis"/"Nama Resto" crash KeyError di convert (kanonikalisasi uppercase); "bulan lalu" memilih label tak-terparse sebagai terbaru (sentinel menang max()). **LOW**: item 0-0 tampil di Baru & Hilang sekaligus; ALASAN DOMINAN merusak teks ber-titik ("MKT. PROMO 1.5" → "MKT, PROMO 1,5"); header hari float "1.0" di impor TL; duplikat header hari (last-wins vs pipeline first-wins); backup timestamp sedetianama; `__SRC_ROW` bocor ke laporan Excel (kini di-drop); folder-flow buang kolom "Nama Resto" case-variant; crash file startup pythonw (`crash_startup.txt` + MessageBox); dead `except ValueError`; `list_sheets` tanpa try/finally; komentar palsu merge-NA; tombol "⏳ Memindai folder…" macet; render ganda Follow Up. **Hygiene**: `requirements.txt` batas atas `numpy<3` & `PySide6<7`; `MULAI.bat` `chcp 65001`; nama langkah CI tanpa angka test hardcode; versi 2.17.0 → **2.18.0**. Full suite 1151 test (test data-real jalan lokal, skip di CI).
+> Versi **2.18.0** · 1.151 test (pytest) · CI GitHub Actions (matrix Python × OS) · MIT License
 
-> **v2.17.0** — **ROMBAK UI/UX SPRINT 1 (P0 BLOKER + HIERARKI)** — audit UX 4-agent (verdict 6,5/10, 5 bloker) + analisis hierarki (6,4/10) → overhaul information architecture & profesionalisme: **(1) Urutan tab alur analisa** — Pipeline (entry point muat data) dipindah ke index 0 (sebelumnya index 5 — alur terbalik: user harus ke tab akhir dulu untuk memuat data); Anomali index 1; drill Hari/Scorecard/Banding index 2-4; Follow Up (tindak lanjut) terakhir index 5. Ctrl+1..Ctrl+6 ikut remap otomatis. **(2) KPI SINYAL-DULU** — kartu Anomali di-reorder: PRIORITAS TINGGI → POTENSI ANOMALI → PERLU REVIEW → TOTAL WASTE → CABANG → TOTAL BARIS (sebelumnya TOTAL BARIS vanity di posisi 1 — user lihat "berapa baris" dulu sebelum "berapa anomali"). **(3) Urutan kolom alur baca** — Anomali: TOTAL + % to BOM ditarik ke depan (posisi 8-9 → 5-6, kanan NAMA BARANG; sebelumnya terkubur setelah 7 kolom identitas); Hari: HARI TERSANGKA + NILAI + RASIO + SHARE ditarik ke depan (posisi 6 → 3; inti tab); Scorecard: KELEBIHAN + STATUS INPUT ditarik ke depan (posisi 4 & 11 → 2 & 3; sinyal action wajib terbaca dulu). **(4) Popup detail SINYAL-DULU** — "Sinyal terpicu" (chip merah, inti investigasi) ditampilkan SEBELUM "Ringkasan" (sebelumnya Ringkasan duluan → user baca 7 angka konteks sebelum tahu sinyal apa yang menyala). **(5) Pipeline card urutan config-sebelum-hasil** — Threshold Config card dipindah sebelum Ringkasan Run & Log (sebelumnya Threshold di akhir setelah hasil — user harus scroll ke bawah untuk atur threshold padahal wajib SEBELUM run). **(6) Sistem ikon vektor** — modul baru `ui/icons.py` (18 ikon monokrom QPainter-drawn, zero dependensi baru, self-contained tanpa SVG eksternal) menggantikan sup-emoji warna di chrome tertinggi: toolbar (chart_bar/save/help), sub-tab Banding (chart_bar/receipt/store/package/sparkle/trending_down), 9 header seksi Scorecard+Hari+Periode (building/coins/calendar/flask/link/trending_up/shuffle). helper `icon_header()` + `Icon` widget + `make_qicon()`. **(7) CLIPBOARD** — DataTable kini mendukung Ctrl+C (salin baris terpilih TSV) + menu konteks "Salin Baris Terpilih" / "Salin Semua Baris Tampil" (TSV — tempel langsung ke Excel/Sheets; yang terakhir = ekspor subset ad-hoc: filter tabel → salin → tempel). Sebelumnya tabel tak bisa disalin sama sekali (bloker UX: user harus screenshot/ketik ulang). Status flash 4 dtk via QStatusBar leluhur. Plus: 3 test gap v2.16.0 diperbaiki (peta hari read-only QLabel → editable QDoubleSpinBox di test_v290/test_v2139/test_v21312); manifest ui_methods di-sync (5 def hilang didaftarkan: SaveEditsWorker/_NoWheelFilter/SortControl/fmt_color_styled_write_day_value/icon_header). 1146+82 E2E = **full suite HIJAU 0 gagal**; ruff fatal+F401 bersih; CRLF .bat utuh.
+## Fitur Utama
 
-> **v2.15.0** — **FITUR BARU: 🧮 SEKALI JALAN — pilih REKAP MENTAH → pipeline langsung, TANPA file olahan antara** (permintaan user: *"bisa gak sekali proses aja semua diproses? ini kan aku 2x proses > 1. proses rekap mentah 2. proses pipeline. aku mau sekali proses aja dan gak perlu export hasil olahan proses rekap mentah nya"*): (1) **pipeline.py memanggil 3 helper `rekap_import` di fase LOAD** — `ensure_rekap_header()` (perbaiki header tergeser: baris judul di atas header dipromosi jadi header — pola `fn_rekap_mentah` stock-monitoring; nilai header float `1.0` calamine dihitung hari "1" — bug C3-a yang dulu membuat baris header sah DITOLAK deteksi), `normalize_rekap_values()` (JENIS 'waste ' → 'WASTE' supaya baris tak-kanonik TIDAK terbuang filter exact-match stage_01; identity di-strip 'GR ' → 'GR' parity file olahan; **hari kosong → 0** parity converter + file standar buatan M-code user — terukur: DATA_WASTE.xlsx 23.470/25.901 baris ber-hari semua-0 eksplisit; tanpa ini 30 baris hari-kosong terbuang stage_02 dan AVG berubah semantik di 932 sel kosong), `inject_bom_from_raw_rows()` (kolom inline **TOTAL BOM** dari baris JENIS=="BOM" SEBELUM stage_01 memfilternya — sinyal S6/S7 & Rill % to BOM hidup; idempotent: TOTAL BOM sudah ada → no-op). **Trigger jujur**: normalisasi hanya jalan pada sheet MENTAH (ada JENIS non-waste/BOM/SO — ciri rekap 'semua jenis' — atau varian tak-kanonik); file DATA_WASTE standar → passthrough IDENTITAS (golden tak bergeser). (2) **UI**: tombol **🧮 Olah & Jalankan REKAP MENTAH…** — dialog pilih file mentah → kolom workbook diisi path MENTAH → `_start()` LANGSUNG; seluruh mesin run lama dipakai (worker QThread + progres per-stage + ⏹ Batalkan + ringkasan + render tab lain); RekapImportWorker/convert_rekap_mentah TETAP tersedia sebagai API ekspor berdiri-sendiri (UI tak memakainya lagi). (3) **HASIL IDENTIK jalur 2-langkah v2.14.0 — VERIFIKASI GOLDEN file asli 54.160 baris**: run_pipeline LANGSUNG pada "REKAP MENTAH_01-31 AGUSTUS 2026_TEGAR.xlsx" → **25.722 baris** (WASTE 18.771 · SUSUT 2.204 · TRIAL 4.747) + **TOTAL BOM non-null 25.028** + **62 prioritas** — angka PERSIS E2E 2-langkah (convert 14 dtk + pipeline 18 dtk), kini **±6 dtk SATU run** (satu baca file, tanpa tulis 1,3 juta sel antara). 1090+32 = **1122 test** (+`test_v2150.py` 32 test: header passthrough/repair/tak-terdeteksi ×4; JENIS kanonis + strip + hari-0 + trigger file-standar + NaN ×6; BOM inline/no-op/duplikat-sum/kunci-kosong/M6/log-W-S-T ×6; **PARITY mentah-vs-olahan** + header-tergeser-BOM-sekaligus + DATABASE_SATUAN HELPER hidup + file-standar-tak-tersentuh + baris-kosong-selamat ×5; file asli golden; UI sekali-jalan tombol/alur/guard/batal/API ×5; manifest+Bantuan+versi+CRLF+pipeline-memanggil-helper ×5; 2 test UI v2.14.0 ditulis-ulang jujur — alur 2-langkah diganti sekali-jalan); ruff fatal+F401 bersih; CRLF .bat utuh.
-> **v2.14.0** — **FITUR BARU: 🧮 OLAH REKAP MENTAH (menggantikan olahan manual Excel)** — perintah user: *"aku harus olah manual dulu, bisa gak diolah oleh python aja? Jadi nanti aku tinggal pilih file REKAP MENTAH_01-31 AGUSTUS 2026_TEGAR excel, nanti python olahin jadi data waste"*: (1) modul baru `waste_anomaly/rekap_import.py` — satu panggilan `convert_rekap_mentah()` mengubah rekap mentah bulanan (±54 ribu baris × 42 kolom berisi SEMUA JENIS: WASTE/SUSUT/TRIAL/BOM/SO/BARANG MASUK/STOK AWAL/REWORK/RETUR) jadi workbook **DATA_WASTE standar 53 kolom**: saring JENIS WASTE/SUSUT/TRIAL (semantika stage_01) + **TOTAL BOM diekstrak dari baris JENIS==BOM** — ditulis DUA arah (kolom inline = prioritas stage_05 v2.3.0 + sheet "BOM" = kandidat loader; sinyal S6/S7 & Rill % to BOM hidup) + kolom hitungan semantika pipeline (TOTAL/AVG/MAX/Count Hari/Status2 = stage_02; % to BOM & Rill = stage_05 guard) + salinan DATABASE_SATUAN bila ada + output `DATA_WASTE <bulan>.xlsx` (label bulan dari nama file — banding periode bisa mem-parse kembali; guard anti menimpa sumber) + openpyxl **write-only** (±25rb×53 = 1,3 juta sel ditulis ±5-10× lebih cepat). Deteksi sheet: kandidat config token-match ("Rekap Mentah" ⊆ "REKAP MENTAH") + fallback scan schema + header tergeser ≤6 baris (pola `fn_rekap_mentah` stock-monitoring; BOM master = query "2  22 05" ≡ `fn_2205.py` — 22.05 Rincian Penjualan). (2) UI tab Pipeline: tombol **🧮 Olah REKAP MENTAH…** → pilih file → worker background `RekapImportWorker` (QThread, pola sinyal PipelineWorker; tombol Mulai+Olah dinonaktifkan selama proses, D29) → kolom workbook TERISI OTOMATIS + log ringkasan (baris mentah→data, jenis, cabang/item, pasangan BOM) + dialog ringkasan + status ok → tinggal **Mulai Pipeline**. Error RekapImportError pesan ramah (sheet/kolom/JENIS hilang, .xls); error lain friendly_file_error di batas UI (D7). (3) Bantuan F1 seksi Tab Pipeline menyebut alur baru. Verifikasi terhadap file asli user: 54.160 → **25.722 baris** (WASTE 18.771 · SUSUT 2.204 · TRIAL 4.747) + **2.369 pasangan BOM** (25.028 baris data ber-TOTAL BOM) + label "Agustus 2026"; END-TO-END: file olahan → `run_pipeline` 18 stage HIJAU (25.722 baris, 62 prioritas). 1057+35 = **1092 test** (+`test_v2140.py` 35 test: find sheet token/deteksi/geser, saring+53 kolom, strip+NaN, statistik stage_02, BOM inline+sheet+guard, satuan salin, nama output+guard, error ramah ×4, E2E pipeline, loader kandidat, file asli golden, worker QThread ×3, UI alur/gagal/guard, manifest+Bantuan+versi+CRLF); manifest ui_methods +`workers.py::RekapImportWorker`; ruff fatal+F401 bersih; CRLF .bat utuh.
-> **v2.13.15** — **GELOMBANG 6 DEEP AUDIT (GELOMBANG TERAKHIR): 13 SISA P3 PENUTUP** (audit UI/UX 94 temuan SELESAI — perintah "kerjakan semua"; B21 di-skip jujur: auto-collapse memang dibatasi startup-only sejak v2.12.2 — desain eksplisit, bukan bug): (1) **A15** — indikator ambang skor LINTAS-TAB: spin "Anomali dengan skor ≥" (tab Anomali) juga menyaring tabel Hari tanpa jejak — label hitungan tab Hari kini menyebut "⚠ Skor ≥ N aktif (diatur di tab Anomali)" + tooltip cara lepas. (2) **A18** — dua "median cabang lain" beda definisi dalam SATU pop-up detail kini ber-scope: ringkasan "vs median cabang lain (sebulan)" + nilai "(median sebulan N cabang)" vs daftar lengkap "PEER MEDIAN MAX — median cabang lain per hari (puncak)" / "PEER MEDIAN TOTAL — median cabang lain sebulan". (3) **B13** — dead state `_result_version` (view_periode) DIHAPUS — ditulis tiap render tapi tak pernah dibaca (pola bersih-bersih v2.13.8; kunci ketiadaan source-contract). (4) **B24** — SKIP JUJUR: Bantuan F1 sudah menyebut rename manual entri banding (klik-2×/Enter/F2) sejak gel-5 B19 — kunci regresi dokumen dipasang. (5) **C6** — funnel kartu 📅 Pola Hari Kalender & 🔗 Hari Sistemik Scorecard DI-AKTIFKAN (dulu plumbing funnel ADA tapi ikon tak pernah terpasang — menu tak bisa dibuka, docstring modul menjanjikan "SEMUA kolom ber-funnel") + label kartu menyatakan "N hari sistemik" & suffix "tersaring: N dari M" pasca apply. (6) **C12** — dataset tanpa kolom BUKTI HARI → pesan jujur "Dataset ini tanpa bukti hari (kolom … absen)" (dulu 0 baris + "0 anomali lolos filter" menyalahkan filter padahal kolomnya absen). (7) **C17** — label info Follow Up scope TERPISAH: funnel lokal aktif → "N dari M baris daftar tampil (funnel lokal — daftar & ekspor tak tersaring) · TOTAL tampil X · TOTAL daftar penuh Y" (dulu satu kalimat campur scope "0 baris · TOTAL 99"). (8) **C19** — drill rincian cabang Scorecard DITUTUP saat re-run dataset + cache drill dikosongkan (dulu angka dataset lama terus terpampang; pola pop-up Anomali, drill Banding ditutup sejak gel-1). (9) **C21** — kontras teks TAB NON-AKTIF dinaikkan ke WCAG AA: #64748b → C_TAB_IDLE_FG #475569 (3,1:1 → ±6,1:1; rasio dihitung fungsi luminance relatif di test). (10) **D11** — SATU konstanta ambang log run `LOG_RUN_LINES` (ui/shared) untuk panel log + memori ctx + sheet Log Run ekspor (dulu TIGA nilai beda 2000/500/200 tanpa nama). (11) **D16** — tombol 💾 Ekspor Excel NONAKTIF sampai ada data + tooltip syarat (dulu tampak siap sejak first-run — klik = dialog "Belum ada data"); enable bersyarat pasca dataset non-kosong. (12) **D21** — header log run DIBERSIHKAN dari duplikasi: UI tak lagi menulis "=== Mulai Pipeline ==="/"Workbook: …" pra-worker (engine mencatat keduanya via terjemahan D18) + "=== Selesai ===" ekor dihapus + baris Output engine jujur "—" saat tanpa output_path (dulu mencetak path placeholder "output/…" yang tak pernah ditulis). (13) **D30** — tinggi-minimum jendela ADAPTIF LAYAR `_adaptive_min_height` = max(560, min(700, h−80)) (dulu literal 700px > layar pendek netbook/VM → jendela tak termuat penuh). 1041+16 = **1057 test** (+test_v21315 16 test: A15, A18, B13, B24-lock, C6×2 [kalender+sistemik], C12, C17, C19, C21 [rasio WCAG dihitung], D11, D16×2, D21×2 [dedupe UI + Output engine], D30); 3 test lama ditulis ulang jujur (test_v2139 label median A18; test_v280 geometri D30; test_v270_wave1 dead-state B13 — masing-masing dengan komentar); ruff fatal+F401 bersih semua file berubah; CRLF .bat utuh.
-> **v2.13.14** — **GELOMBANG 5 DEEP AUDIT: SISA P3 KATEGORI SULIT** (14 fix P3 dari audit UI/UX 94 temuan — melanjutkan perintah "kerjakan semua"): (1) **B11** — fullscreen Banding Periode kini memakai frame tabel AKTIF termasuk kolom ✓ massal (dulu df mentah `res` — kontradiksi docstring "salinan tabel tab aktif"). (2) **B19** — rename file pembanding via KEYBOARD (Enter/F2 → editItem — dulu hanya mouse klik-2×; + didokumentasikan di Bantuan). (3) **B22** — dialog drill REUSABLE dari ⛶ (fokus/raise dialog yang sama — dulu menumpuk dialog kecil tiap drill). (4) **B23** — urutan bulan: label tak-terparse kini sort TERAKHIR (dulu (0,0) sort PERTAMA — mencuat di atas bulan valid) + parse pola nama file numerik (REKAP_2026_09 / YYYYMM / MM_YYYY + tahun-mendahului nama bulan "REKAP 2025 SEPTEMBER") + validasi tahun wajar 1980–2099. (5) **D24** — shortcut global: **Ctrl+1..Ctrl+6 pindah tab** + **Ctrl+E ekspor** (dulu NOL shortcut global — pengguna keyboard harus klik mouse) + **D24-fix KRITIS: koneksi sinyal QAction tab kini BOUND METHOD (receiver lemah) BUKAN lambda yang menangkap self** — lambda = rantai kuat QAction→sinyal→lambda→window yang tak bisa dipecahkan gc (siklus lintas C++/Python): window bocor selamanya → teardown test memanggil close() → closeEvent melihat _running → QMessageBox ASLI → **full suite hang offscreen** (diagnosis py-spy; +test regresi kebocoran). (6) **C14** — ⛶ Scorecard kini mengikuti pola 2 tab lain (reparent tabel + raise — dulu insert-bawah-tombol tanpa raise). (7) **D26** — kunci runtime `_config_load_error` tak lagi ter-persist ke config.json saat Simpan. (8) **D27** — modal "Pipeline Selesai" DIHAPUS dari jalur sukses (status bar + Ringkasan Run cukup; modal hanya saat GAGAL — dulu tiap run memaksa tutup dialog sebelum melihat data). (9) **A7** — render ganda pasca set_dataset dieliminasi (flag `_skip_filters_once` — pasangan data_ready+filters_changed kini satu render; dulu 2× render penuh). (10) **A16** — fallback sig show_record menyertakan identitas record (dulu 2 record beda tanpa __FP dianggap sama → guard idempoten salah). (11) **A17** — tombol "Tampilkan semua kolom (N)" disembunyikan saat N=0 (dulu box kosong yatim). (12) **C16** — exception render tab kini meninggalkan traceback UTUH ke log (logging.exception + ctx.log — dulu ditelan). (13) **C15** — label kolom "BULAN LALU" menyebut sumber bulan aktif dinamis "NILAI BULAN LALU (Agustus 2026)" + tooltip menjelaskan sumber per-tab (dulu dua tab memakai nama sama untuk sumber BEDA). (14) **C20** — lookup drill banding strip nama cabang (dulu whitespace ekstra = mismatch diam-diam). 1023+18 = **1041 test** (+test_v21314 18 test: B23×2, B11, B19, B22, D24×3 [termasuk regresi kebocoran window], C14, D26, D27, A7, A16, A17, C16, C15, C20); ruff fatal+F401 bersih semua file berubah; CRLF .bat utuh.
-> **v2.13.13** — **GELOMBANG 4 DEEP AUDIT (PENUTUP): PERF, FOKUS & POLISH** (14 klaster fix P2/P3 + 5 sweep dari audit UI/UX 94 temuan — rencana 4 gelombang selesai: 4/4 P1 + 23/23 P2 + ±50/67 P3 tertutup): (1) **A5+A5b+C10 — cache mask/bukti/hist kini (weakref, hasil) + VALIDASI IDENTITAS** `entry[0]() is obj` (dulu kunci `id()` tanpa strong-ref/validasi: id bisa dipakai ulang objek lain pasca-GC → tabrakan id mengembalikan baris STATE LAMA — data salah, jarang tapi nyata; komentar lama "strong ref" yang menutupi celah ini dihapus jujur). (2) **B8 — bulan kembar**: 2 file dgn label bulan SAMA → label TAMPILAN bersuffix " (2)" (label kanonik yang dipersist tak tersentuh; identitas file = path) + TIPICAL DEDUPE by label (2 file bulan sama = 1 bulan utk median — dulu double-count → median melenceng). (3) **D7 — error file korup RAMAH di batas UI**: `friendly_file_error()` 5 pola EN mentah ("File is not a zip file", "Permission denied", dst.) → Indonesia + SARAN + teks asli dilampirkan (worker tetap emit raw — pola `_log_id` gel-3; pola tak dikenal apa adanya). (4) **A3 — pop-up detail TAK mencuri fokus**: `WA_ShowWithoutActivating` + `raise_()` hanya pop-up BARU + `activateWindow` dihapus dari jalur navigasi (dulu 1× panah keyboard = navigasi tabel mati — fokus lompat ke pop-up). (5) **A4 — SELURUH sel kolom ✓ = area centang**: klik tengah/kanan sel (dulu zona mati — delegate Qt hanya toggle indikator x 4-16 dari sel 36px) kini toggle via `mouseReleaseEvent` toggle-manual ANTI-DOBEL (state pra-super == pasca-super). (6) **A6 — union nilai state funnel**: nilai terpilih yang disembunyikan filter lain TETAP ditawarkan dgn penanda "(tersembunyi — lepas filter lain)" (dulu dijatuhkan senyap saat apply = filter "bolong") + `_counts_has` NaN-aware (None ≡ NaN, tak dobel "(kosong)"). (7) **D5+D6 — progres ke status bar utama + pesan akhir jujur**: tiap baris stage menulis "⏳ … (N%)" ke status bar JENDELA UTAMA (pindah tab saat run tak lagi tanpa indikator) + pesan status TERAKHIR pasca-run = HASIL RUN ditulis SETELAH render (dulu "✓ Pipeline selesai" ditimpa "✓ Menyaring… selesai (31 ms)" — user membaca pekerjaan filter sebagai hasil akhir) + first-run tanpa dataset tak dibungkus busy (tanpa klaim "(0 ms)"). (8) **D22 — gate cancel ANTAR-FILE fase LOAD** (DATA_WASTE/BOM/DATABASE_SATUAN — dulu tombol ⏹ tak berefek sampai Stage 1). (9) **B10 — seluruh `_refresh_result` dibungkus busy_feedback** (dulu hanya compare_quantity — render pertama tab banding 833 ms offscreen beku senyap tanpa cursor sibuk). (10) **C8 — memo drill Scorecard LRU-8** keyed (resto, data_version, history_version — klik-2× bolak-balik dulu menghitung ulang penuh 102-164 ms). (11) **D10 — PipelineWorker `finished→deleteLater`** (dulu objek QThread menumpuk seumur aplikasi). (12) **D29 — 3 tombol (Mulai/Simpan/Pratinjau) dinonaktifkan try/finally selama compute pratinjau** (dulu klik ganda = nested compute + freeze bertumpuk; exception pun memulihkan). (13) **C13+D28 — kolom PEMBANDING paling akhir di narrow_hide** (dulu duluan: layar 1366px kehilangan bukti pembanding justru saat pembanding aktif) **+ dialog keluar default No** (Enter salah = aman batal). (14) **B14 — persen kumulatif "(N%)" di baris log stage** (dulu callback membuang pct dari log run). Sweep P3: C7 Enter = drill Scorecard (a11y keyboard) · B16 kolom File tooltip PATH penuh · B18 funnel halaman banding reset saat PEMBANDING berganti (dulu hanya dataset baru → tabel 0 baris senyap) · D25 QSS `:focus` tombol (navigasi keyboard kini terlihat). 999+24 = **1023 test** (+test_v21313 24 test: A5 mask-cache, A5b bukti/hist, B8×2, D7×2, A3, A4 zona ✓ 3-titik, A6×2, D5+D6×2, D22, B10, C8×2, D10, D29, D28, C13, B14, C7, B16+B18, D25); ruff fatal+F401 bersih semua file berubah; CRLF .bat utuh.
+- **Sekali jalan** — pilih file rekap mentah → pipeline langsung, tanpa file olahan antara
+- **Proses dari Folder** — pindai seluruh folder `.xlsx` (format BJMHAS, nama resto dari nama file), gabung jadi satu dataset
+- **12 sinyal anomali** (S1–S12) + composite score → status Prioritas Tinggi / Potensi Anomali / Perlu Review / Normal
+- **6 tab analisa**: Pipeline · Anomali · Hari Mencurigakan · Scorecard Cabang · Banding Periode · Follow Up
+- **Drill-down interaktif** — klik baris = pop-up detail (ringkasan, chip sinyal, peta nilai per hari 1–31, tombol fokus cabang/item/alasan)
+- **Filter funnel di judul semua kolom tabel** (daftar nilai bercentang + pencarian + Pilih Semua)
+- **Banding multi-bulan** (1 file = 1 bulan; mode 📊 Tipikal = median gabungan ≥2 bulan)
+- **Follow Up** — centang ✓ baris mencurigakan → shortlist rekap + ekspor + impor hasil tindak lanjut
+- **Scorecard Cabang** — urutan kunjungan audit, potensi hemat, pola hari, kualitas data, tren
+- **Data quality otomatis** — 7+1 pemeriksaan jalan di setiap run & ikut ke export
+- **Tabel virtualized** — 25.901+ baris tanpa cap, sort numerik, warna status per baris
 
-> **v2.13.12** — **GELOMBANG 3 DEEP AUDIT: BANTUAN & TEKS JUJUR** (9 klaster fix P2/P3 dari audit UI/UX 94 temuan — help yang menjanjikan sesuatu yang tak ada, angka ambang basi, i18n campur): (1) **D8 — seksi baru "Tab Pipeline (tempat semua dimulai)" di Bantuan (F1)** — tab paling operasional dulunya TAK TERDOKUMENTASIKAN sama sekali: alur Telusuri…/Pakai Sample + Enter, Key Akhir 1–31, kartu Threshold + 👀 Pratinjau Ambang + Simpan config.json/Reset Default (berlaku mulai run BERIKUTNYA), ▶ Mulai ↔ ⏹ Batalkan Run (pembatalan efektif di gerbang antar-stage), progres + log per stage, Ringkasan Run. (2) **D9 — fitur 📥 Impor Hasil TL terdokumentasi di Bantuan** (seksi Follow Up: kapan dipakai — file ekspor yang SUDAH diisi petugas; format PIC/KATEGORI/PENYEBAB; efek — status Selesai + PIC; kecocokan kolom kunci + hari 1–31 → aman walau di-sort/di-filter di Excel; tersimpan otomatis followup_resolved.json; baris terisi yang belum ada di daftar tetap disimpan). (3) **C3+C9+C18 — kamus tooltip PER-VIEW + angka ambang dari config aktif**: `PandasTableModel.set_tooltip_map()` (kamus per-tabel menimpa global — hanya ToolTipRole, kontrak lain utuh) + `models.build_column_tooltips(config)` (angka "≥ 8 / ≥ 50% / ≥ 5×" kini dari config aktif dengan fallback default engine bila korup; dulu hardcode — tooltip bohong diam-diam begitu user mengubah threshold) dipasang di 6 tabel Scorecard + drill (runtime ctx.config): "HARI TERSANGKA" Scorecard = JUMLAH baris ber-bukti (bukan tanggal — audit C3), "HARI" kartu kalender = Senin–Minggu, "HARI" kartu sistemik = tanggal serentak; 10/13 kolom tabel utama yang dulunya polos kini berkamus (RANK/TOTAL WASTE/INTENSITAS %/ALASAN DOMINAN/ITEM TIAP HARI/ANOMALI/BARU/PULIH/STATUS INPUT/TREN). (4) **B9 — menu funnel nilai TERFORMAT + "(kosong)"**: nilai menu = formatter sel tabel kolom itu (persen/rasio×/fmt_cell — dulu float mentah "1505252.0235695317" di samping sel "+1.505.252,0%"), pencarian mencocokkan terformat+mentah, `value_counts(dropna=False)` — nilai kosong DITAWARKAN (dulu dibuang senyap), UserRole tetap mentah utk isin. (5) **A8+A9+A13+A14 — teks Anomali jujur**: funnel 0-baris → menu TETAP terbuka dengan catatan "0 baris cocok — lepas filter lain…" (dulu dead-end senyap) + catatan hasil-cari-kosong; tombol ⛶ 3 view (Anomali/Hari/Scorecard) membedakan 0-baris-KARENA-FILTER vs belum-ada-data; `_PROMPT` pop-up disegarkan (frasa era panel-inline "menampilkan detailnya di sini" hilang); judul peta hari DINAMIS dari kolom hari aktual ("1–30" utk key_akhir=30 — dulu selalu "1–31"). (6) **D15+D17+D18 — i18n & label stage**: `PIPELINE_STAGES` (18) satu sumber kebabaran → hint Parameter + placeholder log dinamis (dulu hardcode "14 stage" — basi sejak v2.9.0); "Browse…" → "Telusuri…", "Input Error" → "Input Belum Valid", "Export" → "Ekspor" (app.py + view_followup.py — log/status/judul dialog; nama file output tetap EN); label stage EN engine diterjemahkan DI BATAS UI (`_log_id` prefix-match di `_on_progress` → label status + panel log + sheet Log Run Indonesia; engine tetap EN). (7) **D19 — 10 token versi (v2.9.0..v2.13.9) dibersihkan dari Bantuan** jadi teks fitur-deskriptif (Bantuan = panduan cara pakai, bukan changelog mini). (8) **C18+A12+A11 — angka/desimal jujur**: angka ambang help dari config aktif (`_build_help_html(config)`, fallback bila korup); sel peta hari & tooltip format SAMA (dulu sel "7" vs tooltip "7,5"); tombol "▸ Tampilkan semua kolom data (N)" mempertahankan "(N)" sepanjang siklus buka/tutup. (9) **B17+D13+D14 — fmt_id di tempat yang koma-EN**: subjudul drill hari + tooltip status file banding; Ringkasan Run (angka fmt_id + timestamp "12 Jan 2026 18:07" — dulu ISO mentah); dialog Pratinjau Ambang. 973+26 = **999 test** (+test_v21312 26 test: D8/D9/D19×3, D15×2+D18×2, C3×2+C9+C18×3, B9×2, A8, A9×2, A11, A12, A13, A14, D13×2, B17/D14/D17 pin sumber); ruff fatal+F401 bersih semua file berubah (3 F401 lama test_v2102 ikut dibersihkan); CRLF .bat utuh.
-> **v2.13.11** — **GELOMBANG 2 DEEP AUDIT: KEJUJURAN ANGKA & FIRST-RUN** (9 klaster fix P2/P3 dari audit UI/UX 94 temuan — semua berbasis bukti empiris offscreen): (1) **D4 — first-run tab Anomali kini TER-RENDER**: sinyal `currentChanged` terpasang SETELAH `addTab` → tab 0 tidak pernah `on_shown` → tabel+label kosong tanpa CTA ke Pipeline (terlihat hang; VLM QA konfirmasi layar tanpa empty-state) → `_on_tab_changed(tab awal)` dipicu SEKALI pasca-wiring → label "Belum ada data — buka tab Pipeline, pilih workbook, jalankan." tampil sejak detik nol. (2) **D3 — dua definisi "anomali" DILABELI**: status bar dulunya "797 anomali" (= semua non-Normal) vs kartu Ringkasan Run "399" (= prioritas+potensi) beda 398 tanpa pembeda → status bar kini "N baris • X berstatus non-Normal • Y prioritas+potensi • run HH:MM:SS" (angka dihitung dari df, semantik sama `build_summary` — engine tak diubah) + label kartu "Total anomali (prioritas+potensi)". (3) **C1+C5 — KPI Scorecard basi dibasmi**: dataset kosong/None kini me-reset SEMUA KPI (`_reset_kpis`: hitungan '0', agregat/nama '—' — konvensi C11) + label 5 kartu pendukung + tabel DQ/Tren (dulu setengah-cabang: "Semua pemeriksaan bersih." = klaim tanpa data); dataset TANPA kolom penjualan (BOM) → KPI hemat/intensitas/CABANG #1 jujur '—' (dulu angka+nama cabang dataset LAMA menempel — audit C5). (4) **C2 — funnel Follow Up direset saat dataset baru** (pola Anomali/Hari; dulu nilai dataset lama menyangkut → tabel 0 baris senyap pasca ganti dataset). (5) **B4 — combo pembanding me-RESTORE pilihan user by path** (kunci identitas sama dgn `_baseline_alive` gel-1 → satu makna "bulan masih ada" di dua tempat): tambah/hapus file LAIN tidak lagi me-reset combo ke Tipikal → baseline yang dipakai tab Anomali tak berganti senyap; fallback default hanya bila bulan terhapus. (6) **B3+B6+B7+B20 — pesan banding jujur**: "N file pembanding gagal dimuat: <nama>" (≠ "belum ada file" — instruksi salah arah saat semua file gagal dibaca); baris status "⏳ belum dimuat" pasca-cancel (bukan "memuat…" selamanya); label jumlah bulan di-recompute pasca-delete (`_render_load_status()` — dulu "✓ 2 bulan aktif" basi menempel); tambah file duplikat ditolak BERPESAN status. (7) **D2 — export saat pipeline berjalan dikonfirmasi**: "…data yang diekspor adalah hasil run SEBELUMNYA. Lanjutkan?" **default No** (Enter salah = aman batal, pola closeEvent) — dulu menyimpan data run lama tanpa keterangan. (8) **C4 — label 💰 "Top 200 dari N baris ber-kelebihan…"**: total NYATA dihitung dari df (KELEBIHAN>0) — dulu kap `top_n=200` ditampilkan seolah jumlah temuan audit (nyata 928); funnel lokal aktif → suffix "· tersaring: N tampil.". (9) **D23 — progress bar pasca-cancel/gagal direset 0 + label jujur** ("⏹ Dibatalkan — tidak ada hasil…" / "⚠ Gagal: …" — dulu sisa % terakhir menempel selamanya). 953+20 = **973 test** (+test_v21311 20 test: D4×2, D3×2, C1+C5×2, C4×2, C2, B4×2, B3×2, B6, B7, B20, D2×2, D23×2); ruff fatal+F401 bersih; CRLF .bat utuh.
-> **v2.13.10** — **GELOMBANG 1 DEEP AUDIT: KEJUJURAN INTERAKSI INTI** (audit UI/UX menyeluruh 94 temuan — 4 P1 + P2 terkait + 1 temuan visual; semua fix berbasis bukti empiris offscreen): (1) **A1+A2 — tombol "✕ Hapus Filter" kini jujur menghapus SEMUA**: combo "Kategori PERUBAHAN" (filter LOKAL view yang di-apply ulang `_refresh_table_impl` via `currentData()`) dulunya TIDAK direset → tooltip "Hapus SEMUA filter yang sedang aktif" menipu — user yakin melihat semua data padahal menganalisis subset satu kategori; fix: hook `FollowupTableMixin._reset_view_controls()` (default no-op, dipanggil PRA-render) + override `AnomaliView` (blockSignals anti render-ganda, pola `_cb_mode` HariView) + ikut dipanggil di `refresh()` (dataset baru tak lagi mewarisi kategori run lama — dulu asimetri vs HariView yang me-reset). (2) **B1+B12 — kolom ✓ "Banding Periode" kini menampilkan KEBENARAN (dulu: KEBAIKANNYA)**: centang/lepas ✓ saat funnel aktif hanya memutasi df model (salinan mask) — sumber `_page_src` tak terupdate → ganti/lepas funnel = re-mask dari sumber BASI → ✓ tampil tercentang padahal baris sudah dikeluarkan (kebalikan kebenaran, di fitur manajemen tindak lanjut!) + `SettingWithCopyWarning` (slice ber-`_is_copy`); fix: `_page_mask()` SELALU re-komputasi CHECK_COL dari `ctx.followup_set()`+`__FPS` (satu titik kebenaran, semua halaman cabang/item/baru) + `df[m].copy()` eksplisit. (3) **B2+B5 — baseline pembanding HANTU dibunuh DUA LAPIS**: semua file pembanding dihapus → tabel banding jujur "Belum ada file pembanding" TAPI `banding_baseline` masih memegang bulan terhapus → tab Anomali terus menghitung BULAN LALU/PERUBAHAN vs bulan yang tak ada; fix: (lapis-1) `_clear_tables` → `ctx.set_banding_baseline(None)` (emit `baseline_changed`), (lapis-2) validasi umur `banding_baseline_effective()` + `_baseline_alive` — identitas PATH file bulan / identitas OBJEK Tipikal (bukan dict-equality: nilai "agg" = DataFrame → bool ambigu = crash; dict suntetis tanpa "path" fixture-test dipercaya — kompatibilitas 31+ test) → bulan terhapus & Tipikal usang jatuh ke fallback bulan baru. (4) **D1 — shortcut F1 "Bantuan" DIPASANG** (didokumentasikan README + banner .bat + Bantuan sendiri, tapi `setShortcut` tak pernah ada — 0 match di seluruh repo; keyClick F1 tak membuka apa pun): `act_help.setShortcut(QKeySequence(StandardKey.HelpContents))` — enum PySide6 nested-class dengan 's'. (5) **V1 — CTA pop-up di bawah lipatan gulir pindah ke FOOTER AKSI STICKY** (terukur: tombol "☑ Masuk Follow Up" y≈623 & "▸ Tampilkan semua kolom data" y≈698 vs viewport pop-up 578px — CTA utama tak terlihat sampai user menggulir melewati peta hari): DetailPanel di-restrukturasi — footer `self._actions` DI LUAR QScrollArea (judul seksi + ☑ Masuk Follow Up + baris drill fokus + pembuka kolom lengkap; teardown/rebuild per `show_record`/`clear()`), konten yang tetap digulir: ringkasan → sinyal → alasan → peta hari → kolom lengkap (dibuka → `ensureWidgetVisible` auto-gulir). 942+11 = **953 test** (+test_v21310 11 test: A1×2 jujur-semua-baris + A2 reset-dataset + B1 ✓ konsisten pasca funnel semua halaman + B12 tanpa warning + B2 dua-lapis+signal + B5×2 usang→fallback/sintetis-dipercaya + D1×2 keyClick-F1-dialog-terbuka/shortcuts==F1 + V1 footer-sticky-geometri); 1 test v2.13.9 ditulis ulang jujur (cakupan pencarian tombol `_content` → seluruh panel — maksud "tombol ter-render" tak berubah); ruff fatal+F401 bersih; CRLF .bat utuh.
+## Mulai Cepat (Windows)
 
-> **v2.13.9** — **POP-UP DETAIL RINGKAS + BUG "KLICK FILTER MUNCUL POP-UP" DITUTUP** (2 permintaan user satu pesan): (1) **"data pada bagian pop up hanya tampilkan yang penting penting aja jangan semua ditampilkan aku jadi bingung"** — DetailDialog (dipakai 3 tab: Anomali/Hari Mencurigakan/Follow Up) didesain ulang dari 12 chip + ±25 baris metrik SEKALIGUS menjadi: **Ringkasan** (±7 angka kunci berlabel Bahasa awam: jenis & alasan catatan, total sebulan + satuan, puncak sehari + tanggalnya, vs penjualan BOM, vs cabang lain median, vs bulan lalu, peringkat waste — nilai kosong otomatis dilewati, tooltip kamus istilah tetap) → **sinyal TERPICU saja** (chip merah + judul "N dari 12"; nol terpicu = catatan jujur — dulu 7-11 chip abu-abu kebisingan) → alasan → peta hari 1-31 → tombol tindak lanjut; seluruh ±25 kolom lengkap pindah ke balik tombol **"▸ Tampilkan semua kolom data (N)"** (default sembunyi, reset per baris, format persen/rasio tetap benar; tombol ikut terlihat SETELAH tindak lanjut supaya aksi tak tergulir). Perf terukur data asli: rebuild pop-up 24 ms, buka daftar lengkap 10 ms. (2) **"masih ada bug pada klik filter muncul pop up"** — akar terbukti empiris (repro tersimpan `tests/repro_filter_popup_2139.py`): klik yang MENUTUP menu funnel di-REPLAY Qt ke tabel sebagai tekan#1 TUNGGAL; guard v2.12.5 hanya menelan klik-GANDA artefak → tekan#1 lolos → currentRowChanged → pop-up terbuka tanpa niat. Fix: `DataTable.mousePressEvent` menelan tekan kiri dalam jendela 0,6 dtk pasca menu funnel tertutup (jendela sama dgn guard klik-ganda; klik sah sesudahnya utuh — kontrol E2E dua arah). Judul pop-up & teks bantuan (F1) ikut jujur. 926−1+2+15 = **942 test** (+test_v2139 15 test: guard tekan#1 dua-arah + ✓-tak-terdampak + isi ringkas/toggle/reset-per-baris/chip-terpicu/nol-sinyal/tanpa-pembanding/peta-hari-utuh/clear-ref + data riil pipeline); test v2.12.5 "klik tunggal tetap memilih baris dalam guard" ditulis ulang jujur (desain lama justru sumber bocornya); E2E data asli 25.901 baris **20/20**; manifest metode dua-arah di-update (+2 def baru).
-
-> **v2.13.8** — **GELOMBANG C DEEP AUDIT: BERSIH-BERSIHING DEAD CODE + KONSOLIDASI KEMBAR** (audit menemukan ±25 fungsi mati-total + modul yatim + fitur-mati + 10 metode kembar identik antar view): (1) **utils.py 484 → 211 baris** — 17 fungsi mati-total dihapus (to_number, safe_sum…, pct, dll; nol call-site produksi/test sejak vektorisasi penuh stage_02 v2.2.0) + docstring yang berbohong ("yang aktif dipakai") ditulis ulang jujur. (2) **Modul waste_anomaly/filters.py DIHAPUS TOTAL** — yatim sejak sidebar/filter-profile dihapus v2.12.4 (6 fungsi mati + 4 hanya-test; 3 test frozen-path-nya dihapus terdokumentasi — kontrak frozen-sidecar tetap terkunci penuh lewat TestConfigPath, mekanisme identik). (3) **logging_setup: install_tk_exception_hook + tk_suppressed DIHAPUS** — sisa era Tkinter (UI PySide6 sejak v2.6.0) + contoh pemakaian menyesatkan di docstring dibersihkan. (4) **MESIN FITUR MATI DIHAPUS dari state/shared**: set_search/set_day_range/set_filters_multi/invalidate_filter_cache/filter_summary/CHIP_LABELS/_search_blob + _build_search_blob + cabang search/rentang-hari _apply_filters — kotak cari & rentang hari sudah tak ada di UI sejak v2.12.4 (audit D11: blob ±1,2 dtk/run terbuang — eager dihapus v2.13.7, kini seluruh jalurnya); _apply_filters kini murni semantik funnel yang hidup (5 dimensi) — 18 test lama yang mengunci fitur mati dihapus/ditulis-ulang terdokumentasi (pola repo "kunci ketiadaan"). (5) **Konsolidasi kembar AnomaliView ⇄ HariView**: 10 metode identik (±250 baris ×2) → SATU sumber ui/followup_table.py (FollowupTableMixin + HF_COLS tunggal; _DISP_LRU per-view 8/4) — view_anomali 1178→1008 baris, view_hari 636→474 baris; modul baru terdaftar manifest dua-arah + EXPECTED_MODULES. (6) Dead code UI: PipelineView.set_workbook, ScorecardView.SC_COLS, ui/__init__ lazy-export; 3 import mati (pipeline np/pd, loader load_config). (7) **Fix E5**: mutasi ✓ view_periode kini lewat notify_column_changed (sinkron snapshot numpy — dulu dataChanged manual mem-bypass). 928−18+16 = **926 test** (+test_v2138 16 test pengunci: resolusi mixin/kunci ketiadaan API mati/kontrak funnel); E2E 29/29 (interaksi NYATA lewat mixin: klik pop-up, ✓ toggle, funnel, bulk); ruff fatal+F401 bersih seluruh repo.
-
-> **v2.13.7** — **GELOMBANG B DEEP AUDIT: ENGINE 2× LEBIH CEPAT (−53%), OUTPUT IDENTIK 100%** (vektorisasi 6 titik panas Python-per-baris/per-grup + pemangkasan kerja sia-sia — terukur data asli 25.901 baris, equality penuh 105 kolom vs baseline): (1) **stage_03 KONTRIBUSI TERBESAR** — loop 2.500 grup × mask-python (2.267 ms = 43% pipeline; cProfile 2.503× boolean-mask) → vektor penuh: satu groupby 4-kunci + stable-sort + drop_duplicates (semantik idxmax dipertahankan persis: tie → KETERANGAN terkecil); GABUNGAN: lambda-per-grup 12,6k panggilan → dedup + groupby-join level-C (urutan kontribusi preserve-order identik). (2) **stage_02** — HARI MAX `day_matrix.iloc[i]` per baris (akses termahal pandas) + 2 loop median/second-max → matrix numpy sekali (sort + posisi tengah + argmax vektor). (3) **stage_12_6 QUADRANT** — apply(axis=1) 25.901 baris (213 ms) → np.select. (4) **stage_10** — 3 apply(axis=1) (Series per baris, 207 ms) → transkripsi kolom-numpy cabang-per-cabang (semantik None-vs-NaN & urutan try/except disalin persis). (5) **loader** — normalisasi float 15-digit per-sel 771 ms per workbook → kolom bulat < 10^15 terbukti no-op ("%.15g" mencetak bulat ≤ 15 digit PERSIS) → di-skip; kolom desimal tetap per-sel — kena juga tiap file pembanding 54k baris. (6) **pembanding** — to_numeric 31 kolom dihitung 4× per file → SEKALI dibagi 4 agregat; scorecard insights O(n_resto×n_baris) → satu groupby. (7) **blob pencarian worker dihapus** (±1,2 dtk per run sia-sia — fitur cari sudah tak ada sejak v2.12.4; jalur lazy state tetap utk pengujian). (8) df.copy() pra-merge redundan dibuang. **Hasil: pipeline 5,68 → 2,67 dtk (−53%); suite test 232 → 202 dtk; E2E 7,6 → 4,8 dtk; output 105 kolom × 25.901 baris IDENTIK (dtype+nilai) + golden utuh.** 914+14 = **928 test** (test_v2137: 14 uji EKIVALENSI ORACLE — tiap titik divektorkan diuji lawan replika algoritma lama: stage_03/02/12.6/10 + loader skip-no-op + period num≡None + worker tanpa blob).
-
-> **v2.13.6** — **GELOMBANG A DEEP AUDIT: LAYOUT + TEKS JUJUR + BANNER** (audit menyeluruh UI/UX/kode/dead-code/engine): (1) **Tab Scorecard & Pipeline kini bisa digulir** — terukur offscreen: konten Scorecard menuntut 1.270px & Pipeline 716px padahal ruang halaman tab ±582px di 1366×768 → kartu Tren Bulanan/Hari Sistemik/Kualitas Data bawah & tombol Simpan/Reset/Pratinjau kartu Threshold **tak pernah terlihat** tanpa scroll; kini dibungkus QScrollArea (widgetResizable, tanpa bingkai) — view boleh diciutkan (min-hint 68px), konten utuh & terjangkau lewat gulir; ⤢/⛶ & reparent tabel tak terdampak; tabel ≤ 200 baris punya scrollbar sendiri. (2) **Instruksi mati dibetulkan**: label kartu DQ menyuruh "klik 2× sel PENJELASAN" padahal tabel DQ tak punya handler klik-2× → kini "arahkan kursor" (tooltip sel memang ada). (3) **Bantuan (F1) kini memuat seksi Tab Scorecard Cabang** (satu-satunya tab yang tak terdokumentasi) + catatan halaman bisa digulir. (4) **Banner MULAI.bat/SETUP.bat disegarkan** — masih v2.12.5 + mengiklankan "3 view" + "Sidebar Ctrl+Shift+F" (sidebar dihapus v2.12.4; banner menipu 7 versi minor); kini v2.13.6 + 6 tab + tanpa jejak sidebar, CRLF dijaga. (5) README seksi drill-down ditulis ulang (masih mengajarkan sidebar & klik-2×→filter yang dihapus) + tree diperbarui (tanpa modul v2.13.x). Docstring app/ui_app "5 view/3 view" → 6 tab. 898+16 = **914 test**; 0 perubahan perilaku data/golden.
-
-> **v2.13.5** — **KLIK-2× FILTER DIHAPUS + POP-UP SELALU BISA DIBUKA + FOLLOW-UP DI TAB HARI MENCURIGAKAN** (2 permintaan user satu pesan): (1) **"klik 1x pop up kadang sering tidak muncul dan malah justru ke trigger yang klik 2x yaitu langsung filter — hilangkan yang klik 2x"** — akar terbukti dua lapis: (a) klik-2× baris → `_on_double` → set_filter cabang+item → render ulang → `_popup.hide()` di awal refresh = **pop-up "menghilang"**; (b) tutup pop-up (X) → klik baris YANG SAMA → `currentRowChanged` TIDAK memicu (index tak berubah) → pop-up tak bisa dibuka lagi → user klik lagi cepat → Qt sintesis DblClick → filter. Fix menyeluruh: **`_on_double` DIHAPUS** dari AnomaliView & HariView (drill fokus kini hanya tombol eksplisit di pop-up: "🏬 Fokus cabang ini" dsb. — niat jelas, tak pernah tak disengaja; guard `_batch_filters` ikut hilang; infrastruktur `double_clicked` tetap hidup untuk tab Scorecard/Banding yang memakainya sebagai POP-UP rincian, bukan filter); sinyal baru **`row_clicked`** di DataTable (relay `QTableView.clicked` + `doubleClicked` — tekan#2 DblClick tidak memancarkan `clicked`!) → **pop-up detail selalu bisa dibuka ulang** di baris mana pun (termasuk baris sama & klik-ulang-cepat), dengan **guard idempoten** `DetailDialog.show_record` (record sama + tampak = tidak dibangun ulang — klik tunggal yang memicu currentRowChanged + clicked tetap membangun SEKALI) dan **tekanan di sel ✓ ditekan** (`mousePressEvent` flag → klik-✓ baris baru pun tak membuka pop-up — alur centang massal murni). (2) **"hari mencurigakan juga beri opsi untuk follow up"** — tab Hari Mencurigakan kini punya **kolom ✓** (pola AnomaliView: flip in-place tanpa render ulang, satu state ctx sinkron antar tab + badge), tombol **"☑ Centang yang tampil"** (centang massal hasil funnel), dan **tombol "☑ Masuk Follow Up"** di pop-up detail semua tab (toggle + teks tersinkron dua arah dengan kolom ✓ — satu klik dari investigasi hari mencurigakan ke daftar tindak lanjut; sidik jari baris dibaca dari kolom __FP, fallback hitung ulang 1 baris). 3 test lama yang mengunci perilaku klik-2× ditulis ulang jujur (perilaku dihapus atas permintaan — alasan tercatat). 867+31 = **898 test**; E2E data asli interaksi NYATA (QTest press/release/DblClick): pop-up buka–tutup–buka-lagi-baris-sama, klik-2× tanpa filter & pop-up tetap terbuka, ✓ toggles + tanpa pop-up, bulk, tombol pop-up.
-
-> **v2.13.4** — **FIX "HARI 30 ERROR" BANDING PERIODE** (keluhan user: "kenapa periode pembanding hanya ada hari 30, error? harusnya gak papa kan?"): jawabannya BENAR bahwa September 2026 memang 30 hari — auto_key_akhir mendeteksinya dan metrik "Waste per Hari" menormalkan beda panjang bulan. Yang TERLIHAT seperti error adalah label **"BARU"** di baris "Hari Data" (bug tampilan): `compare_quantity` menandai Perubahan % baris itu = None ("kolom sengaja kosong — beda panjang bulan bukan kinerja"), tapi konstruktor DataFrame float64 mengubah None → NaN → `fmt_delta_pct` merender NaN = "BARU" → "Hari Data 30 vs 31 BARU" terbaca seperti error bulan-30-hari. Fix: kolom "Perubahan %" summary dibangun ulang **object dtype** supaya None TETAP None → render "" (kontrak `pd.isna(None)=True` utuh; NaN base-0 tetap "BARU"); + 8 situs fillna-dict dinormalkan ke coerce-numerik (FutureWarning downcasting pandas 3.x, pola compare_level, 0 perilaku berubah). 857+10 = **867 test**; E2E data asli 47/47 (+ Hari Data kosong, Total Waste tetap bertanda).
-
-> **v2.13.3** — **TREN MULTI-BULAN + PRATINJAU AMBANG + LOOP RESOLUSI FOLLOW-UP** (gelombang "analisa tambahan" Task 5 — penutup): (1) **⑧ TREN per cabang** — kolom TREN di tabel Scorecard (aktif dengan ≥ 1 pembanding): "↗ Naik / ↘ Turun (batas ±10%) / → Stabil / Baru / Pulih" vs pembanding terbaru; + **kartu 📈 Tren Bulanan per Cabang** (tabel per-bulan + Bulan Ini + TREN — butuh ≥ 2 file pembanding; kurang dari itu PESAN JUJUR "tambahkan ≥ 2 file bulan lalu", kolom TREN tetap aktif). (2) **⑮ Tombol 👀 Pratinjau Ambang** di editor threshold tab Pipeline — jawab "kalau kubah X jadi Y, berapa perubahannya?" SEBELUM menyimpan: hitung ulang 12 sinyal + status dengan nilai form saat ini (murni vektor 0,36 dtk data asli; validasi seperti Simpan; dialog SEBELUM → SESUDAH per status; contoh: TH_SPIKE 3→2 = Potensi Anomali 358 → 406). (3) **⑯ LOOP RESOLUSI FOLLOW-UP** — tombol **📥 Impor Hasil TL** di tab Follow Up: baca kembali file ekspor yang SUDAH DIISI petugas (kolom PIC/KATEGORI/PENYEBAB di sheet FOLLOW UP) → baris cocok diberi **status "Selesai" + kolom STATUS TL & PIC** (posisi pertama — terlihat tanpa scroll) + label "selesai X/Y"; kecocokan = sidik jari nilai (kolom kunci + hari — aman walau sheet di-sort/filter di Excel); tersimpan di **followup_resolved.json** (atomic + backup korup — pola followup.json); baris terisi yang belum ada di daftar tetap disimpan (status aktif otomatis bila dicentang lagi) — aplikasi kini menutup siklus deteksi → ekspor → tindak lanjut → impor → selesai. 837+20 = **857 test**; E2E data asli **45/45** (+ TREN kolom & kartu jujur, tombol ⑮/⑯; preview smoke 0,36 dtk).
-
-> **v2.13.2** — **PERSENTIL PEER + BENFORD (DQ) + PANEL KUALITAS DATA** (gelombang "analisa tambahan" Task 4): (1) **⑨ DI ATAS % CABANG** di kartu Top Kerugian — persentil TOTAL baris di antara cabang lain yang memang ber-waste pada item sama (100 = paling boros, 0 = paling hemat) — padanan robust z-score dgn istilah awam: tahan distribusi miring, unit-free (per-item satu satuan), tidak seperti rasio yang meledak pada median kecil (data asli: SURAI NAGA @1042.KWGGAL = 100 — paling boros dari 19 cabang; KULIT PANGSIT @1151.GGPDAA = 100; @1327.CKRBOS = 89,5). (2) **⑪ Benford** — pemeriksaan baru DQ_BENFORD (info): pola digit pertama nilai waste vs distribusi wajar; JUJUR by design — hanya dibenderai bila deviasi ≥ 10 pp (data asli: 6,4 pp → TIDAK dibenderai; sampel < 500 nilai → skip; detail menegaskan "alat forensik kasar — deviasi BUKAN bukti manipulasi"). (3) **⑩ Panel 🧪 Kualitas Data di tab Scorecard** — resurface run_checks yang sejak v2.8.0 hanya hidup di sheet export: 6 pemeriksaan (satuan kembar NBSP 2.039 baris, SOURCE DATA beda kapital 12.086, business key terpecah 318, waste tanpa BOM 119, prefix KETERANGAN 97, baris nol 23.470) + Benford — table dgn funnel + penjelasan lengkap di tooltip kolom PENJELASAN. 830+7 = **837 test**; E2E data asli **41/41** (+ kartu DQ terisi, Benford tidak dibenderai, kolom persentil hadir).
-
-> **v2.13.1** — **TAB SCORECARD CABANG (urutan kunjungan audit) + KARTU PENDUKUNG** (gelombang "analisa tambahan" Task 2-3): tab baru **🏢 Scorecard Cabang** (setelah Hari Mencurigakan) menjawab pertanyaan manajemen "kunjungi cabang mana dulu, bawa bukti apa, berapa bisa dihemat?" — satu halaman: (1) **Tabel scorecard per cabang** (RANK = urutan kunjungan, TOTAL WASTE, INTENSITAS % = waste vs penjualan/BOM, KELEBIHAN = potensi hemat vs tipikal, ALASAN DOMINAN + share, ITEM TIAP HARI, ANOMALI, HARI TERSANGKA, BARU/PULIH = pasangan item baru & sudah pulih vs pembanding, STATUS INPUT verdict) — klik 2× = rincian cabang (top kerugian vs tipikal + profil alasan + verdict input); ⤢/⛶ pola tab lain. (2) **KPI**: POTENSI HEMAT (data asli: 1,29 juta unit) · INTENSITAS TIPIKAL (median 0,29%) · CABANG #1 (1042.KWGGAL) · HARI SISTEMIK. (3) **Kartu Top Kerugian vs Tipikal** — ranking UANG berdasar KELEBIHAN (bukan TOTAL; SATUAN tampil jujur; funnel bisa memilah GR/PCS). (4) **Kartu Pola Hari Kalender asli** (Senin–Minggu dari label bulan file — data asli: Sabtu/Minggu rata waste tertinggi ±391-396rb/hari vs Senin 268rb, +47%) — fix proxy hari%7 yang tak sebanding antar bulan (1 Agustus 2026 = Sabtu vs 1 September 2026 = Selasa). (5) **Kartu Hari Sistemik** — hari naik serentak di ≥ 3 cabang (masalah BERSAMA: pengiriman/hari besar/POS — bukan kecurigaan satu cabang; data asli: 0 hari sistemik = semua lonjakan lokal, itu sendiri informasi). (6) **Detektor INPUT KOSONG** (coverage_report): item umum (dilaporkan ≥ 75% cabang) yang tak dilaporkan satu cabang + verdict jujur "Berhenti Input" (aktif bulan lalu, kosong sekarang — sinyal terkuat) / "Memang Tak Pernah" (kosong dua-duanya) / "Perlu Pembanding" / "Lengkap" — data asli: B.1001.MLGPAR 35/40 item umum tak dilaporkan, 3 cabang "Berhenti Input". Mesin: modul baru waste_anomaly/insights.py (6 fungsi vektor defensif: resto_intensity, money_ranking, coverage_report, systemic_days, weekday_real, scorecard) + 25 test baru; render terukur data asli 265 ms pertama → 39 ms memo (busy feedback + memo per data/pembanding); summary pipeline + key "workbook_path" (label bulan file); funnel SEMUA kolom semua tabel (lokal tampilan, pola v2.12.4). Tab kini 5 → 6 (test struktur + E2E diperbarui dgn alasan tercatat). 805+25 = **830 test**; E2E data asli **38/38** (+ seksi 11: 20 cabang, KPI hemat 1,29jt, drill rincian 15 baris, memo 26 ms, 0 judul terpotong).
-
-> **v2.13.0** — **PROFIL BARIS ("Tiap Hari / Kadang / Sekali Ini") + KELEBIHAN VS TIPIKAL CABANG LAIN** (gelombang "analisa tambahan" hasil riset data asli): riset menemukan tensi sentral — top-20 waste terbesar SEMUA kronis (17-30 hari aktif) dengan skor anomali 0-6: 12 sinyal menangkap LONJAKAN sesaat, sedangkan mayoritas nilai waste ada di baris stabil tiap hari; tab anomali belum menjawab pertanyaan audit pertama "ini salah input, atau memang bocor setiap hari?". (1) **Kolom PROFIL** (Stage 15b, murni additive): "Tiap Hari" (≥ 20 hari ber-waste, masalah proses/kronis) · "Kadang" (2-19 hari) · "Sekali Ini" (1 hari — kandidat salah input/kejadian tunggal, sepupu S10) · "—" (baris placeholder nol); funnel di header otomatis (filter "tunjukkan cuma anomali Sekali Ini — Baru"). **Suffix "— Baru"** muncul bila pembanding bulan lalu dimuat (pasangan cabang×item tidak ada/nol bulan lalu — dari kolom BULAN LALU; idempoten; data asli: 73 dari 797 anomali ber-suffix Baru). (2) **Kolom KELEBIHAN + PEER MEDIAN (AKTIF) + PEER AKTIF**: TOTAL sebulan − tipikal (median) cabang lain pada item yang sama — median HANYA dari peer yang memang punya waste (baris nol 90,6% data tidak menarik tipikal turun — pelajaran benchmark v2.5.0); peer < 3 = kosong (sample kecil); nilai minus = lebih hemat (jujur ditampilkan); tampil di pop-up detail (tooltip kamus istilah) — contoh data asli: SURAI NAGA (V.30) @ 1042.KWGGAL total 296rb vs tipikal peer 1.695 → **kelebihan 294rb (174×)**. (3) **Jawab pertanyaan user "pembanding hanya ada hari 30, error?"** — BUKAN error, sudah benar: bulan 30-hari (September/April/Juni/November) terdeteksi otomatis (`auto_key_akhir`), baris "Hari Data" informasional (bukan metrik kinerja), metrik **"Waste per Hari" menormalkan beda panjang bulan** supaya 30 vs 31 hari tidak dibaca sebagai perubahan performa; tooltip status file pembanding kini menjelaskan ini. 805 test (781+24); E2E data asli 29/29 (10 kolom tampak + funnel PROFIL + domain kanonik).
-
-> **v2.12.5** — **HEADER ANTI-TERPOTONG + GUARD KLIK-GANDA FUNNEL** (2 keluhan user pasca funnel header v2.12.3–4): (1) **"Nama header jadi terpotong semenjak ada icon filter"** — akar terukur: judul kolom dilukis QSS dgn **font-weight 600 + font global \*{} 13px**, sedangkan `fontMetrics()` widget (weight 400, font default) mengukur 8–12% lebih pendek → lantai header kurang; ditambah backing funnel lama menutup zona [kanan−32, kanan−12] yang menabrak ekor judul (bukti piksel data asli 1366×700: "ANOMALY SCORE" terlukis sampai x=132, backing mulai x=125 → ekornya tertutup). Fix struktural: `FilterHeader.paintSection` melukis judul + panah sort di **rect yang disempitkan 22px** (teks ter-ELIDE sebelum funnel — tidak pernah tertutup ikon), strip kanan dilukis manual (bg QSS + ikon funnel + border replica); lantai lebar diukur dgn **font QSS asli** (`_header_font()` — family chain + 13px + DemiBold dari konstanta theme `UI_FONT_*`; `self.font()` tidak mewarisi font QSS — di Windows default 9pt vs QSS 13px). Geometri 1366 dipertahankan: 9 kolom tampak, Σ header = viewport, tanpa scrollbar horizontal, viewport 342px. (2) **"Waktu apply filter sepertinya ketrigger double klik sehingga pop-up / drill down detail muncul"** — mekanisme terbukti empiris: menu funnel menutupi baris tabel; klik penutup menu yang jatuh di tabel **di-replay Qt sebagai tekan#1 pada baris**, klik ke-2 user pada posisi sama = tekan#2 → Qt menyintesis klik-ganda → `doubleClicked` → DetailDialog terbuka sendiri saat/ setelah apply filter. Fix: `DataTable.mouseDoubleClickEvent` **menelan klik-ganda dalam <0,6 dtk** setelah menu funnel tertutup (`aboutToHide` → `_hf_hide`; klik tunggal pilih-baris tetap hidup; klik ganda sah sesudah selang itu tetap hidup — terverifikasi end-to-end). 769+12 = **781 test**; E2E data asli 27/27 (piksel strip bersih semua tab, guard, jalur funnel utuh).
-
-> **v2.12.4** — **SIDEBAR & SLICER DIHAPUS + FUNNEL DI SEMUA KOLOM + KALIMAT PENJELAS DIHAPUS**: (1) **Sidebar filter kiri (v2.8.0) + tombol ☰ Filter di toolbar DIHAPUS TOTAL** (permintaan user) — QTabWidget langsung jadi central widget: **tabel memakai lebar PENUH jendela** (dulu sidebar 300px + splitter). Filter kini murni lewat funnel judul kolom + tombol **✕ Hapus Filter** (tab Anomali & Hari — pengganti tombol "Hapus Semua Filter" sidebar: lepas global + lokal + skor sekaligus). SlicerBar chip (v2.11.0) ikut dihapus (lanjutan permintaan v2.12.3 "ganti slicer dengan filter header") — tabel anomali tambah tinggi ±120px (slicer 100px + hint 20px hilang). (2) **SEMUA kolom punya funnel** (permintaan user "harusnya semua kolom punya filter") — tab Anomali & Hari: kolom RESTO/BARANG/JENIS/KETERANGAN/STATUS tetap GLOBAL (state `ctx.active_filters` — antar-tab sinkron, KPI ikut terfilter); **kolom lain (mis. TOTAL, skor, hari) = filter LOKAL tampilan** (mask isin per kolom + memo LRU per state — objek stabil → cache fit DataTable tetap kena; KPI & daftar Follow Up tak tersentuh). Tab Follow Up: semua kolom termasuk hari 1-31 (lokal — shortlist/ekspor tak tersentuh). Tab Banding Periode: funnel per halaman (bahan halaman disimpan — ganti filter tanpa compare ulang). Kolom ✓ & kolom identitas di-skip. (3) **Kalimat penjelas 💡 dihapus dari semua tab** ("Bukti hari = ...", "Klik baris = detail pop-up · ...", legenda merah/amber, instruksi file banding — permintaan user: kalimat tidak penting dihapus; penjelasan tetap di tooltip + Bantuan; legenda warna pindah ke tooltip judul kartu Follow Up). Infra: conftest menghancurkan widget sisa test secara aman antar test (close + deleteLater + processEvents) — diagnosa: cyclic gc menghapus widget yatim tepat saat Qt melukis tabel test lain → heap rusak → Segfault (v2.12.3 "lolos" karena timing alokasi, bukan perbaikan; pola yatim tak ada di app asli — semua view berparent). 753−12+28 = **769 test**; E2E data asli lihat bawah.
-> **v2.12.3** — **OPS A "1 ITEM PER RESTO" + TOTAL BULAN LALU + FILTER DI HEADER TABEL + REDESAIN PETA HARI**: (1) **✓ Banding kini hanya memasukkan baris ANOMALI** — analisa data asli menemukan akar desain: peta ✓ dibangun dari dataset PENUH (25.901 baris, 97% STATUS Normal) → 1 centang item memasukkan 6-14 baris yang mayoritas baris placeholder Normal TOTAL=0 (5 KETERANGAN standar × duplikat pengajuan; terukur: baris item teratas punya 0 anomali tapi tetap memasukkan 8 baris noise; centang cabang = +968 baris!). Dengan saringan ANOMALY STATUS ≠ Normal: **75% item×resto punya TEPAT 1 baris anomali** → centang = "1 item per resto" sesuai permintaan; sisanya 2-4 baris anomali NYATA (semua relevan — ekuivalen centang manual di tab Anomali). Lepas ✓ juga membersihkan fps noise warisan v2.12.2 dari followup.json; baris tanpa anomali ditolak dengan pesan. (2) **Kolom TOTAL BULAN LALU + PERUBAHAN % di tab Follow Up** (muncul bila file pembanding dimuat — match resto×item×jenis×keterangan; PERUBAHAN % negatif otomatis merah; judul via alias headerData — kanonik tetap `BULAN LALU`). (3) **Tab Hari Mencurigakan: kolom JENIS selalu tampil** (dulu narrow-hidden di layar 1366 — padahal SUSUT/TRIAL/WASTE pembeda penting) **+ tombol ⤢ Perbesar Tabel & ⛶ Layar Penuh** (pola tab Anomali: viewport 166→344px). (4) **FILTER DI HEADER TABEL (Excel AutoFilter ala app)** — ikon funnel di ujung kanan judul kolom (NAMA RESTO/NAMA BARANG/JENIS/KETERANGAN/STATUS di tab Anomali & Hari; 6 kolom kategorik di tab Follow Up): klik → menu [↗ Urut Naik] [↘ Urut Turun] + kotak CARI + daftar nilai bercentang (jumlah barisnya) + Pilih Semua/Selesai. Semantik = slicer (nilai tercentang = ikut tampil); state TETAP SATU di `ctx.active_filters` → chip slicer sinkron otomatis; live-apply di-debounce 120ms; tab Anomali & Hari memfilter dataset global, tab Follow Up filter LOKAL tampilan (shortlist & ekspor tak tersentuh). Klik judul seperti biasa = sort. (5) **Peta hari pop-up di-redesain** — dulu `13:1245` (tanggal:nilai — membingungkan, user kira "13" bagian nilai): kini DUA BARIS — tanggal kecil redup di atas + NILAI TEBAL di bawah; sel merah tetap hari tersangka. 726+27 = **753 test**; E2E data asli 37/37 OK.
-> **v2.12.2** — **UI/UX FIX BATCH (review "kenapa tabel anomali jadi kecil setelah slicer" + permintaan baru)**: (1) **Bug `WLabel` heightForWidth** — `setSizePolicy` eksplisit lama tanpa sengaja menghapus flag hfw yang dipasang `setWordWrap` → layout memberi hint tabel sizeHint "persegi" (hint 2 baris = 28px diberi **112px**); terukur di data asli jendela 1366×700: tabel Anomali jatuh ke minimum 200px = **6-7 baris terlihat** (rugi 45% viewport vs tanpa slicer). Flag dipulihkan → hint menyusut jujur (14-28px) di **SEMUA tab** (hint ada di setiap kartu). (2) **Slicer kompak gaya Excel** — label dimensi kini INLINE dengan chip (dulu label makan satu baris sendiri: 38px/dimensi; slicer total 147px): 3 baris × 24px + baris ✕ = **100px** (hemat 47px). (3) **Tombol ⤢ Perbesar Tabel & ⛶ Layar Penuh di tab Anomali** (pola tab Banding Periode — permintaan user): ⤢ ciutkan KPI+bar kontrol (viewport 267→405px ≈ 15 baris), ⛶ pop-out **tabel ASLI** (reparent, bukan salinan — centang ✓/sort/pop-up detail tetap hidup; Esc/kembali pulihkan posisi layout utuh). (4) **Angka MINUS otomatis MERAH global** (semua tabel — level model `ForegroundRole`; 0/plus/teks/bool tidak; E2E data asli: 294/294 sel negatif merah). (5) **Judul kolom banding pakai NAMA BULAN** (bukan kata "Pembanding" — alias hanya di `headerData`, data/sort/record tetap kanonik: kontrak `dataframe['Pembanding']` utuh; Tipikal → "Tipikal — median N bulan"). (6) **Kolom JENIS di tabel banding** (Cabang/Item/Baru/Hilang — sumber `agg_jenis` yang sudah dihitung loader; item yang sama tercatat di 2 jenis kini 2 baris terpisah; bulan tanpa agg_jenis = perilaku lama persis → golden v2.10.0 utuh; drill dari baris cabang langsung ter-filter jenis itu). (7) **✓ Follow Up di tab Banding Periode** (halaman Cabang/Item/Baru — Opsi A disetujui): satu centang = SEMUA baris anomali terkait masuk daftar Follow Up yang sama (bulk `add/remove_followup_many` — satu broadcast, satu tulis disk; data asli: 12ms); lepas = keluar sekaligus; baris tanpa pasangan anomali (mis. item hilang) = revert centangan + pesan; sinkron in-place antar-tabel. (8) **Auto-ciut daftar file banding** setelah muat-otomatis sukses (dulu kartu file 299px + tabel hasil cuma 72px ≈ 2 baris; tambah/muat-ulang manual tidak dikejut ciut). (9) Jargon `key_akhir` → "31 hari data"; hint tabel dipendekkan. Hasil ukur data asli 1366×700: tabel Anomali **6-7 → 10 baris** default, **15 baris** sekali klik ⤢, ⛶ tanpa batas; render banding dengan semua fitur baru 87ms; jalur tombol lain tetap level v2.12.1 (chip 1-4ms, ✓ 30ms, buka Follow Up 5ms). 695+31 = **726 test**; E2E 24/24 OK.
-
-> **v2.12.1** — **PERF TOMBOL (permintaan "cek lagi yang bikin lemot tombol tombol dan fix")**: 6 akar lemot dibongkar via profil cProfile data asli 25.901 baris, semua difix TANPA mengubah satu angka pun (golden 484 & skor anomali utuh). (1) `_apply_filters` dulu **menyalin df penuh (25.901×53) SEBELUM mask apa pun** di setiap ganti filter — jalur "kembali/bersihkan/hapus filter" membayar ~21 ms sia-sia per klik; kini state tanpa filter mengembalikan objek apa adanya (mask tetap menghasilkan objek baru — kontrak baca-saja utuh). (2) Pengukuran lebar/tinggi tabel membaca sel via **pandas `iat` per sel** (42.927 panggilan = 1,7 dtk saat render tab Follow Up 797×41) — kini `text_at()`: snapshot numpy dibangun sekali per set/sort + sinkron di jalur mutasi resmi (`setData`/`notify_column_changed`); `data()` Qt tetap live-iat (paint hanya sel terlihat). (3) **Memo display satu slot** membuat toggle slicer bolak-balik (A→B→A) SELALU miss → fingerprint md5 + salinan + objek display baru → **cache fit DataTable tak pernah kena lagi** (regresi v2.12.0 pada skenario unfilter/drill-balik v2.9.0): kini LRU-8 per objek df (weakref) — objek display PERSIS sama per state. (4) **Fingerprint dataset penuh (0,3 dtk) pindah ke thread worker** (pola search_blob) — dulu dibangun malas di thread UI saat pertama dibutuhkan (prune/buka Follow Up) = beku sesaat pasca-pipeline; view memakai reindex O(n). (5) `suspicious_days` vektor numpy (loop 797×31 `.iloc` → mask array; ekuivalensi dikunci oracle). (6) Tabel **lebar** (>24 kolom tampak, mis. rekap Follow Up) memakai konvensi tabel raksasa: wrap mati + elide kanan + tooltip penuh → pengukuran tinggi per sel (32 ribu ukuran) di-skip. Bonus: status bar hanya `setStyleSheet` saat warna berganti; memo enrich perubahan vs bulan-lalu jadi LRU weakref. **Hasil ukur (sandbox, laptop user 2-4× lebih lambat)**: chip slicer balik-state 348→37 ms · bersihkan/hapus filter 350-460→45-60 ms · buka tab Follow Up 3.835→0,305 dtk (**12,6×**) · lepas ✓ di tab Follow Up 0,55→0,13 dtk · render pertama 1,4→0,5 dtk. 663+32 = **695 test**.
-
-> **v2.12.0** — **Tab Follow Up (centang ✓ → shortlist investigasi)**: kolom **✓** di tabel Anomali — klik = baris masuk tab **Follow Up** (tepat setelah Anomali; badge jumlah di judul tab) dalam **format rekap persis buku kerja**: `TOTAL · AVG · MAX · SOURCE DATA · JENIS · KETERANGAN · NAMA BARANG · NAMA RESTO · SATUAN · hari 1..31` (nilai apa adanya — tanpa agregasi baru; skor anomali TIDAK diubah, golden utuh). **Hari mencurigakan diberi warna**: 🔴 merah = hari tersangka (HARI TERSANGKA/HARI MAX — konsisten peta hari pop-up) · 🟠 amber = nilai ≥ 2× rata-rata hari aktif. Tombol **☑ Centang yang tampil** = centang massal hasil filter/slicer saat ini; **lepas centang ✓** (di kedua tab) = keluarkan baris. Daftar **menetap terhadap filter** (shortlist tidak ikut hilang saat menyaring) + **tersimpan otomatis** (`followup.json`, pola filters.json — atomic + backup korup); dataset baru → centangan yang barisnya tak ada lagi **dipangkas otomatis** (notifikasi jujur). Baris kembar identik didedup (data asli: 1.871 grup duplikat — identitas = **sidik jari nilai baris**: 6 kolom kunci + nilai hari non-nol, stabil lintas dtype int/float). **💾 Ekspor Excel**: format rekap + kolom kosong PIC/KATEGORI/PENYEBAB utk diisi petugas (konvensi REKAP MENTAH) — hari mencurigakan ikut berwarna. Anti-lemot: toggle ✓ = 1 sel repaint (dataChanged index tunggal — bukan render ulang; cache fit DataTable tak tersentuh); sinkron antar-tab = update kolom in-place; objek display di-memo per objek df. 621+42 = **663 test**.
-
-> **v2.11.0** — **Slicer multi-select di atas tabel** (tab Anomali + Hari Mencurigakan): baris tombol kilat ala Excel untuk **JENIS** (WASTE·SUSUT·TRIAL) · **KETERANGAN** (dari data) · **STATUS** (4 tingkat, warna severity saat aktif). Klik = toggle nilai, **bisa beberapa sekaligus** (hasil = gabungan); tombol **✕ Bersihkan slicer** mengosongkan ketiganya. State = filter global yang sudah ada (`ctx.active_filters`, list — semantik `_apply_filters` v2.5.1), jadi **chip antar-tab otomatis sinkron** + combo sidebar mengikuti (menampilkan "▪ beberapa dipilih"; pilih nilai di combo = override jadi single — perilaku lama utuh). Anti-lemot: klik beruntun di-*coalesce* debounce 150 ms → **satu broadcast `set_filters_multi`** (satu render, bukan satu per klik); tabel tetap virtualized; profil filter tersimpan kompatibel dengan nilai multi. **Banding Periode sengaja TANPA slicer** (membandingkan file bulan, bukan baris data — keputusan desain). Skor anomali TIDAK diubah (golden utuh). 605+16 = **621 test**.
-
-> **v2.10.3** — **audit deep v2.10.2** (empiris di data asli 25.901 baris + pembanding riil — 40+ cek kontrak: agregat konsisten, tanpa mutasi input, tanpa ±inf, kunci pencocokan per-bulan=0 false-BARU): 2 fix. (1) **nama bulan dari nama file kini toleran underscore** — `WASTE_SEPTEMBER_2026.xlsx` / `01-31_SEPTEMBER_2026.xlsx` dulu terbaca TANPA bulan (regex `\b` menolak underscore = word-character) sehingga label combo & pilihan "bulan lalu TERBARU" diam-diam meleset; kini lookbehind non-huruf menerima `_`/digit, tetap menolak bulan yang menempel huruf (`XSEPTEMBER`/`SEPTEMBERS`). (2) **pop-up drill/layar penuh basi kini ditutup otomatis** — bila hasil banding digambar ulang (run baru / pembanding berganti / combo ditukar) sementara pop-up masih terbuka, tabelnya menampilkan angka konteks LAMA (drill lanjutan sudah ter-guard, tapi tampilannya menyesatkan); toggle ⤢ tetap TIDAK menutup (murni layout). 598+7 = **605 test**.
-
-> **v2.10.2** — **Tabel banding besar + pop-up drill-down + kolom perubahan di anomali**: (1) tab Banding Periode kini punya tombol **⤢ Perbesar Tabel** (ciutkan daftar file → tabel makan seluruh tinggi) dan **⛶ Layar Penuh** (tabel tab aktif di jendela maximized, Esc kembali); (2) **klik 2× baris di SEMUA tab banding** = pop-up rantai rincian **Total → resto → item → hari** — jawaban "total naik, resto mana yang naik, sampai item apa, hari berapa" (`compare_level` per resto/item/per-JENIS + `drill_day_detail` hari 1–31, termasuk normalisasi Waste-per-Hari 30/31 hari); (3) tabel Anomali menambah kolom **BULAN LALU / PERUBAHAN % / PERUBAHAN** (muncul bila ada pembanding; kunci pencocokan resto×item×jenis×keterangan, abaikan besar/kecil huruf) + filter **"Perubahan:"** — memisahkan **lonjakan baru** (Naik Tinggi = kandidat salah input) dari **waste kronis** (Stabil tiap bulan; threshold `TH_CHANGE_*` di config.json); persen perubahan kini bertanda & jelas terbaca (`+35,5%`, `BARU`). Skor anomali TIDAK diubah (golden utuh). 538+60 = **598 test** (+7 audit v2.10.3).
-
-> **v2.10.1** — hotfix Banding Periode: **kolom Status file pembanding tetap "⏳ belum dimuat" padahal notif pemuatan sukses** (laporan user di Windows). Akar: hasil pemuatan dikunci dgn path ternormalisasi `str(Path(...))` — di Windows `pathlib` membalik pemisah path dari dialog Qt (`C:/a/b.xlsx` → `C:\a\b.xlsx`) — sementara daftar file mengunci string path DARI DIALOG, jadi semua lookup (status baris, cache mtime, combo bulan) meleset; efek tersembunyinya: combo pembanding & tabel banding juga kosong. Fix: `load_history_file` kini mempertahankan string path input PERSIS (kunci = apa yang daftar file simpan) + notif jujur "⚠ semua file gagal dimuat" bila 0 bulan aktif (dulu menyesatkan "✓ 0 bulan pembanding aktif"). Daftar file yang sudah tersimpan langsung sembuh tanpa setup ulang. 534+4 = **538 test**.
-
-> **v2.10.0** — **Banding Periode multi-file (history bulan-bulan lalu)**: pembanding kini **DAFTAR workbook** (1 file = 1 bulan, template "REKAP MENTAH" — kolom NAMA BARANG/NAMA RESTO/SATUAN/hari 1–31, **tanpa angka BOM**; file yang Anda upload terverifikasi kompatibel). **Nama bulan dibaca otomatis dari nama file** ("…AGUSTUS 2026…" → "Agustus 2026"; klik 2× baris untuk koreksi manual) dan **daftar file diingat antar sesi** (`history_files.json`, atomic). Dimuat berurutan **di background** (`HistoryWorker` QThread: progress per-file + tombol ⏹ Batal + cache mtime — file tak berubah tidak dibaca ulang; file gagal ditandai merah tanpa menghentikan file lain; ±2–3 dtk/file, UI tetap responsif). Banding **dua-duanya**: (a) **satu bulan pilihan** — ringkasan (Total Waste, **Waste per Hari** menormalkan beda panjang bulan 30/31 hari, cabang/item aktif), per-JENIS, cabang & item mover terbesar, item baru/hilang; (b) **📊 Tipikal** — **median gabungan ≥ 2 bulan** sebagai baseline deteksi perubahan. **Tab Hari Mencurigakan** kini menambah kolom **NILAI BULAN LALU** (nilai item+cabang sama di **tanggal yang sama** bulan sebelumnya), **RASIO VS BULAN LALU** (mis. **4,2×**; golden data asli: MIE 24-Sept 808 vs 194 Agustus), dan **TIPIKAL BEBERAPA BULAN** — plus kalimat bukti tambahan di ALASAN HARI bila ≥ 3× (threshold `TH_HARI_HIST_RATIO`). Saringan **JENIS ∈ {WASTE, TRIAL, SUSUT}** wajib diterapkan saat agregat (bukti data asli: tanpa saringan MIE hari-24 = 43.115 tercampur baris BOM/SO vs **194** yang benar). 476+58 = **534 test**.
-
-> **v2.9.0** — **Tab baru "Hari Mencurigakan"** (jawaban: "potensi salah angka terjadi di **tanggal berapa** 1–31?"): Stage 15 pipeline menghitung bukti per-hari — **HARI TERSANGKA** (tanggal nilai terbesar), **TIPIKAL CABANG LAIN** (median item sama di hari sama di outlet lain), **RASIO VS CABANG LAIN** (mis. **404×**), **SHARE HARI TERSANGKA**, dan **ALASAN HARI** satu kalimat siap baca; BUKTI HARI = YES bila rasio ≥ 5× ATAU share ≥ 50% ATAU pola 10× ATAU waste cuma 1 hari (golden data asli: 484/797 baris non-Normal = 60,7%). **Istilah dimudahkan + tooltip di SEMUA tempat** (permintaan: "bukan hanya S-1"): 12 fragmen sinyal jadi Bahasa awam ("Spike vs AVG" → "Lonjakan vs rata-rata"), kamus `COLUMN_TOOLTIPS` di judul kolom semua tabel, label metrik pop-up, chip S1–S12, KPI, dan kontrol filter — hover = penjelasan sehari-hari; pop-up detail kini punya **peta nilai per hari 1–31** dengan hari tersangka disorot merah. **Perf anti-lambat** (diukur data asli, sandbox): **Hapus Filter 461 → 87–95 ms (≈5×)**, **pencarian 1.456 → ~95 ms (≈15×)** — memo `anomali_df` LRU per tanda tangan filter + cache teks sel model + cache fit lebar/tinggi tabel LRU + blob pencarian (dibangun di worker thread; jebol NUL-separator numpy ditemukan & dihindari). 436+40 = 476 test.
-
-> **v2.8.3** — UX anti-freeze: **apply/unapply filter kini memberi feedback "masih proses"** (keluhan nyata: "waktu aku apply unfilter kok kaya lag/freeze"). Diagnosa terukur di data asli 25.901 baris: rantai filter → refresh tabel berjalan **sinkron di thread UI 75–460 ms** (sandbox) — auto-fit kolom + pengukuran tinggi baris per sel — di laptop user bisa **1–2+ detik beku tanpa umpan balik**. Fix: helper `busy_feedback` membungkus titik tunggal render tabel — **cursor sibuk + pesan status "⏳ Menyarkan & menampilkan data…" dipasang SEBELUM kerja berat** (dijamin tergambar via `processEvents`), **pulih + laporan durasi "✓ … selesai (X ms)"** setelahnya; semua pintu masuk tercakup otomatis (search, dropdown, rentang hari, Hapus Filter, drill-down, dataset baru). Aman bersarang (Qt cursor stack). 436 test.
-
-> **v2.8.2** — hotfix installer: **`SETUP.bat` gagal di langkah [5/5] Verifikasi** pada instalasi baru ("`ModuleNotFoundError: No module named 'matplotlib'`" lalu "[ERROR] Verifikasi gagal") — akarnya BUKAN instalasi gagal, melainkan baris verifikasi `SETUP.bat` masih mengimpor **matplotlib** yang sudah dihapus dari dependensi sejak v2.8.1 (instalasi sebenarnya sukses, hanya ceknya yang basi). Fix: verifikasi & banner `SETUP.bat` kini sinkron dengan `requirements.txt` (5 paket: pandas, numpy, openpyxl, python-calamine, PySide6); daftar dependensi di README diperbaiki; referensi matplotlib mati di `logging_setup.py` dibersihkan; **test kontrak baru** mengunci baris verifikasi `SETUP.bat` ↔ `requirements.txt` agar tidak diverver lagi (431 test). Jika Anda kena error ini: `git pull` (atau unduh ulang) → jalankan `SETUP.bat` ulang — tidak perlu hapus `.venv`.
-
-> **v2.8.1** — penyederhanaan lanjutan + detail pop-up: **5 → 3 view** — tab **Jelajah** & **Waktu** dihapus total bersama modul `charts.py` / `dashboard.py` / `chart_helpers.py` + infrastruktur chart di UI (widget matplotlib tidak lagi diimpor saat start-up). **Panel detail kini POP-UP**: klik baris di Tabel Anomali Ter-ranking membuka jendela non-modal berisi 12 sinyal S1–S12, angka peer, uang, dan tombol drill-down — tabel memenuhi seluruh tinggi view (splitter & tombol "Rapikan Detail" dihapus; hint lama "pilih baris utk detail" dihapus). **Kolom baru "% to BOM"** di tabel anomali per-ranking (waste dibanding penjualan kuantiti — nilai rasio ditampilkan sebagai persen `1,34%`; penanda `Cek` = item tanpa data penjualan); kolom rasio lain (MAX / BOM, TOTAL / BOM, MAX SHARE, LAST DAY SHARE) kini juga tampil sebagai persen. Sheet analisa export (Waste per Hari, Alasan×Hari, Money View, Data Quality) TETAP diexport — modul temporal/priority/data_quality tetap hidup di jalur pipeline & export. Golden regression utuh (25.901/399/41).
-
-> **v2.8.0** — penyederhanaan UI atas permintaan user + ruang vertikal tabel: **8 → 5 view** — tab **Uang**, **Peer**, **Kualitas Data** dihapus total (file view terkait dihapus dari repo; fitur banding 2 cabang A/B, kuadran sistemik, rate league, dan tampilan pemeriksaan DQ ikut pensiun — **cek data_quality TETAP jalan di pipeline & export, sheet export tidak berubah**). **Tabel anomali memanjang ke bawah**: header kartu dirampingkan (judul satu baris + hint digabung — dulu judul wrap 2-3 baris makan ±100px), rasio splitter tabel:detail 3:2 → 5:2, tinggi minimum tabel 200px, tombol baru **"⌃ Rapikan Detail"** menyembunyikan panel detail → tabel memenuhi seluruh tinggi view (diagnostik geometri: di laptop 1024×700 tabel v2.7.0 hanya menampilkan ±3 baris). **Sidebar bisa disembunyikan/dimunculkan**: tombol **☰ Filter** di toolbar / shortcut **Ctrl+Shift+F** — tabel & chart memakai lebar penuh jendela saat sidebar disembunyikan; ukuran splitter dipulihkan saat dimunculkan. Golden regression utuh (25.901/399/41).
-
-> **v2.7.0** — hasil "deep audit v2.6.x + fix" (45 temuan unik dari 3 auditor read-only + audit lanjutan, dipecah 4 gelombang fix paralel): **CRITICAL** — 2 tab Mover "Banding Periode" selalu kosong sejak v2.6.0 (kunci hasil `compare_periods` salah dipetakan); 12 chip sinyal panel detail selalu abu-abu di data riil (panel membaca kolom `_s1.._s12` yang di-drop pipeline sebelum df sampai UI — kini tabel memegang DataFrame PENUH dan chip membaca fragmen teks `ANOMALY REASONS`). **HIGH** — sinyal S11 periode-B hidup lagi (key_akhir pipeline B kini auto-detect dari data mentah, seperti v2.5.1); validasi threshold editor dipulihkan dari v2.5.1 (tolak non-numerik "0,5"/"abc" & nilai ≤ 0 — dulu tersimpan senyap sebagai string ke config.json); `closeEvent` kini menghentikan SEMUA worker — pipeline + export + banding periode (dulu QThread dihancurkan saat masih berjalan = crash/UB); sidebar filter jujur lagi pasca re-run (combo/search/chip tak lagi menampilkan filter lama yang sudah di-reset); breakdown satuan KPI menampilkan total waste sesungguhnya (dulu jumlah baris tampil seolah waste). **MEDIUM/LOW** — `fmt_cell` memformat numpy int/float (pemisah ribuan + rata kanan); tabel >3.000 baris anti-terpotong vertikal (wrap mati + elide kanan "…", tooltip sel tetap teks penuh); 3 chart duplikat Jelajah dihapus (12→9); placeholder pra-run di 5 view (dulu area blank senyap); drill-down nilai kosong/NaN ditolak dengan pesan (bukan tabel kosong senyap); Reset Default 14/20→20/20 key threshold; memo cache filter (perf — `_apply_filters` tak lagi dijalankan 2× per refresh); tombol batal banding periode; penanda hasil banding basi saat data periode A berubah; koersi numerik TOTAL di sheet turunan (string tak lagi ter-`sum` jadi teks); `fmt_id(None)` → ""; plus bersihan dead code era Tkinter (`embed_figure`/FigureCanvasTkAgg, sinyal `run_state_changed` tanpa pelanggan, QSS rule & import mati) dan manifest metode ui/ kini dikunci DUA-ARAH (def baru tanpa update manifest = test gagal). `sample_workbook.xlsx` ikut repo sebagai fixture test (generate ulang via `make_sample.py`). Test: 420 → **432**. Golden regression utuh (25.901/399/41).
->
-> **v2.6.1** — fix installer Windows: **`SETUP.bat` kini otomatis membuat `.venv` lokal** (virtual environment) sebelum `pip install` — menutup batas panjang path Windows 260 karakter yang membuat instalasi `PySide6` gagal dengan `OSError: [Errno 2]` di Python Microsoft Store (site-packages-nya terlalu dalam), sekaligus tidak mencemari Python global; `MULAI.bat` otomatis memakai `.venv`; `BUILD_EXE.bat` ikut memakai `.venv`; pesan error install kini memberi 2 solusi konkret (repo di path pendek / aktifkan `LongPathsEnabled` + restart); banner `MULAI.bat` disegarkan ke 8 view v2.6.x. Plus **hardening anti-terpotong UI**: header tabel kini punya lantai lebar = lebar teksnya (tak pernah ter-elide lagi — dulu "NAMA RESTO" tampil "MA REST" di jendela sempit), tabel re-fit saat window di-resize, tabel anomali dirampingkan 10→7 kolom (kolom duplikat panel detail dihapus — mandat "hapus yang tidak perlu"), sidebar menyusut proporsional, kolom JENIS disembunyikan responsif saat sempit — 0 scrollbar horizontal di 1440×900 maupun 1024×700 (dulu 2 kolom tersembunyi di balik scroll bahkan di ukuran default). Core `waste_anomaly/` tak tersentuh.
->
-> **v2.6.0** — hasil "rebuild ulang UI": **UI baru PySide6/Qt berorientasi penemuan anomali** — landing langsung ke tabel anomali ter-ranking (skor ↓) + panel detail (12 sinyal, peer, uang, drill-down 1-klik), KPI mengikuti filter, **8 view** (Anomali · Jelajah · Waktu · Uang · Peer · Kualitas Data · Banding Periode · Pipeline) menggantikan 14 tab Tkinter, tabel tanpa cap baris (25.901 baris di-render virtualized + wrap + pewarnaan severity), **jaminan anti-terpotong struktural** (word-wrap semua teks; chart punya lantai ukuran + scroll; kolom tabel auto-fit proporsional; grid chart responsif 2↔1 kolom; tab tidak di-elide tanpa ellips), tombol duplikat/tak perlu dihapus (refresh global & popup log), tombol & fitur lama dipertahankan SEMUA (profil filter, export 10 sheet, compare periode, threshold editor), 2 bug core chart ikut diperbaiki (legend rate-league terpotong sejak lama; label tick weekday saling tumpuk). Core `waste_anomaly/` TIDAK tersentuh — golden regression utuh (25.901/399/41). Dependensi UI baru: `PySide6` (offline, satu kali `pip install`).
->
-> **v2.5.1** — hasil "deep audit fitur baru + fix": audit ulang v2.5.0 atas kode asli (23 temuan: 4 HIGH / 12 MEDIUM / 7 LOW) → **isolasi exception per-chart di Dashboard** (DD-H1: sebelumnya satu chart gagal = chip ter-update + chart kosong + tabel stale), **sinkronisasi dropdown KETERANGAN lengkap di 6 titik** (DD-H2: Clear Filter & Muat Profil dulu membiarkan dropdown bohong), **KPI mengikuti filter + label konteks "X dari N baris"** (DD-M3), **rentang hari ketat** (DD-M1: 23.470 baris nol tidak lagi lolos — chip "(baris aktif)"), **search tak lagi cocok 'nan'/'&lt;NA&gt;'** (DD-L4), **FOCUS SCORE rank di subset aktif** (MO-M2: komponen magnitude kini berdaya-pembeda penuh, dulu terkompresi 90,6–100 oleh baris nol), **satuan eksplisit di money_top/judul temporal** (MO-M1), **normalisasi whitespace KETERANGAN** di dropdown/filter/agregat (DQ-M1), **min 30 entri aktif untuk tabel rasio alasan** (TE-M3: rasio sampel-kecil = artefak), **Compare Periode + kolom Hari Data & Waste/Hari** (PE-M1: bias 30-vs-31 hari), **split-source jujur "318 aktif dari 8.221 grup"** (DQ-L1), **format angka Indonesia tunggal** (IN-L1), **coalesce klik ganda** (DD-L2), + hardening `_on_pick` try/except + logging, label 'weekend' → 'pola hari mod-7' + catatan asumsi (TE-M1), + **test kontrak chart interaktif** (klik disimulasikan di Agg → nilai on_click ∈ kolom data; PR-H2).
->
-> **v2.5.0** — hasil "kerjakan semua" (gelombang analisa): **4 tab analisa baru** (Temporal — pola hari/weekday; Money View + Benchmark — prioritas magnitude & peer aktif; Data Quality — 7 pemeriksaan otomatis; Compare Periode — bandingkan 2 workbook), **drill-down kini ada di SEMUA tab analisa** (klik chart di Visualisasi, double-click baris di Hasil/Quadrant/Money → filter + lompat ke Dashboard; + dropdown KETERANGAN), **5 chart baru** (waste per hari + highlight hari peak mod-7, weekday effect, heatmap alasan×hari, Pareto item per satuan, top money rows per FOCUS), **export Excel 10 sheet** (+Waste per Hari, Alasan×Hari, Money View, Data Quality), **KPI jujur per satuan**. 4 modul analisa baru + **320 test** (naik dari 150). Detail di **Changelog v2.5.0**.
->
-> **v2.4.1** (hasil "double check") — perbaikan **path frozen-mode PyInstaller**: config.json / filters.json / folder data / log kini disimpan BERDAMPINGAN EXE (dulu hilang senyap karena menulis ke _MEIPASS temp yang terhapus saat exit — kebalikan klaim BUILD_EXE.bat), + **12 pesan log duplikat dibersihkan**, + **10 test baru path frozen** (total 150 test).
->
-> **v2.4.0** — hasil "kerjakan semua" (2025): **arsitektur modular** (god-object 3.256 baris / 102 metode dipecah jadi paket `ui/` — 14 file mixin, verbatim terverifikasi + 11 test struktural), **cancel run jujur** (hook antar-stage — CPU benar-benar berhenti), **validasi skema input** (anti degradasi senyap header lowercase), **exporter streaming** (anti OOM 100k baris), **logging framework** (rotating file + hook exception Tk), **140 test**, **CI GitHub Actions**, **packaging .exe** + ikon aplikasi. Detail di **Changelog v2.4.0**.
-
-## Cara Pakai
-
-### 1. Setup (sekali saja)
-Jalankan `SETUP.bat` di root folder. Script otomatis membuat **`.venv`** (virtual environment lokal) lalu menginstall dependencies ke situ:
-- pandas, numpy (data processing)
-- openpyxl (Excel I/O)
-- python-calamine (Excel READ engine cepat, Rust-based)
-- PySide6 (framework UI Qt6)
-
-> **Hardening v2.7.0:** `SETUP.bat` menerima `python` ATAU launcher `py -3`; setelah `.venv` dibuat ia memvalidasi interpreter-nya jalan (`.venv` setengah jadi / rusak otomatis dibuat ulang satu kali); tiap langkah `pip` dicek `errorlevel`-nya — gagal = pesan error jelas + berhenti, bukan lanjut senyap.
-
-> **Kenapa `.venv`? (v2.6.1)** Python dari Microsoft Store menyimpan package di path sangat dalam (`C:\Users\...\AppData\Local\Packages\PythonSoftwareFoundation...\LocalCache\local-packages\...`, ±137 karakter), sedangkan wheel PySide6 memuat file dengan path internal ±143 karakter. 137+143 = 280 > batas Windows **260 (MAX_PATH)** → `pip install PySide6` gagal `OSError: [Errno 2] No such file or directory`. Install ke `.venv` di folder repo memotong total path ±100 karakter → aman, sekaligus mengisolasi dari Python global Anda. `MULAI.bat` otomatis memakai `.venv` kalau ada. Kalau masih gagal: (a) pindahkan repo ke path pendek seperti `C:\Waste`, atau (b) aktifkan Windows Long Path sebagai admin — `reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f` — lalu restart PC.
-
-### 2. Siapkan Workbook Input — `DATA_WASTE.xlsx`
-
-**Workflow Anda (v2.15.0 — SEKALI JALAN):**
 ```
-Punya file REKAP MENTAH mentah? → tab Pipeline → 🧮 Olah & Jalankan REKAP MENTAH… → SELESAI
-                (v2.14.0 dulu 2 proses: 🧮 Olah REKAP MENTAH… → klik Mulai Pipeline;
-                 jauh sebelumnya: query data → OLAH MANUAL di Excel → Save as DATA_WASTE.xlsx → Run)
+1. Download & ekstrak repo (Code → Download ZIP)
+2. Jalankan SETUP.bat        ← sekali saja: buat .venv + install 5 paket
+3. Jalankan MULAI.bat        ← tiap kali pakai (tanpa jendela CMD hitam)
 ```
 
-**Format standar input = `DATA_WASTE.xlsx`** (53 kolom). **Sekali proses, tanpa file antara**: tombol **🧮 Olah & Jalankan REKAP MENTAH…** di tab Pipeline memilih file rekap mentah bulanan (mis. `REKAP MENTAH_01-31 AGUSTUS 2026_TEGAR.xlsx` — boleh masih berisi SEMUA jenis BOM/SO/stok, header tergeser pun OK) lalu **pipeline berjalan LANGSUNG padanya** — header diperbaiki, nilai dinormalisasi, **TOTAL BOM diambil dari baris BOM**, saringan & statistik & 18 stage analisa jalan sekali; progres/log/⏹ Batalkan/ringkasan bekerja seperti biasa; hasilnya **identik** dengan mengolah file itu jadi DATA_WASTE standar dulu (angka golden file asli: 25.722 baris · 25.028 ber-BOM · 62 prioritas) — tapi ±5× lebih cepat dan **tidak ada file olahan antara yang ditulis**. Kalau Anda tetap ingin mengolah sendiri (manual / Power Query / formula) atau memakai file `DATA_WASTE.xlsx` yang sudah ada, pakai **Telusuri… → ▶ Mulai Pipeline** — jalur standar tetap didukung. Pipeline idempotent — bisa di-run di file yang sudah berisi output sekalipun, semua derived columns akan di-drop & dihitung ulang otomatis.
+**Persyaratan:** Python 3.10+ · Windows (`.bat`). Mac/Linux: `python ui_app.py`.
+**Dependensi:** pandas, numpy, openpyxl, PySide6, python-calamine (semua di-install `SETUP.bat`).
 
-**Letakkan `DATA_WASTE.xlsx` di mana saja** (folder Downloads, Documents, dll). Browse lewat UI saat run pipeline.
+## Tiga Cara Memuat Data (tab Pipeline)
 
-**Struktur 53 kolom yang diharapkan:**
+| Tombol | Untuk File | Perilaku |
+|--------|-----------|----------|
+| 🧮 Pilih File Sendiri | `DATA_WASTE.xlsx` standar 53 kolom | Pipeline langsung pada file |
+| 🧮 Olah & Jalankan REKAP MENTAH… | Rekap mentah bulanan (mis. `REKAP MENTAH_01-31 AGUSTUS 2026_TEGAR.xlsx`) | Header diperbaiki, nilai dinormalisasi, TOTAL BOM diambil dari baris BOM — **sekali proses, tanpa file antara** |
+| 📁 Proses dari Folder… | Folder berisi `.xlsx` format BJMHAS (sheet REKAP MENTAH tanpa kolom NAMA RESTO) | Semua file dipindai, resto disintesis dari nama file, digabung jadi satu dataset |
+
+> **Banding bulan lalu (opsional):** tab Banding Periode → ＋ Tambah File… → pilih beberapa file sekaligus → jalankan pipeline → muncul Ringkasan, per jenis, mover, dan mode 📊 Tipikal.
+
+## Format Input Standar (53 kolom)
 
 | # | Kolom | Wajib? | Contoh |
 |---|-------|--------|--------|
-| 0-8 | STATUS, HELPER, MAX TOTAL, AVG TOTAL, TOTAL BOM, % to BOM, TOTAL, AVG, MAX | Opsional (akan dihitung ulang) | kosong / 0 |
-| 9 | SOURCE DATA | ✅ Wajib | WASTE BAHAN DAN PACKAGING |
-| 10 | JENIS | ✅ Wajib (filter: WASTE/SUSUT/TRIAL) | WASTE |
-| 11 | KETERANGAN | ✅ Wajib | Alat/ Mesin, Cancel Nota, Eksternal, Internal, Over Stock, Handling, Kualitas, dll |
-| 12 | NAMA BARANG | ✅ Wajib | ADONAN GORENG MEKAR |
-| 13 | NAMA RESTO | ✅ Wajib | B.1001.MLGPAR |
-| 14 | SATUAN | ✅ Wajib | GR, KG, PORSI |
-| 15-45 | 1 .. 31 | ✅ Wajib (qty waste per hari) | 0 / 50 / 100 |
-| 46-52 | Status2, KETERANGAN GABUNGAN, KONTRIBUSI TERBESAR, SOURCE DATA GABUNGAN, Count Hari, RANGKING WASTE, Rill % to BOM | Opsional (akan dihitung ulang) | kosong |
+| 0–8 | STATUS, HELPER, MAX TOTAL, AVG TOTAL, TOTAL BOM, % to BOM, TOTAL, AVG, MAX | Opsional (dihitung ulang) | kosong |
+| 9 | SOURCE DATA | ✅ | WASTE BAHAN DAN PACKAGING |
+| 10 | JENIS | ✅ (filter: WASTE/SUSUT/TRIAL) | WASTE |
+| 11 | KETERANGAN | ✅ | Cancel Nota, Internal, Kualitas, dll |
+| 12 | NAMA BARANG | ✅ | ADONAN GORENG MEKAR |
+| 13 | NAMA RESTO | ✅ | B.1001.MLGPAR |
+| 14 | SATUAN | ✅ | GR, KG, PORSI |
+| 15–45 | 1 .. 31 | ✅ (qty waste per hari) | 0 / 50 / 100 |
+| 46–52 | Status2, KETERANGAN GABUNGAN, dll | Opsional (dihitung ulang) | kosong |
 
-> **Idempotent:** Kalau ada kolom output (MAX, AVG, KETERANGAN GABUNGAN, dll) di file Anda — tidak masalah. Stage 1 akan auto-drop semua derived columns & recompute dari kolom hari 1..31.
+**Sheet opsional** untuk mengaktifkan sinyal BOM (S6/S7) & STATUS:
 
-**Opsional — sheet tambahan untuk aktifkan sinyal BOM & STATUS:**
+| Sheet | Nama kandidat | Kolom kunci |
+|-------|---------------|-------------|
+| BOM | `BOM`, `MASTER BOM` | `Nomor #` (=NAMA RESTO), `Nama Barang`, `TOTAL BOM` |
+| DATABASE_SATUAN | `DATABASE_SATUAN`, `SATUAN` | `NAMA ITEM` + kategori per jenis |
 
-| Sheet | Nama Kandidat | Kolom |
-|-------|---------------|-------|
-| BOM | `BOM`, `2  22 05`, `MASTER BOM` | `Nomor #` (= NAMA RESTO), `Nama Barang` (= NAMA BARANG), `TOTAL BOM` |
-| DATABASE_SATUAN | `DATABASE_SATUAN`, `Database Satuan`, `SATUAN` | `NAMA ITEM`, `SUSUT`, `TRIAL`, `HANDLING`, `KUALITAS EKSTERNAL`, `KUALITAS`, `KUALITAS INTERNAL`, `EKSTERNAL`, `INTERNAL`, `ALAT MESIN`, `OVERSTOCK`, `CANCEL NOTA` |
+Tanpa sheet ini pipeline tetap jalan — sinyal BOM & STATUS tidak terpicu. Pipeline **idempotent**: kolom output lama di file di-drop & dihitung ulang otomatis.
 
-Kalau sheet BOM/DATABASE_SATUAN tidak ada, sinyal BOM (S6/S7) & STATUS (Sesuai/Tidak Sesuai) tidak akan trigger tapi pipeline tetap jalan.
+## UI — 6 Tab (urutan alur kerja)
 
-### 3. Jalankan (setiap kali)
-Jalankan `MULAI.bat`. UI terbuka dengan **4 view** (v2.9.0 — rebuild PySide6; landing default = **Anomali**):
+| Tab | Fungsi |
+|-----|--------|
+| ▶ Pipeline | Entry point: pilih workbook/folder, key akhir, Run/⏹Batal, progres per-stage, log, editor threshold |
+| 🔍 Anomali | Pusat analisa: KPI strip 6 kartu, tabel ter-ranked skor, pop-up detail, % to BOM |
+| 📅 Hari Mencurigakan | Bukti per-hari: HARI TERSANGKA, tipikal cabang lain, rasio vs bulan lalu |
+| 🏢 Scorecard Cabang | Urutan kunjungan audit, top kerugian, pola hari kalender, kualitas data, tren multi-bulan |
+| 📊 Banding Periode | Banding bulan-ke-bulan + mode Tipikal (median ≥2 bulan) |
+| ✅ Follow Up | Shortlist baris tercentang ✓ — format rekap, ekspor & impor hasil tindak lanjut |
 
-| View | Fungsi |
-|------|--------|
-| 🎯 Anomali (**default**) | Tabel anomali ter-ranking (skor ↓, tanpa cap baris, pewarnaan severity, kolom TOTAL + % to BOM) + detail **pop-up** saat baris diklik (12 sinyal S1–S12, peer, uang, **peta nilai per hari 1–31**) + drill-down 1-klik (cabang/item/alasan) + ambang "Skor ≥" + KPI mengikuti filter |
-| 📅 **Hari Mencurigakan** (v2.9.0) | "Potensi salah angka terjadi di **tanggal berapa** (1–31)?" — tabel anomali + bukti hari: HARI TERSANGKA · NILAI HARI · TIPIKAL CABANG LAIN · RASIO (×) · SHARE · ALASAN HARI; combo hanya-ada-bukti / semua; KPI rasio terbesar; pop-up detail + peta hari; hover judul kolom = arti istilah |
-| 🔀 Banding Periode (v2.10.0) | **Bulan berjalan vs daftar file bulan lalu** (1 file = 1 bulan, format REKAP MENTAH — kuantiti tanpa BOM): nama bulan otomatis dari nama file (bisa dikoreksi), daftar **diingat antar sesi**, dimuat di background (+progress+cancel); banding per bulan atau vs **Tipikal** (median beberapa bulan): ringkasan (Total Waste, **Waste per Hari** — menormalkan beda 30/31 hari), per-JENIS, cabang/item bergerak terbesar, item baru/hilang; **v2.10.2: ⤢ Perbesar Tabel + ⛶ Layar Penuh + klik 2× = pop-up drill Total → resto → item → per hari** |
-| ▶ Pipeline | Workbook + key akhir + Run/⏹Batal + progress + log + ringkasan + editor threshold |
+## 12 Sinyal Anomali (S1–S12)
 
-Sidebar kiri (bisa disembunyikan — ☰ Filter / Ctrl+Shift+F, v2.8.0): pencarian (debounce 300 ms), cabang, status, keterangan, rentang hari, profil filter tersimpan. Saat disembunyikan, tabel memakai lebar penuh jendela. Toolbar atas: **☰ Filter** + **💾 Export Excel** (global — tidak duplikat per tab) + **❓ Bantuan**.
+| # | Nama | Trigger | Skor |
+|---|------|---------|------|
+| S1 | Lonjakan vs rata-rata harian | Count≥2 & MAX/AVG≥3 | 1 |
+| S2 | Lonjakan vs hari aktif | Count≥3 & MAX/AVG_AKTIF≥2,5 (≥4→2) | 1–2 |
+| S3 | Lonjakan vs nilai tengah | Count≥3 & MAX/MEDIAN_AKTIF≥3 | 2 |
+| S4 | Terpusat di satu hari | MAX/TOTAL≥0,70 (≥0,50→1) | 1–2 |
+| S5 | Jauh di atas hari kedua | Count≥2 & MAX/SECOND_MAX≥3 | 1 |
+| S6 | Puncak harian vs BOM | MAX/TOTAL_BOM≥0,50 (≥0,25→1) | 1–2 |
+| S7 | Total bulanan vs BOM | TOTAL/TOTAL_BOM≥1,00 (≥0,50→1) | 1–2 |
+| S8 | Puncak vs cabang lain | PeerCount≥3 & MAX/PeerMedMax≥3 (≥2→1) | 1–2 |
+| S9 | Total vs cabang lain | PeerCount≥3 & TOTAL/PeerMedTot≥3 | 1 |
+| S10 | Waste hanya satu hari | Count=1 & (MaxBOM≥0,10 atau MaxPeer≥2) | 1 |
+| S11 | Menumpuk di hari terakhir | LastDay/TOTAL≥0,70 | 1 |
+| S12 | Pola 10× (mungkin salah ketik) | heuristik rasio (8–12 / 80–120 / 800–1200 / 8000–12000) | 2 |
 
-> **Catatan deviasi (v2.7.0):** nama tab di-elide `…` bila jendela sangat sempit — konvensi disengaja (elide kanan + tombol panah scroll tab, bukan terpotong mentah mid-kata); jaminan anti-terpotong tetap berlaku untuk semua konten view.
+**Skor maksimum 18** → status: `≥8` Prioritas Tinggi · `≥5` Potensi Anomali · `≥3` Perlu Review · lainnya Normal.
 
-### 4. Banding vs bulan-bulan lalu (opsional — v2.10.0)
+## Export Excel (10 Sheet)
 
-Simpan workbook rekap bulan lalu sesuai kebiasaan Anda (template **REKAP MENTAH**: kolom SOURCE DATA / JENIS / KETERANGAN / NAMA BARANG / NAMA RESTO / SATUAN / hari 1–31 — **tanpa angka BOM**; nama file sebaiknya memuat nama bulan, mis. `REKAP MENTAH_01-31 AGUSTUS 2026_TEGAR.xlsx`). Lalu di tab **🔀 Banding Periode**:
-
-1. Klik **＋ Tambah File…** — bisa pilih beberapa file sekaligus (1 file = 1 bulan; 2–3 bulan ideal).
-2. Nama bulan muncul otomatis dari nama file; **klik 2× baris** bila mau mengoreksi. Daftar **diingat antar sesi** — aplikasi dibuka lagi = bulan lalu termuat otomatis di background.
-3. Jalankan pipeline bulan berjalan seperti biasa → hasil banding muncul: **Ringkasan** (Total Waste, **Waste per Hari** — adil untuk beda panjang bulan), **Per Jenis**, **Cabang/Item Mover** (naik-turun terbesar), **Item Baru/Hilang**.
-4. Combo **"Banding dengan"**: pilih satu bulan tertentu, atau **📊 Tipikal** (median gabungan ≥ 2 bulan) untuk deteksi perubahan.
-
-Tab **📅 Hari Mencurigakan** otomatis menambah kolom **NILAI BULAN LALU** / **RASIO VS BULAN LALU** (tanggal yang sama bulan sebelumnya) saat pembanding tersedia. Tombol **🔄 Muat Ulang** membaca ulang file yang berubah (cache mtime — file sama tidak dibaca ulang).
-
-## Output Excel (10 Sheet) — via tombol "💾 Export Excel" di toolbar
-
-Pipeline berjalan **in-memory** (cepat, idempotent). Setelah selesai, klik **💾 Export Excel** di toolbar untuk menyimpan laporan:
+Klik **💾 Export Excel** di toolbar (background thread, UI tetap responsif):
 
 | Sheet | Isi |
 |-------|-----|
-| Detail | Semua baris — kolom mengikuti M code Final order (~70 kolom) |
-| Anomali Prioritas | Hanya baris dengan `ANOMALY STATUS` = Prioritas Tinggi + Potensi Anomali |
-| Per Cabang | Ringkasan per NAMA RESTO (jumlah baris, total waste, count anomali per status) |
-| Top Items | Top 20 item by TOTAL waste (rank, total, max, cabang terpengaruh, count prioritas) |
-| Pareto Alasan | Group by KETERANGAN — sum TOTAL, persentase, cumulative % |
-| Log Run | Timestamp, parameter, summary stats, log lines pipeline |
-
-> Export berjalan di background thread (UI tetap responsif) dengan penanganan `PermissionError` ramah: kalau file sedang dibuka di Excel, muncul pesan jelas "tutup dulu lalu ulangi". Perf: ~27 detik untuk 25.901 baris × 93 kolom (dulunya ~110 detik).
-
-## Tab Anomali (pusat analisa) — filter funnel di judul kolom
-
-Tab **Anomali** (default) adalah pusat analisa: KPI strip mengikuti filter,
-tabel anomali ter-ranked skor (klik header = sort; **klik baris = pop-up
-detail**), dan ambang **Skor ≥** (0–19) untuk menyembunyikan anomali
-ber-skor rendah.
-
-### KPI Strip (6 kartu — tab Anomali)
-| Card | Warna | Isi |
-|------|-------|-----|
-| TOTAL BARIS | slate | Jumlah baris terfilter |
-| PRIORITAS TINGGI | red | Count anomali prioritas tinggi |
-| POTENSI ANOMALI | orange | Count potensi anomali |
-| PERLU REVIEW | amber | Count perlu review |
-| TOTAL WASTE | teal | Sum TOTAL waste (qty) + breakdown per satuan |
-| CABANG | purple | Jumlah cabang unik |
-
-Label konteks "[KPI terfilter: X dari N baris]" jujur + catatan satuan
-(agregat lintas satuan, indikatif — v2.7.0: breakdown menampilkan total
-waste sesungguhnya per satuan, bukan jumlah baris).
-
-### Cara filter & drill-down (v2.12.4 + v2.13.5 — sidebar & klik-2×-filter DIHAPUS)
-1. **Funnel di judul kolom** (SEMUA kolom, SEMUA tabel) — klik ikon corong
-   di ujung kanan judul: daftar nilai bercentang (angka = jumlah baris),
-   kotak cari nilai, tombol Urut Naik/Turun, **☑ Pilih Semua** (lepas filter
-   kolom itu). Funnel merah = kolom sedang terfilter.
-2. Kolom **NAMA RESTO / NAMA BARANG / JENIS / KETERANGAN / STATUS** di tab
-   Anomali & Hari Mencurigakan = filter **GLOBAL** (state satu — antar-tab
-   sinkron, KPI ikut terfilter); kolom lain (TOTAL, skor, hari) = filter
-   **tampilan** tabel itu saja (daftar Follow Up tak tersentuh).
-3. **Klik 1× baris = pop-up detail RINGKAS** (v2.13.9) — SELALU terbuka
-   (termasuk buka-tutup-buka lagi baris sama & klik-ulang-cepat —
-   v2.13.5): seksi **Ringkasan** (total sebulan, puncak sehari +
-   tanggalnya, vs penjualan, vs cabang lain, vs bulan lalu, peringkat) →
-   **sinyal yang terpicu saja** (chip merah) → alasan → peta nilai per
-   hari 1–31 → tombol tindak lanjut; seluruh kolom data lengkap di
-   balik tombol **▸ Tampilkan semua kolom data** di bawah.
-4. Tombol drill-down di pop-up: **🏬 Fokus cabang ini / 📦 Fokus item ini /
-   🏷 Fokus alasan ini** — fokus eksplisit 1-klik. **Klik 2× baris TIDAK
-   lagi memfilter** (dihapus v2.13.5 atas permintaan user — pop-up selalu
-   menang). Di tab Scorecard & Banding Periode klik 2× = pop-up rincian.
-5. **✕ Hapus Filter** (tab Anomali & Hari) = lepas semua filter sekaligus
-   (global + tampilan + skor).
-
-### Tabel data (virtualized — tanpa cap baris)
-- Sortable columns (klik header — numeric-aware, NaN di akhir; kolom % to BOM sort numerik dengan 'Cek' di akhir)
-- Status coloring (red/orange/amber/green sesuai ANOMALY STATUS, per baris)
-- TANPA cap baris: 25.901 baris di-render virtualized (dulu pagination max 500)
-- Klik baris → pop-up detail; klik sel ✓ = aksi centang murni tanpa pop-up
-  (v2.13.5; klik-2× = klik tunggal ke-2, tanpa efek samping)
-- Kolom auto-fit proporsional + lantai lebar header + word-wrap; tabel >3.000 baris otomatis wrap-mati + elide kanan `…` (tooltip sel tetap teks penuh — v2.7.0)
-- Kolom **% to BOM** tampil sebagai persen (`1,34%`); `Cek` = item tanpa data penjualan
-- Di jendela sempit (laptop 1024): JENIS & KETERANGAN disembunyikan responsif (muncul lagi saat melebar) supaya kolom inti + % to BOM tetap muat tanpa scrollbar horizontal — alasan tetap terlihat di pop-up detail
-
-### Workflow Analisa Contoh
-```
-1. Tab Pipeline → pilih workbook → Mulai Pipeline → buka tab Anomali
-2. Lihat KPI strip + tabel anomali ter-ranked (skor ↓) + kolom % to BOM
-3. Klik baris → pop-up detail ringkas: Ringkasan angka kunci + chip
-   sinyal terpicu + peta hari (v2.13.9; buka "Tampilkan semua kolom
-   data" bila perlu angka lengkap)
-4. Tombol "🏬 Fokus cabang ini" di pop-up → tabel ter-filter cabang itu
-5. Funnel kolom KETERANGAN → centang nilai alasan (mis. Cancel Nota)
-6. ☑ Centang yang tampil → hasil filter masuk ke daftar Follow Up
-7. 💾 Export Excel (toolbar) → laporan 10 sheet dari hasil pipeline
-```
-
-## View & Modul yang DIHAPUS (v2.8.0 + v2.8.1 — kini 6 tab)
-
-Atas permintaan user, UI disederhanakan bertahap — 8 view → 5 view
-(v2.8.0) → **3 view** (v2.8.1); lalu bertambah kembali sesuai kebutuhan
-analisa: **4 tab** (v2.9.0, + Hari Mencurigakan) → **5 tab** (v2.12.0,
-+ Follow Up) → **6 tab** (v2.13.1, + Scorecard Cabang):
-
-- **v2.8.0** — tab **Uang** (money view, Pareto item), **Peer** (banding
-  2 cabang A/B, kuadran anomali, rate league, benchmark SUSUT), **Kualitas
-  Data** (tampilan 7 pemeriksaan DQ).
-- **v2.8.1** — tab **Jelajah** (chart interaktif + tabel 5 sheet + 9 chart
-  statistik) dan **Waktu** (pola waste per hari / kelas hari mod-7),
-  beserta modul `charts.py`, `dashboard.py`, `chart_helpers.py`, widget
-  chart di UI, dan `_build_derived_sheets` (sheet turunan kini hanya
-  dibangun jalur export).
-
-Yang TIDAK hilang:
-- Metrik pembanding peer: sinyal **S8/S9** (outlier peer), pop-up detail
-  Anomali (PEER COUNT, PEER MEDIAN TOTAL/MAX, rasio ke median), prioritas
-  magnitude di scoring.
-- **Cek data_quality tetap jalan** di pipeline setiap run & ikut ke export
-  Excel (sheet Data Quality) — hanya tampilan tab-nya yang dihapus.
-- **Sheet analisa export tetap lengkap** (Waste per Hari, Alasan×Hari,
-  Money View, Data Quality) — modul temporal/priority tetap hidup.
-- Analisa pola hari masih bisa dilakukan lewat rentang hari (HARI MAX)
-  + kolom HARI MAX / MAX SHARE / LAST DAY SHARE di pop-up detail, dan
-  sheet "Waste per Hari" di laporan export.
-
-Sidebar filter (drill-down 6 cara) kini juga bisa **disembunyikan** lewat
-tombol **☰ Filter** di toolbar atau **Ctrl+Shift+F** — tabel memakai
-lebar penuh jendela.
-
-## 12 Sinyal Anomali (S1-S12)
-
-Nama sinyal v2.9.0 = **Bahasa awam** (fragmen `ANOMALY REASONS` + chip UI;
-perubahan dari "Spike vs AVG" dkk. — permintaan user). Trigger & skor tidak
-berubah. Hover chip di pop-up detail / judul kolom tabel = penjelasan lengkap.
-
-| # | Nama (v2.9.0, awam) | Nama lama (teknis) | Trigger | Skor |
-|---|------|------|---------|------|
-| S1 | Lonjakan vs rata-rata harian | Spike vs AVG | `Count≥2 & MAX/AVG≥3` | 1 |
-| S2 | Lonjakan vs hari aktif | MAX vs AVG Aktif | `Count≥3 & MAX/AVG_AKTIF≥2.5` (≥4 → skor 2) | 1 atau 2 |
-| S3 | Lonjakan vs nilai tengah | MAX vs Median Aktif | `Count≥3 & MAX/MEDIAN_AKTIF≥3` | 2 |
-| S4 | Terpusat di satu hari | MAX Share | `MAX/TOTAL≥0.70` (≥0.50 → skor 1) | 1 atau 2 |
-| S5 | Jauh di atas hari kedua | MAX vs Second Max | `Count≥2 & MAX/SECOND_MAX≥3` | 1 |
-| S6 | Puncak harian vs BOM | MAX / BOM | `MAX/TOTAL_BOM≥0.50` (≥0.25 → skor 1) | 1 atau 2 |
-| S7 | Total bulanan vs BOM | TOTAL / BOM | `TOTAL/TOTAL_BOM≥1.00` (≥0.50 → skor 1) | 1 atau 2 |
-| S8 | Puncak vs cabang lain | Peer MAX | `PeerCount≥3 & MAX/PeerMedMax≥3` (≥2 → skor 1) | 1 atau 2 |
-| S9 | Total vs cabang lain | Peer TOTAL | `PeerCount≥3 & TOTAL/PeerMedTot≥3` | 1 |
-| S10 | Waste hanya satu hari | Single-day event | `Count=1 & (MaxBOM≥0.10 atau MaxPeer≥2)` | 1 |
-| S11 | Menumpuk di hari terakhir | Last Day Share | `LastDay/TOTAL≥0.70` | 1 |
-| S12 | Pola 10× (mungkin salah ketik) | Scale Signal | heuristic rasio (8-12 / 80-120 / 800-1200 / 8000-12000) | 2 |
-
-**Max skor = 18.** Status final:
-- `≥ 8` → **Prioritas Tinggi**
-- `≥ 5` → **Potensi Anomali**
-- `≥ 3` → **Perlu Review**
-- `else` → **Normal**
-
-## Testing
-
-**1151 test** — golden regression end-to-end (fixture `DATA_WASTE.xlsx` 25.901 baris; bila file data-real tak ada di mesin — mis. checkout CI pasca v2.18.0 — test golden skip otomatis via skipif), unit test 12 sinyal S1–S12, join BOM & normalisasi kunci, presisi float, kontrak summary dict, validasi skema, cancel hook antar-stage, exporter dual-mode, logging framework, path frozen-mode, semantik filter (v2.5.1), 14 test struktural paket ui/ v2.6.0 (modul ada, mixin lama tak kembali, kontrak shared, kontrak view refresh/on_shown, worker QThread, manifest metode, MainWindow offscreen, infra chart dihapus), **49 test regresi fix audit v2.7.0** (gelombang 1–4: kontrak banding periode + closeEvent worker + memo filter; record penuh panel detail + 12 chip sinyal + fmt numpy + tabel besar; validasi threshold + default 20/20 key; manifest dua-arah + lantai header tabel + `fmt_id(None)` + versi), **dan 27 test regresi v2.8.0+v2.8.1** (3 view + file view/modul chart dihapus + tabel memanjang penuh + pop-up detail + kolom % to BOM + sidebar hide/unhide + help jujur; test view/chart lama dihapus jujur bersama subjeknya: −13 kontrak chart, −12 gelombang-3 view, −2 derived-sheets, −2 Pareto), **plus 2 test kontrak v2.8.2** (baris verifikasi SETUP.bat wajib sinkron dengan requirements.txt — anti bug "import matplotlib" basi), **dan 5 test v2.8.3** (busy feedback: cursor sibuk aktif selama render & dipulihkan; jalur sinyal filter terbungkus; pesan status ⏳/✓ terkirim; helper aman bersarang; kontrak sumber titik-tunggal), **plus 40 test v2.9.0** (Stage 15 day_focus unit + golden hari tersangka data asli + tab Hari Mencurigakan offscreen + istilah awam & tooltip kontrak + cache perf), **plus 60 test v2.10.0** (label bulan dari nama file; saringan JENIS + golden MIE 194 vs 43.115; agregat & banding kuantiti — arah %, mover, baru/hilang; Tipikal median; bukti hari vs bulan lalu + threshold config; persistensi daftar file atomic + backup korup + frozen-path; HistoryWorker cancel + file-gagal-tidak-menggagalkan; PeriodeView offscreen multi-file + combo + edit label + hapus + cache mtime; HariView kolom bulan-lalu + memo objek; istilah & format kolom baru; golden data asli 2 workbook), **plus 4 test v2.10.1** (path hasil loader = persis string input — regresi Windows dialog Qt '/' vs pathlib '\\', direproduksi di Linux via path '/./'; worker mengunci path entri; kolom Status berubah '✓' + combo terisi; notif jujur saat semua file gagal), **plus 60 test v2.10.2** (compare_level: level resto/item/per-JENIS + per-day 30/31 + urutan selisih; drill_day_detail: hari 1–31 + puncak + string spasi; agregat baru agg_jenis/agg_detail + typical median; classify_change: 6 kategori + batas + config + anti-noise min-abs; change_vs_history: kunci persis resto×item×jenis×keterangan + casefold + tanpa-mutasi + fallback kunci kasar + tipikal; format `+35,5%`/`BARU`; baseline bersama combo↔Anomali dgn signal identitas; UI: toggle ⤢, layar penuh ⛶, rantai drill resto→item→hari semua tab, breadcrumb, filter Perubahan, tanpa-pembanding = tabel identik), **plus 7 test v2.10.3** (regex bulan underscore: diterima + huruf tetap ditolak + pola lama utuh; pop-up basi: clear & render-ulang menutup, toggle ⤢ tidak), **plus 16 test v2.11.0** (SlicerBar: klik chip → pending → set_filters_multi satu broadcast; multi/uncheck → list/kanonik-None; sinkron dua arah combo-sidebar ↔ chip + placeholder 'beberapa dipilih' + no-op; reset & dataset baru → chip bersih & repopulasi JENIS/KETERANGAN/STATUS; FlowLayout membungkus; set_filters_multi: emit sekali + kunci asing diabaikan + memo invalid; _apply_filters list status/keterangan ≡ single + normalisasi keterangan). **dan 42 test v2.12.0** (fingerprint: deterministik + dtype-stabil + kembar identik menyatu/nilai-beda terbeda + hari-nol tak mengubah identitas; select dedup kembar; suspicious_days: merah tersangka → fallback HARI MAX per-baris + amber ≥2× rata-rata aktif + merah menang + guard rata-rata ≤ 0; persistensi roundtrip atomic + korup → backup .bad; AppContext: toggle no-op tanpa broadcast + add_many satu broadcast & dedup batch + clear + followup_df dataset-penuh + prune data-baru + memo per data_version; model: flags/CheckState/DisplayRole kosong/setData enum & int + sort ✓ + penanda (fp, kolom) stabil lewat sort + notify_column_changed; AnomaliView klik mouse nyata + tombol massal + sinkron in-place tanpa reset + memo objek display; FollowUpView format rekap + lepas centang + pesan arahan; export: header rekap + serah-terima + fill merah/amber + freeze/autofilter + dtype numerik np.int64; MainWindow badge + isolasi followup.json; pop-up basi ditutup saat baris keluar daftar) Jalankan setiap kali mengubah kode — angka golden berubah tanpa alasan = regresi. **Dan 32 test v2.12.1** (perf tombol: _apply_filters fast-path tanpa salinan + objek-sama + konten benar + kolom-tak-ada + baca-saja; text_at ≡ data() display + kolom centang kosong + data() TETAP hidup setelah mutasi df langsung (regresi desain) + notify menyegarkan snapshot + setData sinkron + sort membangun ulang; LRU display bolak-balik A→B→A objek sama + nilai ✓ disegarkan + data_ready membersihkan + reindex fps ≡ md5 lokal + fallback; set_dataset memetik followup_fps worker + tanpa-fps bangun malas + index-tak-cocok ditolak; suspicious_days ekuivalensi oracle loop lama (acak + tanpa tersangka + tanpa avg + sebagian kolom hari + hari-tak-ada-di-kolom + input list); tabel lebar wrap mati + elide + refit no-op + anomali wrap nyala + raksasa utuh; status bar stylesheet hanya saat warna berganti). **Dan 27 test v2.12.3** (Opsi A: peta ✓ banding hanya baris anomali + peta penuh utk lepas + fallback tanpa kolom status + baris tanpa anomali ditolak + lepas membersihkan noise warisan; Follow Up BULAN LALU: kolom+alias+nilai join benar + tanpa baseline = identik + history_ready dirty; HariView JENIS keluar narrow_hide + ⤢ toggle + ⛶ reparent/pulihkan/idempoten/guard; FilterHeader: setup + kolom kanonik + menu nilai/apply/None + state awal dari state_fn + Pilih Semua + tombol sort + cari + debounce + tabel tanpa mapping perilaku biasa + integrasi AnomaliView (ctx + render ulang + slicer sinkron + klik funnel tak memicu sort) + Follow Up filter lokal (daftar/ekspor tak tersentuh + lepas + refresh mempertahankan); peta hari format baru tanpa 'N:nilai'). **Dan 28 test v2.12.4** (sidebar dihapus: tanpa aksi ☰/shortcut/atribut + central QTabWidget lebar penuh + 5 tab utuh + tanpa widget filter; SlicerBar/FlowLayout dihapus dari widgets + view tanpa _slicer; hint 💡 dihapus dari SEMUA view (sweep findChildren) + _HINT_BASE/_hint hilang; funnel all_cols: flag + skip + hit-test kolom non-mapping + menu kolom numerik + kolom ✓ di-skip; AnomaliView: semua kolom tampak ber-funnel + filter TOTAL lokal (ctx tak tersentuh) + lepas pulih + memo mask A→B→A objek sama + ☑ Centang yang tampil mengikuti mask + tombol ✕ Hapus Filter (global+lokal+skor) + dataset baru reset lokal; HariView semua kolom + funnel lokal kolom non-mapping + kolom mapping tetap global; Follow Up: kolom hari 1-31 ber-funnel + filter lokal (daftar/ekspor tak tersentuh); PeriodeView: semua halaman ber-funnel + bahan halaman tersimpan + mask halaman items + state funnel + lepas pulih; dialog layar penuh tanpa hint tapi Esc di judul + tombol Kembali tetap). **Dan 31 test v2.12.2** (WLabel hfw aktif + tinggi jujur mengikuti lebar + < sizeHint persegi; slicer kompak label-inline + tinggi ≤115px; minus merah: float/np-int negatif merah, 0/plus/teks/bool/NaN tidak, prioritas penanda hari; remove_followup_many satu broadcast + no-op + dedup batch; compare_quantity +JENIS split nilai + branch/baru/hilang per jenis + fallback tanpa agg_jenis = struktur lama + satu sisi; header nama bulan di headerData + frame mentah tetap 'Pembanding' + label Tipikal median; ✓ banding: centang item/cabang massal + sinkron in-place antar tabel + baris tanpa pasangan di-revert + gone/summary tanpa ✓; auto-ciut hanya jalur muat-otomatis (manual tidak); AnomaliView ⤢ toggle KPI/kontrol + ⛶ reparent-pulihkan + idempoten + guard kosong; fmt_run_label tanpa jargon). **Dan 12 test v2.12.5** (_header_font = family chain + 13px + DemiBold dari konstanta theme (dipakai QSS & lantai); lantai header diukur font QSS; piksel strip [w−24, w] bersih dari teks + ikon funnel terlukis; tutup menu mencatat waktu; klik-ganda artefak pasca-tutup ditelan; klik ganda sah setelah guard / tabel tanpa menu tetap hidup; klik tunggal pilih-baris tetap hidup dalam jendela guard; zona hit funnel baru [w−24, w−2] pusat ikon right−12). **Dan 31 test v2.13.0–v2.13.5** (PROFIL baris & KELEBIHAN peer; tab Scorecard + insights + persentil peer + Benford + panel DQ + tren + pratinjau ambang + impor TL; fix Hari-Data "BARU"; klik-2× filter DIHAPUS + pop-up selalu bisa dibuka + follow-up hari mencurigakan). **Dan 16 test v2.13.6** (gel-A audit menyeluruh: QScrollArea Scorecard/Pipeline — view boleh diciutkan, konten utuh; label DQ jujur "arahkan kursor"; Bantuan memuat seksi Scorecard; banner .bat v2.13.6 tanpa jejak sidebar; CRLF utuh; versi sinkron). **Dan 14+16 test v2.13.7-v2.13.8** (gel-B/C deep audit: 14 uji ekuivalensi oracle vektorisasi engine + 16 pengunci bersih-bersih dead code/konsolidasi mixin). **Dan 15 test v2.13.9** (pop-up ringkas: ringkasan/label awam/nilai terformat; kolom lengkap sembunyi default + toggle + reset per baris; chip hanya sinyal terpicu + nol-sinyal catatan; baris tanpa pembanding ramping; peta hari & tombol tindak lanjut utuh; clear reset ref; guard tekan#1 replay dua-arah + ✓ tak terdampak; data riil pipeline; versi).
-
-## Packaging — EXE Standalone
-
-Jalankan `BUILD_EXE.bat` di Windows (butuh Python + SETUP.bat sekali). Hasil: `dist/WasteAnomalyDetection.exe` — aplikasi jalan **tanpa Python** di PC lain, lengkap dengan ikon (`assets/app_icon.ico`). PyInstaller di-install otomatis; konfigurasi build ada di `waste_anomaly.spec`.
+| Detail | Semua baris (~70 kolom, urutan Final M code) |
+| Anomali Prioritas | Baris Prioritas Tinggi + Potensi Anomali |
+| Per Cabang | Ringkasan per resto: total waste, count anomali per status |
+| Top Items | Top 20 item by TOTAL waste |
+| Pareto Alasan | Group by KETERANGAN + cumulative % |
+| Waste per Hari | Total per hari (analisa temporal) |
+| Alasan x Hari | Matriks alasan × tanggal |
+| Money View | Prioritas magnitude (top 100) |
+| Data Quality | Hasil 7+1 pemeriksaan |
+| Log Run | Timestamp, parameter, ringkasan, log pipeline |
 
 ## Struktur Project
 
 ```
 Waste/
-├── MULAI.bat                       ← ENTRY POINT (buka UI 6 tab)
-├── SETUP.bat                       ← One-time install (buat .venv + pip install, hardened v2.7.0)
-├── BUILD_EXE.bat                   ← Build .exe standalone (PyInstaller)
-├── waste_anomaly.spec              ← Konfigurasi PyInstaller (icon, datas)
-├── requirements.txt                ← Dependensi pinned (pandas 2.2.x; matplotlib DIHAPUS v2.8.1)
-├── README.md                       ← File ini
-├── LICENSE                         ← MIT
-├── .gitignore
-├── .gitattributes                  ← eol .bat = CRLF (ZIP-download Windows, V26-M16)
-├── ui_app.py                       ← LAUNCHER tipis (entry point lama tetap jalan)
-├── ui/                             ← PAKET UI (v2.6.0 — rebuild PySide6)
-│   ├── __init__.py                ← Eksport lazy (main, MainWindow)
-│   ├── shared.py                  ← Kontrak publik (APP_DIR, _apply_filters, fmt_id)
-│   ├── theme.py                   ← Palet warna + QSS global
-│   ├── state.py                   ← AppContext: state tunggal + signal Qt
-│   ├── models.py                  ← PandasTableModel (tabel virtualized, sort, severity,
-│   │                                 fmt_cell + fmt_pct utk kolom rasio % — v2.8.1)
-│   ├── workers.py                 ← PipelineWorker / ExportWorker / HistoryWorker (QThread,
-│   │                                 v2.10.0: muat file pembanding di background)
-│   ├── widgets.py                 ← Blok anti-terpotong: WLabel, DataTable
-│   │                                 (auto-fit + wrap), KpiStrip, StatusChip
-│   ├── app.py                     ← MainWindow (toolbar + 6 tab view) + main()
-│   ├── view_anomali.py            ← Tab 1 Anomali (default): ranking + % to BOM + pop-up detail + peta hari
-│   ├── view_followup.py           ← Tab 2 Follow Up (v2.12.0): shortlist centang ✓ + ekspor + impor TL
-│   ├── view_hari.py               ← Tab 3 Hari Mencurigakan (v2.9.0): bukti hari 1-31 + follow-up
-│   ├── view_scorecard.py          ← Tab 4 Scorecard Cabang (v2.13.1): urutan kunjungan audit +
-│   │                                 KPI + Top Kerugian + Pola Hari + DQ + Tren (QScrollArea v2.13.6)
-│   ├── view_periode.py            ← Tab 5 Banding Periode: multi-file bulan lalu + Tipikal median (v2.10.0)
-│   ├── view_pipeline.py           ← Tab 6 Pipeline (+ ringkasan + threshold editor; QScrollArea v2.13.6)
-│   └── followup_table.py          ← Mixin ✓-follow-up + funnel (kembar Anomali⇄Hari, konsolidasi v2.13.8)
-├── assets/                         ← Ikon aplikasi (ico + png)
-├── make_sample.py                  ← Generate sample workbook untuk testing
-├── sample_workbook.xlsx            ← Fixture test in-repo (v2.7.0 — hasil make_sample.py; SATU-SATUNYA xlsx yang di-track — data asli di-ignore .gitignore sejak v2.18.0)
-├── tests/                          ← Test suite pytest (1151 test)
-│   ├── conftest.py
-│   ├── fixtures/ui_methods_manifest.txt  ← Manifest def top-level ui/ (kunci struktural DUA-ARAH, v2.7.0)
-│   ├── test_pipeline_regression.py ← Golden regression 25.901 baris (14 test)
-│   ├── test_signals.py             ← Unit test S1–S12 (54 test)
-│   ├── test_schema_and_cancel.py   ← Validasi skema + cancel hook (13)
-│   ├── test_exporter.py            ← Exporter dual-mode (normal/streaming) (13)
-│   ├── test_bom_join.py            ← Join BOM numerik (7)
-│   ├── test_key_normalization.py   ← Normalisasi kunci join (13)
-│   ├── test_float_precision.py     ← Presisi 15 digit (idempotency) (10)
-│   ├── test_logging.py             ← Logging framework (5)
-│   ├── test_frozen_paths.py        ← Path frozen-mode exe (seed sidecar) (7)
-│   ├── test_temporal.py            ← Analisa temporal (52)
-│   ├── test_priority.py            ← Money view + benchmark peer (41)
-│   ├── test_data_quality.py        ← 7 pemeriksaan kualitas data (58)
-│   ├── test_period_compare.py      ← Compare periode bulan-ke-bulan (23)
-│   ├── test_filter_semantics.py    ← Semantik filter + fmt_id (9)
-│   ├── test_ui_structure.py        ← Struktur paket ui/ (manifest + offscreen) (16)
-│   ├── test_v270_wave1.py          ← Regresi fix audit v2.7.0 gel. 1 (8; v2.10.0:
-│   │                                 kontrak PeriodWorker pindah ke test_v2100.py)
-│   ├── test_v270_wave2.py          ← Regresi fix audit v2.7.0 gel. 2 (23)
-│   ├── test_v270_wave3.py          ← Regresi fix audit v2.7.0 gel. 3 (6)
-│   ├── test_v270_wave4.py          ← Regresi fix audit v2.7.0 gel. 4 (10)
-│   ├── test_v280.py                ← Regresi v2.8.0–v2.8.3: pop-up detail + kolom % to BOM
-│   │                                 + busy feedback (33)
-│   ├── test_v290.py                ← Regresi v2.9.0: Stage 15 hari tersangka + tab
-│   │                                 Hari Mencurigakan + istilah awam + cache perf (35)
-│   ├── test_v2100.py               ← Regresi v2.10.0+v2.10.1: pembanding multi-file +
-│   │                                 tipikal + bukti bulan-lalu + fix path status (64)
-│   ├── test_v2102.py               ← Regresi v2.10.2+v2.10.3: drill-down banding +
-│   │                                 kolom perubahan + audit underscore/pop-up basi (67)
-│   ├── test_v2110.py               ← Regresi v2.11.0: slicer multi-select (3)
-│   ├── test_v2120.py               ← Regresi v2.12.0: tab Follow Up (42)
-│   ├── test_v2121.py               ← Regresi v2.12.1: perf tombol (30)
-│   ├── test_v2122.py               ← Regresi v2.12.2: UI/UX fix batch (31)
-│   ├── test_v2123.py               ← Regresi v2.12.3: Opsi A + BULAN LALU + filter header (27)
-│   ├── test_v2124.py               ← Regresi v2.12.4: sidebar/slicer dihapus + funnel semua kolom + hint dihapus (28)
-│   ├── test_v2125.py               ← Regresi v2.12.5: header anti-terpotong + guard klik-ganda (12)
-│   ├── test_v2130.py               ← Regresi v2.13.0: PROFIL baris + KELEBIHAN vs peer (24)
-│   ├── test_v2131.py               ← Regresi v2.13.1: tab Scorecard + insights (25)
-│   ├── test_v2132.py               ← Regresi v2.13.2: persentil peer + Benford + panel DQ (7)
-│   ├── test_v2133.py               ← Regresi v2.13.3: tren + pratinjau ambang + impor TL (20)
-│   ├── test_v2134.py               ← Regresi v2.13.4: fix 'Hari Data BARU' + FutureWarning (10)
-│   ├── test_v2135.py               ← Regresi v2.13.5: klik-2× dihapus + pop-up + follow-up hari (29)
-│   ├── test_v2136.py               ← Regresi v2.13.6: gel-A audit — scroll + teks + banner (16)
-│   ├── test_v2137.py               ← Regresi v2.13.7: gel-B engine cepat — ekivalensi oracle vektorisasi (14)
-│   ├── test_v2138.py               ← Regresi v2.13.8: gel-C — kunci ketiadaan dead code + mixin (16)
-│   ├── test_v2139.py               ← Regresi v2.13.9: pop-up ringkas + guard tekan#1 funnel (15)
-│   ├── test_v21310.py              ← Regresi v2.13.10: gel-1 — kejujuran interaksi inti (11)
-│   ├── test_v21311.py              ← Regresi v2.13.11: gel-2 — kejujuran angka & first-run (20)
-│   ├── test_v21312.py              ← Regresi v2.13.12: gel-3 — bantuan & teks jujur (26)
-│   ├── test_v21313.py              ← Regresi v2.13.13: gel-4 — perf/fokus/polish (24)
-│   ├── test_v21314.py              ← Regresi v2.13.14: gel-5 — sisa P3 sulit (18)
-│   ├── test_v21315.py              ← Regresi v2.13.15: gel-6 — 13 sisa P3 penutup (16)
-│   ├── test_v2140.py               ← Fitur v2.14.0: olah REKAP MENTAH — E2E + golden (33;
-│   │                                 2 UI alur-2-langkah ditulis-ulang jujur utk sekali-jalan)
-│   └── test_v2150.py               ← Fitur v2.15.0: SEKALI JALAN — parity golden + UI (32)
-├── .github/workflows/ci.yml        ← CI: matrix Python × OS, lint + 1151 test
-├── waste_anomaly/
-│   ├── __init__.py                 ← __version__ single-source (2.10.1)
-│   ├── frozen.py                   ← Resolusi path PyInstaller exe vs dev (v2.4.1)
-│   ├── config.json                 ← Thresholds + sheet name candidates
-│   ├── pipeline.py                 ← Orchestrator 14 stage + cancel_check (in-memory)
-│   ├── schema.py                   ← Validasi skema input (anti degradasi senyap)
-│   ├── logging_setup.py            ← Rotating file log + hook exception
-│   ├── loader.py                   ← Excel loaders (auto-detect sheet + normalisasi 15 digit)
-│   ├── stages.py                   ← 14 stage replika M code (idempotent v2.3.2)
-│   ├── day_focus.py                ← Stage 15 (v2.9.0): bukti hari tersangka per anomali
-│   ├── signals.py                  ← 12 sinyal anomali + composite score (max 19)
-│   ├── temporal.py                 ← Analisa temporal (waste/hari, weekday, alasan×hari)
-│   │                                 — dipakai export + KPI unit note
-│   ├── priority.py                 ← Money view + benchmark peer — dipakai export + drill
-│   ├── data_quality.py             ← 7+1 pemeriksaan kualitas data — pipeline + export + DQ card
-│   ├── period_compare.py           ← Banding 2 periode + auto key_akhir
-│   ├── period_history.py           ← Pembanding multi-file: label bulan + agregat + Tipikal +
-│   │                                 bukti hari vs bulan lalu + persist (v2.10.0)
-│   ├── rekap_import.py              ← Olah REKAP MENTAH (v2.14.0 convert+ekspor; v2.15.0 tiga
-│   │                                 helper sekali-jalan dipanggil pipeline: ensure_rekap_header
-│   │                                 + normalize_rekap_values + inject_bom_from_raw_rows)
-│   ├── insights.py                 ← Analisa scorecard v2.13.1: resto_intensity, money_ranking,
-│   │                                 coverage_report, systemic_days, weekday_real, branch_trend
-│   ├── profile.py                  ← Stage 15b (v2.13.0): PROFIL baris + KELEBIHAN vs peer
-│   ├── followup.py                 ← Identitas baris + daftar follow-up + export + resolusi (v2.12.0/v2.13.3)
-│   ├── exporter.py                 ← Multi-sheet xlsx writer + mode streaming
-│   └── utils.py                    ← Helper (load_config, norm_text, dll)
-├── data/                           ← (opsional) letakkan DATA_WASTE.xlsx di sini
-│   └── README.md
-├── logs/                           ← (auto-generated) rotating file log
-├── output/                         ← Output Excel tersimpan di sini
-│   └── .gitkeep
-├── followup.json                   ← (auto-generated) daftar follow-up
-└── followup_resolved.json          ← (auto-generated) status resolusi TL
+├── MULAI.bat / SETUP.bat / BUILD_EXE.bat   ← entry point, install, build exe
+├── ui_app.py                               ← launcher tipis (pythonw, tanpa CMD)
+├── ui/                                     ← paket UI PySide6 (14 file):
+│   ├── app.py                              ← MainWindow + 6 tab + Bantuan F1
+│   ├── view_pipeline / view_anomali / view_hari /
+│   │   view_scorecard / view_periode / view_followup.py
+│   ├── workers.py                          ← QThread: pipeline/export/history
+│   ├── models.py                           ← tabel virtualized (PandasTableModel)
+│   └── widgets.py, theme.py, state.py, shared.py, followup_table.py, icons.py
+├── waste_anomaly/                          ← engine:
+│   ├── pipeline.py                         ← orchestrator 14 stage + cancel
+│   ├── stages.py                           ← replika M code (idempotent)
+│   ├── signals.py                          ← 12 sinyal + composite score
+│   ├── rekap_import.py                     ← olah rekap mentah / folder BJMHAS
+│   ├── day_focus.py / profile.py           ← bukti hari & profil baris
+│   ├── period_history.py / period_compare.py ← banding multi-bulan
+│   ├── insights.py                         ← analisa scorecard
+│   ├── temporal.py / priority.py / data_quality.py ← sheet analisa
+│   ├── exporter.py                         ← xlsx writer + mode streaming
+│   ├── schema.py / loader.py / logging_setup.py / frozen.py / utils.py
+│   └── config.json                         ← thresholds + nama sheet (editable)
+├── tests/                                  ← 52 file, 1.151 test pytest
+├── .github/workflows/ci.yml                ← CI matrix Python × OS
+├── sample_workbook.xlsx                    ← fixture test in-repo
+└── requirements.txt · LICENSE · waste_anomaly.spec
 ```
 
-## Stage Pipeline (14 Stage, replika M code)
-
-| Stage | Fungsi |
-|-------|--------|
-| 1 | Source & cleanup: drop TOTAL/PIC/KATEGORI/STATUS/PENYEBAB, coerce hari 1-31 numeric, filter JENIS ∈ {SUSUT, TRIAL, WASTE} |
-| 2 | Per-row daily stats: TOTAL, MAX, AVG, AVG AKTIF, MEDIAN AKTIF, SECOND MAX, HARI MAX, rasio, share, single-day, scale-signal |
-| 3 | Reason summary: KETERANGAN GABUNGAN, KONTRIBUSI TERBESAR, SOURCE DATA GABUNGAN |
-| 4 | Group totals: MAX TOTAL, AVG TOTAL by (KETERANGAN, NAMA BARANG, SOURCE DATA) |
-| 5 | BOM join: TOTAL BOM, Rill % to BOM |
-| 6 | Peer summary: PEER COUNT, PEER MEDIAN TOTAL, PEER MEDIAN MAX by (NAMA BARANG, JENIS, KETERANGAN, SOURCE DATA) |
-| 7 | Top 3 summary: TopTotal list, TopBOM list per (JENIS, NAMA BARANG) |
-| 8 | Merge semua summary (left joins) |
-| 9 | DATABASE_SATUAN join: 11 kolom kategori helper |
-| 10 | Helper / STATUS (Sesuai/Tidak Sesuai) / % to BOM |
-| 11 | 12 sinyal anomali + ANOMALY SCORE + STATUS + REASONS + KATEGORI ANOMALI + RANGKING WASTE |
-| 12 | Expand analysis (no-op — sudah di-expand di stage 11) |
-| 13 | Cleanup temporary columns |
-| 14 | Final column order (mengikuti M code) |
-
-## Persyaratan
-
-- **Python 3.10+** (cek: `python --version`)
-- **Windows** untuk `.bat` files (Mac/Linux: jalankan `python ui_app.py` langsung)
-- Dependencies: **pandas, numpy, openpyxl, PySide6, python-calamine** (5 paket — di-install oleh `SETUP.bat`, lihat `requirements.txt`)
-
-## Cara Download & Update
-
-1. Download ZIP repo: https://github.com/anandategarch/Waste/archive/refs/heads/main.zip
-2. Ekstrak
-3. Jalankan `SETUP.bat` (sekali saja)
-4. Siapkan `DATA_WASTE.xlsx` Anda (query → olah di Excel → save dengan struktur 53 kolom standar)
-5. Jalankan `MULAI.bat` → Browse `DATA_WASTE.xlsx` Anda → Mulai Pipeline
-
-**Untuk run berikutnya (data baru):**
-1. Replace `DATA_WASTE.xlsx` Anda dengan file baru (overwrite / copy paste)
-2. Jalankan `MULAI.bat` → Browse file → Mulai Pipeline
-
-> **Tip:** Pipeline idempotent. Bisa di-run di file output sendiri (`Waste_Anomaly_Report.xlsx`) atau file `DATA_WASTE.xlsx` yang sudah berisi output M code — semua derived columns akan di-drop & dihitung ulang oleh Stage 1.
+> Data asli (rekap resto) **tidak di-track** (`.gitignore`) — letakkan file Anda di mana saja dan browse lewat UI.
 
 ## CLI Mode (tanpa UI)
-
-Pipeline berjalan **in-memory** — tidak menulis file Excel. Menulis laporan
-adalah panggilan TERPISAH lewat `exporter.export_to_excel` (jalur yang sama
-dipakai tombol 💾 Export Excel di UI):
 
 ```python
 from waste_anomaly.pipeline import run_pipeline
 from waste_anomaly.exporter import export_to_excel
 from waste_anomaly.utils import load_config
 
-summary = run_pipeline(
-    workbook_path="data/rekap.xlsx",
-    key_akhir=31,
-    progress_callback=lambda msg, pct: print(f"[{pct:.0f}%] {msg}"),
-)
-df = summary["df"]  # DataFrame hasil semua stage (kolom output lengkap)
+summary = run_pipeline("data/rekap.xlsx", key_akhir=31,
+                       progress_callback=lambda msg, pct: print(f"[{pct:.0f}%] {msg}"))
+df = summary["df"]  # DataFrame hasil semua stage (in-memory)
 print(summary["total_rows"], "baris •", summary["prioritas_count"], "prioritas")
 
-result = export_to_excel(
-    df, "output/Waste_Anomaly_Report.xlsx",
-    config=load_config(),
-    key_akhir=summary["key_akhir"],
-    log_lines=summary["log"].splitlines(),
-)
-print(result["output_path"])
+result = export_to_excel(df, "output/Waste_Anomaly_Report.xlsx",
+                         config=load_config(), key_akhir=summary["key_akhir"],
+                         log_lines=summary["log"].splitlines())
 ```
 
 ## Custom Thresholds
 
-Edit `waste_anomaly/config.json` → section `thresholds`. Atau pakai **editor threshold di tab Pipeline** (card "Threshold & Konfigurasi" — Simpan config.json / Reset Default). v2.7.0: editor kembali memvalidasi nilai (non-numerik / ≤ 0 ditolak dengan pesan, tidak lagi tersimpan sebagai string).
+Edit `waste_anomaly/config.json` → section `thresholds` (mis. `TH_SPIKE`, `STATUS_PRIORITAS`), atau pakai **editor threshold di tab Pipeline** (Simpan / Reset Default). Config korup otomatis diperingatkan di log & pipeline lanjut dengan default.
 
-```json
-{
-  "thresholds": {
-    "TH_SPIKE": 3,
-    "TH_MAX_AVG_AKTIF": 2.5,
-    "TH_PEER_HIGH": 3,
-    "STATUS_PRIORITAS": 8,
-    "STATUS_POTENSI": 5,
-    "STATUS_REVIEW": 3,
-    "S2_SCORE2_MIN": 4,
-    "S10_BOM_MIN": 0.10,
-    "QUADRANT_THRESHOLD": 0.5,
-    ...
-  }
-}
-```
+## Testing, CI & Packaging
 
-> Konfigurasi korup otomatis diperingatkan (warning di log + tab Ringkasan/Pipeline) dan pipeline lanjut dengan default — tidak lagi diam-diam mengganti threshold.
+- **Test:** `python -m pytest tests/ -x -q` — 1.151 test (golden regression, unit sinyal, UI offscreen, validasi skema, dsb.)
+- **CI:** GitHub Actions — lint (ruff) + full suite, matrix Python × OS
+- **EXE standalone:** jalankan `BUILD_EXE.bat` di Windows → `dist/WasteAnomalyDetection.exe` (jalan tanpa Python, config & log tersimpan berdampingan exe)
 
 ## Troubleshooting
 
-| Error | Solusi |
-|-------|--------|
-| `Tidak menemukan sheet untuk 'rekap_mentah'` | Pastikan workbook punya sheet `DATA_WASTE` / `Sheet1` / `REKAP_MENTAH` / `DATA`. Atau edit `config.json` → `input_sheets.rekap_mentah` untuk tambah nama kandidat. |
-| `BOM sheet tidak ditemukan` | BOM join dilewati. Sinyal S6/S7 tidak trigger. Tambahkan sheet `BOM` / `MASTER BOM` untuk mengaktifkan. |
-| `DATABASE_SATUAN tidak ditemukan` | Kolom HELPER/STATUS dari input dipertahankan; kalau tidak ada sama sekali tidak bisa dihitung ulang. Tambahkan sheet `DATABASE_SATUAN` untuk mengaktifkan. |
-| `File .xls` | Tidak didukung — save-as `.xlsx` dulu. |
-| `File output sedang dibuka di Excel` | Tutup filenya di Excel, lalu klik Export ulang (pesan errornya sekarang jelas). |
-| `ModuleNotFoundError: pandas / PySide6` | Jalankan `SETUP.bat` dulu. Atau manual di dalam `.venv`: `pip install -r requirements.txt`. (v2.8.1: matplotlib sudah tidak dipakai — hilang dari requirements.) |
-| `pip install PySide6` gagal `OSError: [Errno 2] ... qrc_...cpp.obj` (Windows) | Batas path 260 karakter (MAX_PATH). Jalankan `SETUP.bat` v2.6.1+ (otomatis pakai `.venv`). Kalau masih gagal: pindahkan repo ke path pendek, atau aktifkan `LongPathsEnabled` (admin + restart) — lihat bagian Setup. |
-| UI error di Linux headless | Set env: `export QT_QPA_PLATFORM=offscreen` sebelum `python ui_app.py` (UI sekarang Qt/PySide6, bukan Tkinter). |
-| UI tidak terbuka | Pastikan Python 3.10+ terpasang (`python --version` atau `py -3 --version` — SETUP.bat/MULAI.bat v2.7.0 menerima keduanya). |
+| Masalah | Solusi |
+|---------|--------|
+| Sheet `rekap_mentah` tidak ditemukan | Pastikan ada sheet `DATA_WASTE`/`REKAP_MENTAH`/`DATA`, atau tambah kandidat nama di `config.json` |
+| `ModuleNotFoundError: pandas/PySide6` | Jalankan `SETUP.bat` dulu (membuat `.venv` lokal) |
+| File `.xls` | Tidak didukung — save-as `.xlsx` dulu |
+| Export gagal karena file terbuka di Excel | Tutup filenya, lalu klik Export ulang (pesan errornya menjelaskan) |
+| UI error di Linux headless | `export QT_QPA_PLATFORM=offscreen` sebelum `python ui_app.py` |
+| `pip install PySide6` gagal (path panjang Windows) | Pakai `SETUP.bat` versi terbaru (otomatis `.venv`); atau pindahkan folder ke path pendek |
 
-## Changelog v2.6.1 — Fix Installer Windows (venv otomatis)
+## Changelog
 
-**Pemicu nyata dari pengguna:** instalasi v2.6.0 di Windows gagal — `pip install -r requirements.txt` mati di `PySide6` dengan `OSError: [Errno 2] No such file or directory: ...\PySide6\qml\Qt\labs\assetdownloader\objects-Debug\...\.qt\rcc\qrc_..._init.cpp.obj`; hint pip sendiri menyebut *Windows Long Path support*.
-
-**Akar masalah (bukan bug aplikasi):** Python Microsoft Store menaruh package di path ±137 karakter; wheel PySide6 6.11 memuat file dengan path internal ±143 karakter; total 280 > batas 260 karakter Windows (MAX_PATH) → OS menolak membuat file.
-
-**Fix:**
-- **`SETUP.bat`**: cek Python → buat **`.venv`** di folder repo (sekali; dipakai ulang kalau sudah ada) → upgrade pip → install `requirements.txt` **ke `.venv`** → verifikasi import termasuk `PySide6`. Branch error khusus `:pipfail` menjelaskan 2 solusi: pindah repo ke path pendek (mis. `C:\Waste`) atau aktifkan `LongPathsEnabled` (admin + restart).
-- **`MULAI.bat`**: otomatis pakai `.venv\Scripts\python.exe` kalau ada (fallback: `python` global); banner disegarkan dari jadul v2.4.1/"10 tab" ke v2.6.x/8-view.
-- **`BUILD_EXE.bat`**: PyInstaller di-install & dijalankan dari `.venv`; error jelas kalau SETUP.bat belum dijalankan.
-- **README**: bagian Setup menjelaskan kenapa `.venv` (dengan matematika panjang path), tabel troubleshooting + row khusus error long-path + fix baris Linux headless yang masih menyebut Tkinter/TkAgg.
-- **Hardening anti-terpotong UI** — audit ulang VLM berukuran kecil (zoom 3× + ground-truth numerik widget) menemukan pelanggaran yang lolos audit 13/13 v2.6.0: header kolom ter-elide TENGAH di jendela sempit ("NAMA RESTO"→"MA REST", "KETERANGAN"→"TERANGA") dan tabel tidak re-fit saat window di-resize (kolom terakhir terpotong di tepi + scrollbar sia-sia):
-  - `ui/widgets.py` `DataTable._auto_columns`: **lantai lebar kolom = lebar teks header** (sel bisa wrap, header tidak — lantai header satu-satunya jaminan struktural); pass-2 menekan kolom konten-lebar ke arah lantai SEBELUM menyerah pada scrollbar; dukungan `narrow_hide` (kolom disembunyikan responsif saat sempit, muncul kembali saat melebar — disembunyikan ≠ terpotong); re-fit saat lebar viewport berubah >24px (ambang anti loop umpan balik scrollbar ~14px).
-  - `ui/app.py`: sidebar menyusut PROPORSIONAL saat window kecil (stretch 3:12, min 260→230px) — dulu menahan ~300px & memiskinkan view (viewport tabel hanya 662px di window 1024).
-  - `ui/view_anomali.py`: tabel anomali 10→7 kolom — MAX, HARI MAX, RANGKING WASTE dihapus (semuanya tampil di panel detail + Jelajah + export; RANGKING mengulang ranking tabel itu sendiri); JENIS masuk daftar `narrow_hide`.
-  - Hasil terukur: **0 scrollbar horizontal di 1440×900 (7 kolom penuh) dan 1024×700 (6 kolom inti penuh)** — verifikasi E2E + VLM PASS kedua ukuran; 366 test tetap hijau.
-- Core `waste_anomaly/` TIDAK tersentuh — golden regression utuh (25.901 baris / 399 anomali / 41 prioritas).
-
-## Changelog v2.6.0 — "Rebuild Ulang": PySide6 Anomaly Workbench
-
-**Perintah user:** *rebuild ulang UI tapi tetap di Python offline, jangan ada teks yang terpotong atau grafik yang terpotong, orientasi UI untuk temukan anomali; UI/tombol tak perlu atau duplikat hapus.*
-
-### UI baru (total rebuild — 15 file Tkinter dihapus, 16 file PySide6)
-- **Framework**: Tkinter → **PySide6 6.x (Qt6)** — layout system yang menegosiasikan ukuran widget (jaminan struktural anti-terpotong); app tetap 100% offline (`pip install PySide6` sekali).
-- **Orientasi anomali**: view default = **Anomali** — tabel 797 baris anomali ter-ranking skor tanpa cap, pewarnaan severity per baris, panel detail (12 sinyal, peer, uang, KETERANGAN) + drill 1-klik cabang/item/alasan + ambang **Skor ≥** + KPI terfilter.
-- **8 view**: Anomali · Jelajah (gabungan Dashboard+Hasil+Viz+Compare lama) · Waktu · Uang · Peer (gabungan Quadrant+Rate+Compare) · Kualitas Data · Banding Periode · Pipeline (gabungan Run+Ringkasan+Konfigurasi+Bantuan-dialog).
-- **State arsitektur**: god-object 109 metode → `AppContext(QObject)` (signal data_ready/filters_changed/status/log_line) + views berbayang — tiap view punya `refresh()`/`on_shown()` (lazy render H2 dipertahankan).
-- **Tabel**: `PandasTableModel` + `QTableView` — virtualized 25.901 baris (dulu cap 500), sort numeric-aware klik header, auto-fit kolom proporsional ke viewport, **wrap multi-baris dengan tinggi baris dihitung manual** (bug Qt: `resizeRowsToContents` mengabaikan wrap), ElideNone, tooltip sel & header.
-- **Chart anti-terpotong**: `MplCanvas` dengan lantai 85% lebar desain + melebar penuh saat window besar; `ChartCard` = QScrollArea (jendela kecil → scrollbar, bukan potong); **grid responsif** 2↔1 kolom + chart berdesain lebar selalu 1 baris penuh; re-placement ditunda ke tick berikutnya (viewport final).
-- **Tombol/tabbars**: export Excel global di toolbar (dulu duplikat konteks), popup log → panel log permanen, "⟳ Refresh Semua" dihapus (render deterministik dari signal), tab label tak pernah terpotong tanpa ellips.
-- **Fitur lama SEMUA dipertahankan**: profil filter (filters.json), export 10 sheet, compare periode + waste/hari, threshold editor + atomic save, banding 2 cabang, cancel antar-stage, keyboard Ctrl+F, ikon app, frozen-path sidecar exe.
-
-### Perbaikan core (2 bug chart lama, tanpa menyentuh pipeline)
-- `chart_rate_league`: legend "5% threshold (blatant)" terpotong di tepi figure SEJAK APLIKASI LAMA (bahkan pada ukuran desain) → legend dipindah ke bawah chart (ncol=2, label ringkas).
-- `chart_weekday_effect`: label tick kelas hari ("(7, 14, 21, 28)…") saling tumpang tindih → dipadatkan tanpa spasi.
-
-### Verifikasi (standar "no mistakes")
-- E2E offscreen + data riil 25.901 baris: pipeline 17 s, golden regression **utuh** (25.901 baris / 399 anomali / 41 prioritas), 8 view render tanpa error, drill 797→49 baris, rentang hari, export Excel 8,8 MB sukses.
-- **Audit visual AI (VLM) 13 screenshot — 13 PASS** (8 view + 3 state interaksi + 2 ukuran jendela kecil) setelah 6 iterasi perbaikan (kolom tabel auto-fit, wrap manual, grid responsif, lantai canvas, stretch kolom, elide tab). Bukti piksel: sel 2-baris ter-render lengkap; judul chart muat pada lantai 85%.
-- 363 test lama tetap hijau (core tak tersentuh) + 12 test struktural baru.
-
-## Changelog v2.5.0 — "Kerjakan Semua (Analisa)": 4 Tab Analisa Baru + Drill-Down Semua Tab
-
-Dipicu audit analisa: 12 sinyal solid sebagai **detektor pola**, tapi ada 6 blind spot terukur — event single-day terbesar (96.480 GR BASIC MIE hari-9) lolos berlabel "Normal", baris Prioritas Tinggi hanya 0,5% dari total waste, peer mati untuk event langka (median termasuk cabang nol), tanpa analisa temporal (padahal pola hari mod-7 +35% ada di data), 119 baris waste tanpa BOM invisibel, dan agregat mencampur satuan. v2.5.0 menambal semuanya dengan **4 modul analisa murni baru + 4 tab UI baru + perluasan drill-down**.
-
-### P1 — Tab "📅 Temporal" (analisa dimensi waktu)
-- `waste_anomaly/temporal.py`: `waste_per_day`, `weekday_pattern` (kelas hari % 7), `weekday_effect` (deteksi pasangan kelas peak siklik), `reason_by_day` (matrix alasan×hari), `reason_weekday_ratio` (efek peak per alasan), `unit_summary`.
-- Chart: **waste per hari** (hari peak di-highlight merah + catatan "+N%"), **weekday effect** (mean per baris aktif per kelas + garis rata-rata), **heatmap alasan×hari** (top-9 alasan, kapan terjadi). Tabel rasio alasan.
-- Angka nyata pada data sampel: kelas peak (5,6) → +35% (369,7 vs 273,6); SUSUT +42%, Cancel Nota +39% di hari peak; TRIAL datar 1,00×; Kualitas Internal justru 0,58×.
-
-### P2 — Tab "💰 Money View" (prioritas magnitude)
-- `waste_anomaly/priority.py`: `money_view` (top waste rows APA PUN statusnya + Share %/Kumulatif %), `focus_score` (60% magnitude percentile + 40% anomali, 0-100), `focus_class` (Fokus Utama ≥ 70 / Sekunder ≥ 50 / Rutin), `benchmark_items`, `reason_profile`, `reason_share`, `susut_benchmark`.
-- Chart: **top money rows** (diwarnai FOCUS CLASS), **Pareto item** (satuan eksplisit di label). Tabel money (top 100) + benchmark.
-- Mengisi gap audit: top row KULIT PANGSIT GGPDAA 299.855 kini tampil teratas (sebelumnya "Normal" dan tak terlihat di view prioritas).
-
-### P4 — Benchmark peer AKTIF (di tab Money View)
-- Peer median dihitung **hanya dari cabang yang punya waste** pada item tsb — memperbaiki blind-spot peer lama (median termasuk cabang nol → rasio 0 → S8/S9/S10 mati justru untuk event langka).
-- Data sampel: **239 pasangan item×cabang** kini ter-flag "Di Atas Peer" (≥ 2× median peer aktif) — dulu invisibel.
-
-### P6 — Tab "🧹 Data Quality" (pemeriksaan otomatis)
-- `waste_anomaly/data_quality.py` — 7 pemeriksaan defensif: nilai negatif (error); SATUAN spasi-tersembunyi/NBSP; SOURCE DATA varian kapital (memecah peer group); KETERANGAN terfragmentasi (prefix); waste tanpa BOM; grup resto×item terpecah antar source (dilute sinyal); baris nol (info struktur).
-- Angka data sampel: 2.039 baris satuan 'PACK'NBSP, 12.086 baris source varian 'dan/DAN', 119 baris waste tanpa BOM (190.836 qty), 318 grup terpecah, 97 baris 'Kualitas' terfragmentasi.
-
-### P9 — Tab "🔀 Compare Periode" (bulan ke bulan)
-- `waste_anomaly/period_compare.py`: `auto_key_akhir` (deteksi hari aktif terbesar file B), `compare_periods` — summary 7 metrik, per-JENIS, cabang mover, item mover (top-100 |delta|), item baru/hilang.
-- Worker thread + progress log + guard anti-run-bersamaan; hasil di 6 halaman tabel.
-
-### P3/P5/P7 — Ekstensi Compare, KPI jujur, satuan
-- Tab Compare: **chart profil alasan share %** 2 cabang + **tabel profil alasan semua cabang + benchmark SUSUT** (rank & share per cabang).
-- KPI Dashboard: breakdown **per satuan** (GR/PCS/PACK + catatan campuran) + label serupa di Money View; Pareto item menulis satuan di label.
-
-### P8 — Drill-down di SEMUA tab
-- **Visualisasi**: 4 chart galeri (Status/Cabang/Top Items/Pareto Alasan) kini bisa **diklik** → set filter + lompat ke Dashboard (handler `on_click` baru di charts.py, kontrak sama dengan dashboard).
-- **Hasil**: double-click baris Detail/Anomali → filter cabang+item + lompat.
-- **Quadrant**: double-click baris item → filter item (semua cabang).
-- **Money View**: double-click baris → filter cabang+item.
-- **Dashboard**: dropdown filter **KETERANGAN** baru (sync 2 arah dengan chip/klik chart).
-
-### Export & infrastruktur
-- Export Excel kini **10 sheet**: +Waste per Hari, +Alasan×Hari, +Money View, +Data Quality (param `extra_sheets` di exporter — backward-compatible, default tetap 6).
-- Bug diperbaiki saat pengembangan: `_wire_patch_click` meng-unpack `patch.contains()` (tuple truthy — patch pertama selalu match); item queue `period_done` 3-tuple (kontrak dispatcher); `load_rekap_mentah` butuh arg config.
-- `ui/app.py` kini 15 mixin (14 tab); test struktural diperbarui (MRO dinamis, bukan posisi hard-coded).
-- **320 test** (naik dari 150): 51 temporal + 40 priority + 58 data_quality + 21 period_compare + struktur diperbarui. CI: ruff fatal clean. Verifikasi E2E runtime (Xvfb): 14 tab render, drill-down 5 jalur, compare-periode 24 detik, export 10 sheet.
-
-## Changelog v2.4.1 — "Double Check": Fix Path Frozen-Mode PyInstaller
-
-Ditemukan saat verifikasi ulang menyeluruh v2.4.0 (semua klaim diuji runtime, bukan cuma percaya commit message).
-
-### Bug — file user hilang senyap di mode exe (KRITIS)
-- **Akar masalah**: `CONFIG_PATH` (utils.py), `PROFILES_PATH` (filters.py), dan `APP_DIR` (ui/shared.py) resolve dari `Path(__file__)`. Di exe PyInstaller, `__file__` menunjuk ke dir ekstraksi temp `_MEIPASS` yang **DIHAPUS saat aplikasi ditutup** — threshold yang disimpan lewat tab Konfigurasi, profil filter, dan folder `data/` lenyap tanpa jejak. Ke balikan dari klaim BUILD_EXE.bat ("config.json disimpan berdampingan dengan exe").
-- **Fix**: modul baru `waste_anomaly/frozen.py` — satu sumber resolusi: file **writable** (config sidecar, filters.json, data/, logs) → folder **EXE** (`Path(sys.executable).parent`); resource **read-only** (ikon, config bundled) → `_MEIPASS` (`bundle_dir()`).
-- **First-run seed**: saat exe dijalankan pertama kali, config bundled otomatis disalin ke `config.json` di samping exe — sekarang klaim BUILD_EXE.bat benar-benar terimplementasi. Folder read-only → fallback baca bundled (pipeline tetap jalan).
-- **Ikon**: dicari di `bundle_res_dir()` (frozen) lalu `app_dir()` (dev) — jalan di kedua mode.
-- **Log**: mode exe menulis `logs/` di samping exe (dulu `cwd` — bisa System32 kalau shortcut punya "Start in" berbeda).
-- **Tab Konfigurasi** kini menampilkan & menulis ke path dinamis (`_active_config_path()`).
-
-### Cleanup
-- **12 pesan log duplikat** "Suppressed: Suppressed …" (sisa penggantian mekanis v2.4.0) → "Suppressed: …".
-- Import `simpledialog` tak terpakai di `tab_dashboard.py` dihapus (F401/F811).
-- Docstring `logging_setup` — contoh pemakaian `install_tk_exception_hook` dibenarkan.
-
-### Test
-- **+10 test** (`test_frozen_paths.py`): dev-path tak berubah (golden aman), seed first-run, sidecar existing menang (edit user bertahan), fallback read-only, roundtrip save/load profil frozen, `app_dir()`/`bundle_res_dir()`. Total **150 test** semua LULUS.
-
-### Verifikasi runtime (bukan cuma test)
-- Golden run data asli: 25.901 baris / 399 anomali / 41 prioritas — **MATCH** (key_akhir=31).
-- Cancel mid-run: pipeline berhenti persis di gate Stage 2 (`cancelled=True`, log terpotong di gate) — **PASS**.
-- Skema lowercase: gagal keras + saran rename — **PASS**.
-- Exporter 60k baris: peak memori **7 MB** (dulu OOM ~1,8 GB) — **PASS**.
-
-## Changelog v2.4.0 — "Kerjakan Semua": Arsitektur Modular + Infrastruktur Profesional Penuh
-
-### Arsitektur — god-object dipecah (audit UI #1)
-- **`ui_app.py` 3.256 baris / 102 metode → paket `ui/` 14 file**: 11 mixin (base + 10 tab) + shared + widgets + komposisi. Metode dipindah **VERBATIM via ekstraksi AST** (bukan tulis ulang) — terverifikasi: set 102 metode identik, 101/101 source identik byte-per-byte, 8 dekorator `@staticmethod`/`@classmethod` dipertahankan, MRO = 11 mixin + `tk.Tk`. Menambah tab ke-11 kini menyentuh **1 file baru + 1 baris komposisi** (dulu 5+ situs tersebar).
-- **Registry font** menggantikan pola `global` lama (yang hanya bekerja saat semua kode di satu file): `shared.rebind_fonts()` mem-propagasi nilai font ke semua modul mixin saat startup.
-- **`ui_app.py` tetap jadi entry point** — MULAI.bat & kebiasaan user tidak berubah.
-- **11 test struktural permanen** (`test_ui_structure.py`): manifest 102 metode, MRO, anti-duplikat antarmixin, dekorator, registry font, APP_DIR repo-root.
-
-### Cancel run yang jujur (audit UI #2)
-- **Hook `cancel_check` antar-stage di pipeline** — tombol "⏹ Batalkan Run" kini benar-benar menghentikan CPU di gate stage berikutnya (dulu: flag hanya dicek SETELAH pipeline selesai — hasil dihitung sampai tuntas lalu dibuang). Teruji: cancel setelah Stage 1 → log berhenti di Stage 2, Stage 11+ tidak pernah dijalankan.
-
-### Validasi skema input (audit data #5 — degradasi senyap)
-- **`waste_anomaly/schema.py`**: header lowercase/missing kini **gagal keras dengan pesan actionable** (dulu: `success=True` dengan analisa setengah mati — semua baris "Normal" padahal ada spike). Deteksi: kolom wajib hilang + saran near-miss case-insensitive, header duplikat, kolom hari kosong, nilai JENIS asing (warning).
-
-### Exporter streaming (audit data #2 — OOM 100k baris)
-- **Dual-mode otomatis**: ≤35.000 baris → mode normal (formatting penuh); di atasnya → **openpyxl `write_only`** (memori konstan; terverifikasi 60k baris sukses — dulu OOM-kill ~1,8 GB). Threshold bisa di-override via `config["output"]["streaming_threshold"]`. Handler `MemoryError` dengan pesan ramah.
-
-### Logging framework (audit UI #4)
-- **Rotating file log** `logs/waste_anomaly.log` (1 MB × 3 backup) + `report_callback_exception` hook Tk — exception di callback kini tercatat, tidak hilang di stderr.
-- **16 exception senyap (`except: pass`) diganti `_LOGGER.debug(...)`** — jejak audit penuh tanpa spam UI.
-
-### Test & CI
-- **140 test** (dari 44): +54 unit test S1–S12 (trigger/non-trigger/boundary persis di threshold/NaN/config-override), +13 skema & cancel, +13 exporter (paritas data antar-mode + streaming 60k), +5 logging, +11 struktural UI.
-- **CI GitHub Actions**: matrix Python 3.10/3.12 × Ubuntu/Windows — lint fatal (ruff E9,F63,F7,F82) + seluruh test + smoke import.
-
-### Packaging
-- **`BUILD_EXE.bat` + `waste_anomaly.spec`** (PyInstaller): .exe standalone tanpa Python di PC target, `console=False`, ikon multi-resolusi.
-- **Ikon aplikasi** (teal/coral, AI-generated) dipasang via `iconphoto` + `.ico` untuk exe.
-- Versi single-source 2.4.0 di semua situs (`__init__`, `APP_VERSION`, config.json, MULAI.bat, README).
-
-## Changelog v2.3.2 — Audit Profesional Lanjutan
-
-### Critical / High
-- **Idempotency sejati (F7)**: file Excel bisa mengandung *FP dust* (mis. `21.299999999999997` yang visually = `21.3`). Sebelumnya: run-1 vs run-ulang memberi **skor anomali berbeda** untuk data yang sama (402 → 403 — 5 baris di boundary threshold S3/S5 flip; terverifikasi test). Kini semua nilai float dinormalisasi ke **15 digit signifikan** (semantik penyimpanan Excel) saat load — konsisten dengan apa yang user & Power Query lihat. Golden: 399 anomali (41 prioritas, 358 potensi) — 4 dust-false-positive kini Normal, 1 dust-false-negative konsisten terdeteksi.
-- **Join BOM numerik (F1)**: `stages.py` memakai normalisasi `_key_str` (loader) — outlet numerik `1049.0` kini **match** dengan `"1049"` di sheet BOM. Sebelumnya: join gagal diam-diam → TOTAL BOM semua NaN → sinyal S6/S7 tidak pernah trigger.
-- **Test suite (44 test)**: `tests/` — golden regression end-to-end pada fixture `DATA_WASTE.xlsx` (25.901 baris), unit test normalisasi kunci, unit test join BOM, unit test presisi float, kontrak summary dict, validasi domain status, dan **test idempotency** (re-run pada output sendiri). Run: `python -m pytest tests/ -v` (~60 s).
-- **requirements.txt (F5)**: dependensi di-pin dengan alasan (matplotlib ≥ 3.9 untuk `tick_labels`, pandas 2.2.x teruji, calamine opsional). SETUP.bat kini install dari file ini.
-
-### Medium
-- **LICENSE (MIT)** ditambahkan (README sudah mengklaim sejak awal).
-- **QUADRANT_THRESHOLD (F4)** kini benar-benar dibaca dari config user oleh chart quadrant — sebelumnya hardcode 0.5, chart & tabel bisa tidak sinkron.
-- **Reset Default config (F3)** kini mencakup 20/20 key (sebelumnya 6 key baru tidak pernah di-reset).
-- **Save config atomic (F2)**: tmp + `os.replace` (pola `filters.py`) + validasi nilai > 0.
-- **Single-source version (L2)**: `__init__.py`, `APP_VERSION`, MULAI.bat, README — semua 2.3.2.
-- **MULAI.bat** banner diperbarui (10 tab, bukan 8).
-
-## Changelog v2.3.1 — Deep Audit & Fix
-
-### Critical (crash / korupsi data)
-- **UI freeze permanen**: exception apa pun di queue-drain loop mematikan polling → progress macet + tombol Run stuck disabled. Loop kini reschedule-first + tiap item di-guard.
-- **Crash log popup**: tombol X menghancurkan window tapi referensi tetap hidup → `TclError` berantai. Kini X = hide; popup auto-recreate; `append()` di-guard.
-- **Scroll mouse rusak total**: 5 binding `bind_all` saling menimpa → wheel menggerakkan canvas yang tersembunyi; tab Konfigurasi tak bisa di-wheel; tabel double-scroll. Kini satu dispatcher global (Windows ±120 / macOS ±small / Linux Button-4/5).
-- **Crash empty-data**: 0 baris valid setelah Stage 2 → `ValueError: Length mismatch`. Kini guard ramah + pesan jelas.
-- **Kolom hilang diam-diam**: merge DATABASE_SATUAN menimpa kolom bentrok (`SATUAN`, `NAMA BARANG` jadi `_x/_y`). Kini merge hanya kolom yang dibutuhkan + detektor bentrok.
-- **Bar chart menumpuk**: label ter-truncate duplikat → matplotlib menumpuk bar di posisi sama (data tersembunyi). Kini plot posisional + disambiguasi label.
-
-### High (UX & performa)
-- **Memory leak**: figure matplotlib tidak pernah di-dispose pada tiap re-render → RAM membengkak. Kini teardown penuh (disconnect cids → destroy widget → `fig.clf()`).
-- **Render storm**: ~18 figure digambar sinkron setelah pipeline selesai → UI membeku. Kini lazy per-tab (render saat tab dibuka) + refresh hanya tab aktif.
-- **Search lag**: tiap keystroke re-render 3 chart + 500 baris + `apply` row-wise. Kini debounce 300 ms + mask vectorized per-kolom.
-- **Kalkulasi M-fidelity**: `KONTRIBUSI TERBESAR` kini agregasi per-KETERANGAN (23% baris dulu salah); `KETERANGAN GABUNGAN` urutan per kontribusi; nama kolom kanonik (spasi, bukan underscore).
-- **Idempotency HELPER/STATUS**: re-run di output sendiri dulu menghancurkan 21.355 nilai HELPER/STATUS. Kini dipertahankan seperti TOTAL BOM.
-- **Dead Output-Excel UI** dihapus → diganti tombol **💾 Export Laporan Excel** (background thread, `PermissionError` friendly, 3.5× lebih cepat).
-- **Quadrant chart** kini pakai Key Akhir aktual (bukan hardcode /31) — titik tidak lagi mendarat di quadrant yang salah.
-- **Profil filter**: save kini konfirmasi overwrite; restore tidak lagi double-render; file `filters.json` atomic-save + auto-backup saat korup.
-- **Warna JENIS stabil** antar-run & antar-tab (dulu hash-based — bisa bentrok).
-- **Spinbox TclError**: input non-numerik tidak lagi crash handler.
-
-### Medium/Low
-- Window centering + clamp untuk layar 1366×768; font fallback cross-platform; sort kolom numeric-aware + indikator ▲/▼; label "Menampilkan N dari M baris"; chip label Indonesia; konfirmasi keluar saat pipeline jalan; tombol **⏹ Batalkan Run**; shortcut Ctrl+R/Ctrl+F; status `Timestamp`/`Key Akhir`/warning-config di Ringkasan; progress bar monotonic 0→100; make_sample rng fix; bersih-bersih dead code & duplikasi (helper `_format_cell`, `_apply_filters`, `_export_figures_png`).
-
-## Reference
-
-- M code sumber: Power Query `Waste` query (private repo)
-- Pattern UI: https://github.com/anandategarch/Inventory-Adjusment
+Riwayat lengkap per versi: lihat [Commit History](https://github.com/anandategarch/Waste/commits/main) — setiap rilis didokumentasikan detail di pesan commit.
 
 ## License
 
-MIT — bebas pakai, modify, distribute.
+[MIT](LICENSE)

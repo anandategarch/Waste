@@ -4,13 +4,13 @@ Letakkan `DATA_WASTE.xlsx` Anda di sini (atau di folder mana saja — browse via
 
 ## Workflow Anda
 
-```
-1. Query data dari sistem (Accurate / database / dll)
-2. Olah di Excel (manual / Power Query / formula)
-3. Save as DATA_WASTE.xlsx (struktur 53 kolom standar)
-4. Replace file lama (overwrite / copy paste)
-5. Run pipeline via MULAI.bat → Browse file → Mulai
-```
+Tiga cara memuat data dari tab **Pipeline** (tanpa olah manual di Excel):
+
+1. **🧮 Pilih File Sendiri** — file `DATA_WASTE.xlsx` standar 53 kolom
+2. **🧮 Olah & Jalankan REKAP MENTAH…** — file rekap mentah bulanan, sekali proses langsung jalan
+3. **📁 Proses dari Folder…** — folder berisi file `.xlsx` format BJMHAS (nama resto diambil dari nama file), semua digabung otomatis
+
+File lama cukup di-replace (overwrite) lalu run ulang — pipeline idempotent.
 
 ## Format Standar — `DATA_WASTE.xlsx` (53 kolom)
 
@@ -50,4 +50,4 @@ Kalau sheet BOM/DATABASE_SATUAN tidak ada, sinyal BOM (S6/S7) & STATUS (Sesuai/T
 
 - `.xlsx` (recommended)
 - `.xlsm`
-- `.xls` (legacy)
+- `.xls` — TIDAK didukung (save-as `.xlsx` dulu)
