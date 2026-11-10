@@ -87,6 +87,7 @@ from .loader import (
     _key_str,
     _normalize_columns,
     _read_excel_fast,
+    _sheet_tokens,
     find_sheet,
     list_sheets,
 )
@@ -222,71 +223,232 @@ def _promote_at(df: pd.DataFrame, hr: int) -> pd.DataFrame:
     return body
 
 
-def find_rekap_sheet(path: Path, config: dict,
-                     logger=None) -> tuple[str, int]:
-    """Resolve sheet rekap + baris header (0 = baris pertama).
+# ============================================================
+# v2.18.2 — SHEET SELECTION BERBASIS SKOR (audit data user: "Proses
+# dari Folder" → 5 dari 20 file salah baca sheet → Banding Periode
+# salah semua).
+#
+# BUKTI dari file user (HASIL OLAH REKAP MENTAH PROGRAM.xlsx vs
+# REKAP MENTAH_RILL YANG SEHARUSNYA.xlsx, folder DEVIASI WEEKLY):
+#   ✓ 15 file benar  — sheet REKAP MENTAH riil (2.971 baris/resto,
+#     JENIS WASTE/SO/BOM/…; nilai identik dgn rekap riil).
+#   ✗ 5 file SALAH (BDGSEK, MLGPAR, KGNSUD, BKSALT, BKSSUD) — yang
+#     terbaca sheet SEKSI DEVIASI: kolom NAMA BARANG/KATEGORI/JENIS/
+#     SATUAN/hari/Grand Total TANPA SOURCE DATA, JENIS bernomor seksi
+#     ('1.DEVIASI'…'8.BARANG KELUAR'), baris kosong interleaved.
+#     KGNSUD seharusnya 2.971 baris → terbaca 135 baris seksi
+#     '5.LOSS SURPLUS' saja; BDGSEK 1.246 → 211 ('1.DEVIASI').
+#
+# AKAR MASALAH: bila fase kandidat-nama gagal (sheet rekap riil tidak
+# bernama kandidat / header tergeser di bawah baris judul), fallback
+# lama mengambil sheet PERTAMA yang cocok schema lenient — sheet seksi
+# DEVIASI cocok schema itu dan muncul lebih duluan di workbook.
+#
+# FIX — nilai SEMUA sheet dgn SKOR BUKTI "rekap riil" lalu ambil
+# TERBAIK (bukan pertama):
+#   + nama sheet bertoken rekap+mentah (+6) / salah satunya (+3)
+#   + kolom SOURCE DATA (+5 — SEMUA format rekap riil user punya;
+#     sheet seksi DEVIASI tidak pernah)
+#   + kolom NAMA RESTO (+2), PIC (+1), KETERANGAN (+1), STATUS (+1)
+#   + fraksi nilai JENIS sampel yang kanonik rekap (WASTE/SO/BOM/…,
+#     prefix angka distrip dulu — '2.WASTE' dihitung WASTE) × 4
+#   − fraksi baris kosong pada sampel × 2 (ciri sheet seksi)
+# Fast-path: sheet kandidat bernama dgn skor ≥ _SCORE_HIGH langsung
+# dipakai — file normal (nama + schema sepakat) tak berubah perilaku
+# & kecepatan. Skor < _SCORE_MIN = meragukan → WARNING + flag
+# low_confidence (best-effort, anti silent-error).
+# ============================================================
 
-    1. Kandidat config (loader.find_sheet — exact lalu token unik;
-       "Rekap Mentah" token-match sheet "REKAP MENTAH" file user asli).
-       Sheet kandidat divalidasi schema (header baris 0); tak lolos →
-       lanjut fallback, BUKAN pakai mentah-mentah (sheet kandidat bisa
-       kebetulan bernama sama tapi beda isi).
-    2. Fallback: scan SEMUA sheet — deteksi baris header schema rekap
-       (≤6 baris pertama). Ambil sheet pertama yang lolos.
-    Return (nama_sheet, header_row). Raise RekapImportError bila tidak
-    ada sheet rekap sama sekali."""
+# Nilai JENIS kanonik sheet rekap riil (terukur dari file user asli:
+# TEGAR multi-resto + BJMHAS per-file + varian B.10xx).
+_REKAP_JENIS_VALUES = frozenset({
+    "WASTE", "SUSUT", "TRIAL", "SO", "SO RIIL STORE", "BOM",
+    "BARANG MASUK", "BARANG KELUAR", "STOK AWAL", "STOCK AWAL",
+    "RETUR", "REWORK",
+})
+
+_SCORE_HIGH = 9.0    # ≥ ini = yakin rekap riil → fast-path (tanpa scan)
+_SCORE_MIN = 4.0     # < ini = meragukan → WARNING + flag low_confidence
+_PEEK_ROWS = 48      # baris peek per sheet (header ≤6 + sampel JENIS)
+
+
+def _jenis_canonical(v: Any) -> str:
+    """Normalisasi SATU nilai JENIS: strip + upper + buang prefix angka
+    ('2.WASTE' → 'WASTE' — mirror normalize_rekap_values v2.17.5).
+    None/NaN → '' (baris kosong interleaved tidak dihitung kanonik)."""
+    if v is None:
+        return ""
+    s = str(v).strip().upper()
+    if not s or s == "NAN":
+        return ""
+    return re.sub(r"^\d+\.\s*", "", s)
+
+
+def _score_rekap_evidence(sheet_name: str, cols_upper: set,
+                          jenis_sample: list, n_blank: int = 0) -> float:
+    """Skor "seberapa mirip sheet ini rekap mentah RIIL" (makin tinggi
+    makin yakin). Bobot: lihat komentar blok v2.18.2 di atas."""
+    score = 0.0
+    toks = _sheet_tokens(sheet_name)
+    if {"rekap", "mentah"} <= toks:
+        score += 6.0
+    elif toks & {"rekap", "mentah"}:
+        score += 3.0
+    if "SOURCE DATA" in cols_upper:
+        score += 5.0
+    if "NAMA RESTO" in cols_upper:
+        score += 2.0
+    if "PIC" in cols_upper:
+        score += 1.0
+    if "KETERANGAN" in cols_upper:
+        score += 1.0
+    if "STATUS" in cols_upper:
+        score += 1.0
+    vals = [j for j in jenis_sample if j]
+    if vals:
+        frac = sum(1 for j in vals if j in _REKAP_JENIS_VALUES) / len(vals)
+        score += 4.0 * frac
+    if jenis_sample:
+        score -= 2.0 * (n_blank / len(jenis_sample))
+    return score
+
+
+def _peek_rekap(path, sheet_name: str,
+                require_resto: bool) -> tuple[int | None, float]:
+    """Peek 1 sheet: deteksi baris header (≤6) + skor bukti rekap.
+
+    Return (header_row, skor) — (None, 0.0) bila tak ada header schema.
+    require_resto=True → schema STRICT (NAMA RESTO wajib — jalur file
+    tunggal TEGAR); False → LENIENT (jalur folder BJMHAS).
+    """
+    try:
+        raw = pd.read_excel(path, sheet_name=sheet_name, header=None,
+                            nrows=_PEEK_ROWS, dtype=object)
+    except Exception:
+        return None, 0.0
+    if raw is None or raw.empty:
+        return None, 0.0
+    if require_resto:
+        hr = _detect_header_row(raw)
+    else:
+        hr = _detect_header_row_lenient(raw)
+    if hr is None:
+        return None, 0.0
+    headers = [_hdr_norm(h) for h in raw.iloc[hr].tolist()]
+    cols = {h for h in headers if h not in ("", "NONE", "NAN")}
+    # Sampel nilai JENIS (baris setelah header dalam peek) + hitung
+    # baris kosong interleaved (ciri sheet seksi DEVIASI).
+    jidx = headers.index("JENIS") if "JENIS" in headers else None
+    jenis_sample: list = []
+    n_blank = 0
+    if jidx is not None:
+        for row in raw.iloc[hr + 1:].itertuples(index=False, name=None):
+            jenis_sample.append(_jenis_canonical(row[jidx]))
+            if not any(v is not None and str(v).strip() != "" for v in row):
+                n_blank += 1
+    score = _score_rekap_evidence(sheet_name, cols, jenis_sample, n_blank)
+    return hr, score
+
+
+def _scan_best_rekap_sheet(path, config: dict | None, require_resto: bool,
+                           logger=None) -> tuple[str, int, float]:
+    """Resolve sheet rekap TERBAIK berbasis skor (v2.18.2).
+
+    1. FAST-PATH: sheet kandidat config (loader.find_sheet) di-peek —
+       header terdeteksi (boleh tergeser ≤6 baris, PERBAIKAN vs lama
+       yang wajib baris-0) & skor ≥ _SCORE_HIGH → langsung dipakai
+       (file normal: nama + schema sepakat — nol biaya scan).
+    2. FULL-SCAN: peek SEMUA sheet → skor → ambil TERTINGGI (seri:
+       kandidat bernama didahulukan via seed, lalu urutan workbook).
+    Raise RekapImportError bila tak ada sheet rekap sama sekali.
+    Return (nama_sheet, header_row, skor).
+    """
+    path = Path(path)
     sheets = list_sheets(path)
     if not sheets:
         raise RekapImportError(
             f"Workbook tidak punya sheet yang bisa dibaca: {path.name}")
+    if config is None:
+        config = load_config()
     candidates = list(config.get("input_sheets", {}).get("rekap_mentah", []))
     # Tambahan eksplisit "REKAP MENTAH" (nama sheet file user asli —
     # kandidat config memakai varian underscore/case lain).
     for extra in ("REKAP MENTAH", "rekap mentah"):
         if extra not in candidates:
             candidates.append(extra)
+    named = find_sheet(candidates, sheets)
 
-    # 1. Kandidat — validasi schema baris-0 sebelum percaya
-    name = find_sheet(candidates, sheets)
-    if name is not None:
+    best_name: str | None = None
+    best_hr: int | None = None
+    best_score = 0.0
+
+    # 1. Fast-path — kandidat bernama dgn bukti kuat
+    if named is not None:
         try:
-            df0 = _read_excel_fast(path, sheet_name=name, header=0, nrows=6)
-        except Exception as exc:  # v2.16.0: log, bukan diam jadi None
-            # Sebelumnya: sheet gagal dibaca → None diam-dia → fallback scan
-            # sheet lain. Kini di-log supaya user tahu sheet kandidat bermasalah.
-            _log(logger, f"[rekap_import] WARNING: sheet kandidat {name!r} "
-                         f"gagal dibaca saat validasi schema: {exc}")
-            df0 = None
-        if df0 is not None and not df0.empty:
-            df0 = _normalize_columns(df0)
-            cols = [str(c).strip().upper() for c in df0.columns]
-            if all(rc in cols for rc in ("NAMA RESTO", "JENIS", "NAMA BARANG")) \
-                    and sum(1 for c in cols if c in _DAY_SET) >= 3:
-                _log(logger, f"[rekap_import] sheet '{name}' (kandidat config)")
-                return name, 0
+            hr, score = _peek_rekap(path, named, require_resto)
+        except Exception as exc:  # anti diam — log lalu lanjut scan
+            _log(logger, f"[rekap_scan] WARNING: sheet kandidat {named!r} "
+                         f"gagal di-peek: {exc}")
+            hr, score = None, 0.0
+        if hr is not None and score >= _SCORE_HIGH:
+            _log(logger, f"[rekap_scan] {path.name}: sheet '{named}' "
+                         f"(kandidat, header baris {hr + 1}, skor "
+                         f"{score:.1f})")
+            return named, hr, score
+        if hr is not None:  # seed scan — jangan peek ulang sheet ini
+            best_name, best_hr, best_score = named, hr, score
 
-    # 2. Fallback — scan semua sheet + deteksi baris header
+    # 2. Full-scan — nilai semua sheet, ambil terbaik
     for sn in sheets:
+        if sn == named:
+            continue  # sudah di-peek di atas (seed)
         try:
-            raw = pd.read_excel(path, sheet_name=sn, header=None, nrows=8,
-                                dtype=object)
-        except Exception as exc:  # v2.16.0: log, bukan skip diam-diam
-            # Sebelumnya: sheet gagal dibaca → continue tanpa jejak. Kini
-            # di-log supaya user tahu ada sheet yg tak bisa diakses.
-            _log(logger, f"[rekap_import] WARNING: sheet {sn!r} tak bisa "
-                         f"dibaca saat scan fallback: {exc}")
+            hr, score = _peek_rekap(path, sn, require_resto)
+        except Exception as exc:
+            _log(logger, f"[rekap_scan] WARNING: sheet {sn!r} gagal "
+                         f"di-peek: {exc}")
             continue
-        hr = _detect_header_row(raw)
-        if hr is not None:
-            _log(logger, f"[rekap_import] sheet '{sn}' (deteksi schema, "
-                         f"header baris {hr + 1})")
-            return sn, hr
+        if hr is None:
+            continue
+        if best_name is None or score > best_score:
+            best_name, best_hr, best_score = sn, hr, score
 
-    raise RekapImportError(
-        f"Sheet REKAP MENTAH tidak ditemukan di {path.name}. Cari sheet "
-        f"ber-kolom NAMA RESTO + JENIS + NAMA BARANG + kolom hari 1-31 "
-        f"(sheet tersedia: {', '.join(sheets[:8])}"
-        f"{'…' if len(sheets) > 8 else ''}).")
+    if best_name is None or best_hr is None:
+        if require_resto:
+            raise RekapImportError(
+                f"Sheet REKAP MENTAH tidak ditemukan di {path.name}. Cari "
+                f"sheet ber-kolom NAMA RESTO + JENIS + NAMA BARANG + kolom "
+                f"hari 1-31 (sheet tersedia: {', '.join(sheets[:8])}"
+                f"{'…' if len(sheets) > 8 else ''}).")
+        raise RekapImportError(
+            f"Sheet REKAP MENTAH (lenient) tidak ditemukan di {path.name}. "
+            f"Cari sheet ber-kolom JENIS + NAMA BARANG + hari 1-31.")
+
+    via = "kandidat" if best_name == named else "scan skor"
+    _log(logger, f"[rekap_scan] {path.name}: sheet '{best_name}' ({via}, "
+                 f"header baris {best_hr + 1}, skor {best_score:.1f})")
+    if best_score < _SCORE_MIN:
+        _log(logger, f"[rekap_scan] WARNING: {path.name} — sheet "
+                     f"'{best_name}' skor rendah ({best_score:.1f} < "
+                     f"{_SCORE_MIN}): tanpa kolom SOURCE DATA / JENIS tak "
+                     f"kanonik — kemungkinan BUKAN sheet rekap mentah "
+                     f"penuh. Periksa isi file.")
+    return best_name, best_hr, best_score
+
+
+def find_rekap_sheet(path: Path, config: dict,
+                     logger=None) -> tuple[str, int]:
+    """Resolve sheet rekap STRICT + baris header (0 = baris pertama).
+
+    v2.18.2: delegasi ke _scan_best_rekap_sheet (seleksi berbasis
+    skor — lihat blok komentar v2.18.2). Schema strict = NAMA RESTO
+    + JENIS + NAMA BARANG + ≥3 hari; kandidat bernama kini juga lolos
+    bila header TERGESER (baris judul di atas — dulu wajib baris-0,
+    gagal → fallback ambil sheet pertama yang cocok). Kontrak return
+    TETAP (nama_sheet, header_row)."""
+    sn, hr, _score = _scan_best_rekap_sheet(
+        path, config, require_resto=True, logger=logger)
+    return sn, hr
 
 
 # ============================================================
@@ -321,56 +483,20 @@ def find_rekap_sheet_lenient(path, config: dict | None = None,
                              logger=None) -> tuple[str, int]:
     """Resolve sheet rekap + header row — VARIAN LENIENT (TANPA NAMA RESTO).
 
-    Pola sama dgn find_rekap_sheet tapi schema validasi TIDAK mewajibkan
-    NAMA RESTO (file BJMHAS tidak punya kolom itu — resto dari filename).
+    v2.18.2: delegasi ke _scan_best_rekap_sheet (seleksi berbasis
+    skor — lihat blok komentar v2.18.2). Schema lenient = JENIS +
+    NAMA BARANG + ≥3 hari (file BJMHAS tidak punya NAMA RESTO — resto
+    dari filename). FIX bug user: fallback lama ambil sheet PERTAMA
+    yang cocok schema — sheet seksi DEVIASI (JENIS '1.DEVIASI'…
+    '8.BARANG KELUAR', tanpa SOURCE DATA) yang kebetulan muncul lebih
+    duluan terpilih → 5/20 file salah data. Kini SEMUA sheet
+    dinilai skornya; rekap riil menang.
     Dipakai load_rekap_folder. Return (nama_sheet, header_row).
     Raise RekapImportError bila tak ada sheet rekap.
     """
-    path = Path(path)
-    sheets = list_sheets(path)
-    if not sheets:
-        raise RekapImportError(
-            f"Workbook tidak punya sheet yang bisa dibaca: {path.name}")
-    if config is None:
-        config = load_config()
-    candidates = list(config.get("input_sheets", {}).get("rekap_mentah", []))
-    for extra in ("REKAP MENTAH", "rekap mentah"):
-        if extra not in candidates:
-            candidates.append(extra)
-    # 1. Kandidat nama — validasi lenient (JENIS + NAMA BARANG + ≥3 hari)
-    name = find_sheet(candidates, sheets)
-    if name is not None:
-        try:
-            df0 = _read_excel_fast(path, sheet_name=name, header=0, nrows=6)
-        except Exception as exc:
-            _log(logger, f"[rekap_folder] WARNING: sheet kandidat {name!r} "
-                         f"gagal dibaca: {exc}")
-            df0 = None
-        if df0 is not None and not df0.empty:
-            df0 = _normalize_columns(df0)
-            cols = [str(c).strip().upper() for c in df0.columns]
-            if all(rc in cols for rc in ("JENIS", "NAMA BARANG")) \
-                    and sum(1 for c in cols if c in _DAY_SET) >= 3:
-                _log(logger, f"[rekap_folder] sheet '{name}' (kandidat, "
-                             f"lenient)")
-                return name, 0
-    # 2. Fallback scan lenient
-    for sn in sheets:
-        try:
-            raw = pd.read_excel(path, sheet_name=sn, header=None, nrows=8,
-                                dtype=object)
-        except Exception as exc:
-            _log(logger, f"[rekap_folder] WARNING: sheet {sn!r} tak bisa "
-                         f"dibaca: {exc}")
-            continue
-        hr = _detect_header_row_lenient(raw)
-        if hr is not None:
-            _log(logger, f"[rekap_folder] sheet '{sn}' (deteksi lenient, "
-                         f"header baris {hr + 1})")
-            return sn, hr
-    raise RekapImportError(
-        f"Sheet REKAP MENTAH (lenient) tidak ditemukan di {path.name}. "
-        f"Cari sheet ber-kolom JENIS + NAMA BARANG + hari 1-31.")
+    sn, hr, _score = _scan_best_rekap_sheet(
+        path, config, require_resto=False, logger=logger)
+    return sn, hr
 
 
 def load_rekap_folder(folder_path, config: dict | None = None,
@@ -392,7 +518,9 @@ def load_rekap_folder(folder_path, config: dict | None = None,
 
     Return: {"temp_path": str, "files": [str,...], "rows_total": int,
              "rows_per_file": {name: int}, "synthesized": [name,...],
-             "skipped": [(name, reason),...], "engine": str, "elapsed_s": float}.
+             "skipped": [(name, reason),...], "engine": str, "elapsed_s": float,
+             "sheets": {name: {sheet, score, low_confidence, blank_dropped}},
+             "low_confidence": [name,...]}.
     Raise RekapImportError bila folder tak ada / kosong / tak ada file rekap.
     """
     import tempfile
@@ -418,25 +546,51 @@ def load_rekap_folder(folder_path, config: dict | None = None,
     t0 = time.monotonic()
 
     def _process_one(fp: Path):
-        """Baca 1 file → (name, df|None, synth, error|None). Thread-safe:
-        calamine (Rust) aman paralel; openpyxl I/O release GIL sebagian.
-        v2.18.0: cancel_check dicek ANTAR-FILE (pola HistoryWorker) —
-        raise RekapImportError ramah; file antrean berikutnya langsung
-        batal (cek di baris pertama tiap file)."""
+        """Baca 1 file → (name, df|None, synth, error|None, info|None).
+        Thread-safe: calamine (Rust) aman paralel; openpyxl I/O release
+        GIL sebagian. v2.18.0: cancel_check dicek ANTAR-FILE (pola
+        HistoryWorker) — raise RekapImportError ramah; file antrean
+        berikutnya langsung batal (cek di baris pertama tiap file).
+        v2.18.2: (a) sheet dipilih _scan_best_rekap_sheet (SKOR — lihat
+        blok komentar v2.18.2; dulu sheet seksi DEVIASI bisa terpilih
+        bila lebih duluan); (b) baris SEPENUHNYA kosong dibuang (ciri
+        sheet seksi DEVIASI — baris kosong interleaved); (c) info sheet
+        (nama/skor/low_confidence) dikembalikan utk transparansi UI."""
         if cancel_check is not None and cancel_check():
             raise RekapImportError("Scan folder dibatalkan pengguna")
         try:
-            sn, hr = find_rekap_sheet_lenient(fp, config, None)
+            sn, hr, score = _scan_best_rekap_sheet(
+                fp, config, require_resto=False, logger=None)
         except RekapImportError as exc:
-            return (fp.name, None, False, str(exc))
+            return (fp.name, None, False, str(exc), None)
         try:
             # _read_excel_fast: calamine bila ada (8,5x cepat), fallback
             # openpyxl. dtype=object jaga nilai mentah (hari 0/teks).
             raw = _read_excel_fast(fp, sheet_name=sn, header=hr,
                                    dtype=object)
         except Exception as exc:
-            return (fp.name, None, False, f"gagal baca sheet {sn!r}: {exc}")
+            return (fp.name, None, False, f"gagal baca sheet {sn!r}: {exc}",
+                    None)
         raw = _normalize_columns(raw)
+        # v2.18.2 — buang baris SEPENUHNYA kosong (semua kolom None/"
+        # empty") SEBELUM sintesis NAMA RESTO: sheet seksi DEVIASI di
+        # file user ber-baris kosong interleaved (±50% baris) — baris
+        # itu tak membawa data apa pun & menggembungkan file gabungan.
+        n_blank = 0
+        if len(raw):
+            not_blank = pd.Series(False, index=raw.index)
+            for c in raw.columns:
+                s = raw[c]
+                nb = s.notna()
+                if not nb.any():
+                    continue
+                vals = s[nb].astype(str).str.strip()
+                nb = nb.copy()
+                nb.loc[vals.index] = nb.loc[vals.index] & vals.ne("")
+                not_blank = not_blank | nb
+            n_blank = int((~not_blank).sum())
+            if n_blank:
+                raw = raw.loc[not_blank].copy()
         synth = False
         # v2.18.0 audit (BUG 8): deteksi case-INSENSITIVE — file dgn
         # kolom "Nama Resto" (title-case) lolos deteksi header lenient
@@ -450,7 +604,10 @@ def load_rekap_folder(folder_path, config: dict | None = None,
             synth = True
         elif resto_col != "NAMA RESTO":
             raw = raw.rename(columns={resto_col: "NAMA RESTO"})
-        return (fp.name, raw, synth, None)
+        info = {"sheet": sn, "score": round(float(score), 1),
+                "low_confidence": bool(score < _SCORE_MIN),
+                "blank_dropped": n_blank}
+        return (fp.name, raw, synth, None, info)
 
     # PARALLEL — baca multiple file sekaligus (max 4 worker).
     max_w = min(4, len(xlsx_files))
@@ -461,14 +618,32 @@ def load_rekap_folder(folder_path, config: dict | None = None,
 
     frames: list[tuple[str, pd.DataFrame, bool]] = []
     skipped: list[tuple[str, str]] = []
-    for name, df, synth, err in proc_results:
+    sheets_info: dict[str, dict] = {}
+    low_confidence: list[str] = []
+    for name, df, synth, err, info in proc_results:
         if err is not None:
             skipped.append((name, err))
             _log(logger, f"[rekap_folder] {name} dilewati: {err}")
         else:
             frames.append((name, df, synth))
-            tag = " (NAMA RESTO dari nama file)" if synth else ""
-            _log(logger, f"[rekap_folder] {name}: {len(df)} baris{tag}")
+            if info:
+                sheets_info[name] = info
+                if info.get("low_confidence"):
+                    low_confidence.append(name)
+                extra = ""
+                if info.get("blank_dropped"):
+                    extra = (f", {info['blank_dropped']} baris kosong "
+                             f"dibuang")
+                _log(logger, f"[rekap_folder] {name}: {len(df)} baris "
+                             f"(sheet '{info.get('sheet', '?')}'{extra})")
+                if info.get("low_confidence"):
+                    _log(logger, f"[rekap_folder] WARNING {name}: sheet "
+                                 f"'{info.get('sheet')}' skor rendah "
+                                 f"({info.get('score')}) — kemungkinan "
+                                 f"BUKAN rekap mentah penuh; periksa "
+                                 f"isi file.")
+            else:
+                _log(logger, f"[rekap_folder] {name}: {len(df)} baris")
     if not frames:
         names = ", ".join(n for n, _ in skipped) or "(none)"
         raise RekapImportError(
@@ -511,6 +686,12 @@ def load_rekap_folder(folder_path, config: dict | None = None,
         "skipped": skipped,
         "engine": engine_used,
         "elapsed_s": round(elapsed, 2),
+        # v2.18.2 — transparansi sheet per file (nama sheet terpilih,
+        # skor bukti rekap, jumlah baris kosong dibuang) + daftar file
+        # yg sheet-nya meragukan (skor < _SCORE_MIN — UI menampilkan
+        # warning; anti silent-error).
+        "sheets": sheets_info,
+        "low_confidence": low_confidence,
     }
 
 

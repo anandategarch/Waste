@@ -331,11 +331,11 @@ class TestVersiSinkron:
         from waste_anomaly import __version__
         from waste_anomaly.utils import load_config
         cfg = load_config()
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.18.1"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.18.2"
         init_src = (REPO / "waste_anomaly" / "__init__.py").read_text(
             encoding="utf-8")
-        assert "Versi: 2.18.1" in init_src
+        assert "Versi: 2.18.2" in init_src
         mulai = (REPO / "MULAI.bat").read_bytes()
-        assert b"v2.18.1" in mulai
+        assert b"v2.18.2" in mulai
         readme = (REPO / "README.md").read_text(encoding="utf-8")
-        assert "v2.18.1" in readme
+        assert "v2.18.2" in readme

@@ -632,10 +632,10 @@ class TestManifestBantuanVersi:
         from waste_anomaly import __version__
         from waste_anomaly.utils import load_config
         cfg = load_config()
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.18.1"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.18.2"
         init_src = (REPO / "waste_anomaly" / "__init__.py").read_text(
             encoding="utf-8")
-        assert "Versi: 2.18.1" in init_src
+        assert "Versi: 2.18.2" in init_src
         mulai = (REPO / "MULAI.bat").read_bytes()
         assert b"v2.17.0" in mulai
         setup = (REPO / "SETUP.bat").read_bytes()
@@ -645,7 +645,7 @@ class TestManifestBantuanVersi:
         # per-rilis dipindah ke commit history; pin README kini versi
         # SAAT INI (pola sama dgn test_v2181). Pin .bat v2.17.0 tetap:
         # sebutan historis fitur pythonw masih ada di kedua file itu.
-        assert "v2.18.1" in readme
+        assert "v2.18.2" in readme
 
     def test_crlf_bat_utuh(self):
         """MULAI.bat/SETUP.bat tetap CRLF penuh (kontrak gelombang 1-6)."""

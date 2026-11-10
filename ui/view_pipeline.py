@@ -560,6 +560,10 @@ class PipelineView(QWidget):
         rows_total = result.get("rows_total", 0)
         engine = result.get("engine", "?")
         elapsed = result.get("elapsed_s", 0.0)
+        # v2.18.2 — info sheet per file (nama sheet terpilih + skor) &
+        # daftar file low-confidence (sheet meragukan — anti silent-error).
+        sheets_info = result.get("sheets", {})
+        low_conf = set(result.get("low_confidence", []))
         # Log transparan (anti silent-error) — engine + waktu + per-file.
         self._ctx.log(
             f"✓ Folder dipindai: {len(files)} file, {fmt_id(rows_total)} "
@@ -567,7 +571,16 @@ class PipelineView(QWidget):
         for fn in files:
             tag = " (NAMA RESTO dari nama file)" if fn in synth else ""
             n = result.get("rows_per_file", {}).get(fn, 0)
-            self._ctx.log(f"  • {fn}: {fmt_id(n)} baris{tag}")
+            info = sheets_info.get(fn) or {}
+            sheet = info.get("sheet")
+            sheet_tag = f" · sheet {sheet!r}" if sheet else ""
+            self._ctx.log(f"  • {fn}: {fmt_id(n)} baris{sheet_tag}{tag}")
+            if fn in low_conf:
+                self._ctx.log(
+                    f"    ⚠ {fn}: sheet terpilih tampaknya BUKAN rekap "
+                    f"mentah penuh (skor {info.get('score', '?')} — tanpa "
+                    f"kolom SOURCE DATA / JENIS tak kanonik). Periksa "
+                    f"isi file.")
         for fn, reason in skipped:
             self._ctx.log(f"  ✕ {fn} dilewati: {reason}")
         self._ctx.log(
