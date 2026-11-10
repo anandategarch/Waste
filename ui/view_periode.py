@@ -1313,9 +1313,20 @@ class PeriodeView(QWidget):
                 self._tables[key].set_dataframe(self._page_mask(key))
         ka_a = res.get("key_akhir_a")
         ka_b = res.get("key_akhir_b")
-        self._lbl_compare.setText(
-            f"✓ Bulan berjalan ({ka_a} hari) vs {res.get('label_b')} "
-            f"({ka_b} hari) — 'Waste per Hari' menormalkan beda panjang bulan.")
+        msg = (f"✓ Bulan berjalan ({ka_a} hari) vs {res.get('label_b')} "
+               f"({ka_b} hari) — 'Waste per Hari' menormalkan beda panjang "
+               "bulan.")
+        # v2.18.1 — audit Banding Periode: 0 resto cocok = hampir pasti
+        # beda penamaan NAMA RESTO (alur folder memakai NAMA FILE; file
+        # pembanding memakai kode resto asli) → semua tabel BARU/HILANG
+        # di bawah palsu. Katakan terang — jangan biarkan analisa salah
+        # senyap (ringkasan Total Waste tetap tampak wajar).
+        if res.get("resto_overlap_warn"):
+            msg += ("  ⚠ 0 cabang cocok antara bulan ini & pembanding — "
+                    "penamaan NAMA RESTO berbeda (alur folder memakai nama "
+                    "file); daftar BARU/HILANG di bawah tidak bermakna "
+                    "sampai penamaan disamakan.")
+        self._lbl_compare.setText(msg)
 
     # ------------------------------------------------------------
     # v2.12.4 — FUNNEL LOKAL PER HALAMAN (SEMUA kolom ber-funnel)

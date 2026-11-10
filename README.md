@@ -2,7 +2,7 @@
 
 **Anomaly workbench** Python + PySide6 (Qt) untuk deteksi anomali waste di cabang resto — replika 1:1 pipeline Power Query M code. Membaca rekap waste bulanan (Excel), menjalankan 14-stage pipeline in-memory, men-skor setiap baris dengan **12 sinyal anomali**, dan menyajikan hasilnya di UI 6 tab interaktif + export Excel 10 sheet.
 
-> Versi **2.18.0** · 1.151 test (pytest) · CI GitHub Actions (matrix Python × OS) · MIT License
+> Versi **v2.18.1** · 1.164 test (pytest) · CI GitHub Actions (matrix Python × OS) · MIT License
 
 ## Fitur Utama
 
@@ -181,6 +181,8 @@ Edit `waste_anomaly/config.json` → section `thresholds` (mis. `TH_SPIKE`, `STA
 | `pip install PySide6` gagal (path panjang Windows) | Pakai `SETUP.bat` versi terbaru (otomatis `.venv`); atau pindahkan folder ke path pendek |
 
 ## Changelog
+
+**v2.18.1** — Audit tab Banding Periode: 4 bug fix — (1) file pembanding kini melewati helper pipeline yang sama (JENIS `'2.WASTE'` tidak lagi terbuang; header tergesar tergeser dimuat); (2) `key_akhir` pembanding dihitung dari baris waste saja (baris BOM di luar periode tak menggelembungkan); (3) peringatan eksplisit saat 0 cabang cocok (alur folder memakai nama file vs kode resto di pembanding); (4) +8 test regresi.
 
 Riwayat lengkap per versi: lihat [Commit History](https://github.com/anandategarch/Waste/commits/main) — setiap rilis didokumentasikan detail di pesan commit.
 

@@ -9,7 +9,7 @@ REM
 REM v2.17.6 - jalankan TANPA jendela CMD hitam (pythonw + ui_app.pyw).
 REM Double-click ui_app.pyw JUGA langsung buka GUI (no console).
 REM Untuk DEBUG dgn console (lihat log stdout): python ui_app.py
-REM v2.18.0 - chcp 65001: pesan error UTF-8 Indonesia tidak jadi
+REM v2.18.1 - chcp 65001: pesan error UTF-8 Indonesia tidak jadi
 REM mojibake di console OEM codepage (pola SETUP/BUILD_EXE).
 
 if exist ".venv\Scripts\pythonw.exe" (

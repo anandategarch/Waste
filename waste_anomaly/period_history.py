@@ -458,6 +458,24 @@ def load_history_file(path: str | os.PathLike,
         if raw is None or raw.empty:
             base["error"] = f"Sheet data kosong / tidak ditemukan: {p.name}"
             return base
+        # v2.18.1 — PARITY PIPELINE UTAMA (audit Banding Periode): file
+        # pembanding format REKAP MENTAH kini melewati helper yang sama
+        # dgn fase LOAD pipeline (v2.15.0). TANPA ini dua bug terbukti
+        # repro: (1) JENIS ber-prefix angka ('2.WASTE' — template PQ
+        # varian; fix v2.17.5 hanya sampai jalur pipeline) DIBUANG filter
+        # exact-match di bawah → item hilang dari pembanding → muncul
+        # 'BARU' palsu + TOTAL pembanding terlalu rendah; (2) header
+        # tergeser (baris judul di atas header asli — pola stock-
+        # monitoring) GAGAL dgn error menyesatkan "Kolom wajib 'NAMA
+        # BARANG' tidak ada" padahal file yang sama jalan mulus di
+        # pipeline utama. Kedua helper no-op identitas untuk file standar
+        # (header normal + JENIS W/S/T bersih) — kontrak test lama utuh.
+        # Import LAZY: rekap_import mengimpor period_history
+        # (detect_month_label) — import level modul = circular (pola
+        # loader.py yang sama).
+        from .rekap_import import ensure_rekap_header, normalize_rekap_values
+        raw = ensure_rekap_header(raw)
+        raw = normalize_rekap_values(raw)
         for col in ("NAMA BARANG",):
             if col not in raw.columns:
                 base["error"] = f"Kolom wajib '{col}' tidak ada di {p.name}"
@@ -465,8 +483,15 @@ def load_history_file(path: str | os.PathLike,
         if not _day_cols_of(raw):
             base["error"] = f"Kolom hari 1-31 tidak ditemukan di {p.name}"
             return base
-        ka = auto_key_akhir(raw)
         kept = _filter_waste(raw)
+        # v2.18.1 — key_akhir dari baris WASTE saja: baris BOM/SO pada
+        # file mentah bisa ber-value di hari DI LUAR periode waste (mis.
+        # waste berhenti hari-20, BOM masih berisi hingga hari-31) — dulu
+        # auto_key_akhir(raw) men-detect 31 → 'HARI DATA' pembanding
+        # menggelembung & 'Waste per Hari' salah kecil. Parity semantik:
+        # sisi bulan-berjalan (aggregate_current) memakai key_akhir run
+        # yang datanya memang hanya baris waste pasca stage_01.
+        ka = auto_key_akhir(kept)
         # v2.13.7 (perf-audit B): coerce-numerik kolom hari SEKALI untuk
         # 4 agregat (dulu dihitung 4× per file — 31 kolom × 54k baris).
         num = kept[_day_cols_of(kept)].apply(pd.to_numeric, errors="coerce")
@@ -710,6 +735,23 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
             "Pembanding", ascending=False).head(
             top_n).reset_index(drop=True)[gone_cols]
 
+    # v2.18.1 — overlap resto (audit Banding Periode): alur 'Proses dari
+    # Folder' mensintesis NAMA RESTO dari NAMA FILE — bila pembanding
+    # memakai kode resto asli (mis. B.1001.MLGPAR), join 0-match dan
+    # SEMUA item tampil BARU/HILANG palsu (ringkasan tetap tampak masuk
+    # akal → menyesatkan senyap). Angka overlap diserahkan ke pemanggil
+    # (UI memberi peringatan); murni informatif, tak mengubah tabel.
+    def _resto_set(src: dict) -> set:
+        agg = src.get("agg")
+        if not isinstance(agg, pd.DataFrame) or agg.empty \
+                or "NAMA RESTO" not in agg.columns:
+            return set()
+        return set(_key_text(agg["NAMA RESTO"]).unique())
+
+    set_a, set_b = _resto_set(a), _resto_set(b)
+    resto_overlap = len(set_a & set_b)
+    resto_overlap_warn = bool(set_a and set_b and resto_overlap == 0)
+
     return {
         "label_a": label_a,
         "label_b": label_b,
@@ -721,6 +763,8 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
         "items": items,
         "new_items": new_items,
         "gone_items": gone_items,
+        "resto_overlap": resto_overlap,
+        "resto_overlap_warn": resto_overlap_warn,
     }
 
 
