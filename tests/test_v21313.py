@@ -33,8 +33,7 @@ PERF, FOKUS & POLISH). 24 test pengunci 14 klaster fix + 5 sweep P3:
           SATUAN) — dulu tombol ⏹ tak berefek sampai Stage 1.
 [B10]     SELURUH _refresh_result dibungkus busy_feedback (dulu hanya
           compare_quantity — render pertama 833 ms beku senyap).
-[C8]×2    Memo drill Scorecard LRU-8 keyed (resto, data_version,
-          history_version): klik-2 ×2 = hitung SEKALI + evict ke-9.
+[C8]×2    (DIHAPUS v2.18.5 — memo drill Scorecard; tab dibuang.)
 [D10]     PipelineWorker finished → deleteLater (dulu menumpuk per run).
 [D29]     3 tombol (Mulai/Simpan/Pratinjau) dinonaktifkan selama compute
           pratinjau try/finally — exception pun memulihkan (dulu klik
@@ -46,7 +45,7 @@ PERF, FOKUS & POLISH). 24 test pengunci 14 klaster fix + 5 sweep P3:
           bukti pembanding justru saat pembanding aktif).
 [B14]     Baris log stage membawa persen kumulatif "(N%)" (dulu
           callback membuang pct dari log run).
-[SWEEP]   C7 Enter = drill Scorecard (dulu hanya mouse) · B16 kolom File
+[SWEEP]   C7 (DIHAPUS v2.18.5 — Enter drill Scorecard) · B16 kolom File
           tooltip PATH penuh · B18 funnel halaman reset saat PEMBANDING
           berganti (dulu hanya dataset baru) · D25 QSS :focus tombol
           (navigasi keyboard kini terlihat).
@@ -221,40 +220,6 @@ def _wait_worker(view, app, timeout: float = 30.0) -> None:
         app.processEvents()
         time.sleep(0.01)
     app.processEvents()
-
-
-def _df_scorecard(n_resto: int = 4) -> pd.DataFrame:
-    """Dataset sintetis Scorecard (pola test_v21312 — item SAMA di ≥ 3
-    resto supaya money_ranking (peer ≥ 3) terisi)."""
-    rows = []
-    for i in range(n_resto):
-        data = {str(d): 0.0 for d in range(1, 32)}
-        data["5"] = 10.0
-        rows.append({
-            "SOURCE DATA": "WASTE BAHAN DAN PACKAGING",
-            "JENIS": "WASTE", "KETERANGAN": "Handling",
-            "NAMA BARANG": "MIE", "NAMA RESTO": f"R{i}",
-            "SATUAN": "GR", "ANOMALY STATUS": "Perlu Review",
-            "PROFIL": "Tiap Hari",
-            **data, "TOTAL": float(100 + 10 * i),
-            "KELEBIHAN": 5.0, "PEER MEDIAN (AKTIF)": 50.0,
-            "TOTAL BOM": 10_000.0,
-        })
-    return pd.DataFrame(rows)
-
-
-def _view_scorecard(df: pd.DataFrame):
-    from ui.state import AppContext
-    from ui.view_scorecard import ScorecardView
-    app = _qapp()
-    ctx = AppContext({})
-    ctx.set_dataset(df, {"key_akhir": 31})
-    view = ScorecardView(ctx)
-    view.show()
-    app.processEvents()
-    view._refresh()
-    app.processEvents()
-    return view, ctx, app
 
 
 class _MBStub:
@@ -810,70 +775,8 @@ class TestB10BusyBanding:
 
 
 # ============================================================
-# [C8] Memo drill Scorecard LRU-8
+# [C8] Memo drill Scorecard LRU-8 (DIHAPUS v2.18.5 — tab Scorecard dibuang)
 # ============================================================
-
-class TestC8MemoDrill:
-    def test_drill_memo_hit_satu_hitungan(self, monkeypatch):
-        """C8: drill rincian cabang di-MEMO keyed (resto, data_version,
-        history_version) — klik-2 ×2 resto sama = hitung SEKALI (dulu
-        bolak-balik cabang menghitung ulang PENUH 102-164 ms tiap kali);
-        busy 'Menghitung rincian' hanya di jalur MISS."""
-        from contextlib import contextmanager
-        import ui.view_scorecard as vs
-        view, ctx, app = _view_scorecard(_df_scorecard())
-        rec = view._table.model().record(0)
-        resto = str(rec.get("NAMA RESTO"))
-        busy_labels: list = []
-        orig = vs.busy_feedback
-
-        @contextmanager
-        def spy_busy(status_cb=None, label="Memproses"):
-            busy_labels.append(label)
-            with orig(status_cb, label):
-                yield
-        monkeypatch.setattr(vs, "busy_feedback", spy_busy)
-        view._on_double(rec)
-        app.processEvents()
-        assert view._drill is not None and view._drill.isVisible()
-        assert len(view._drill_cache) == 1
-        misses = [l for l in busy_labels if "Menghitung rincian" in l]
-        assert len(misses) == 1
-        # hit ke-2 (objek sama) → tanpa hitung, tanpa busy miss
-        view._on_double(rec)
-        app.processEvents()
-        misses2 = [l for l in busy_labels if "Menghitung rincian" in l]
-        assert len(misses2) == 1, "cache hit tak boleh menghitung ulang"
-        assert len(view._drill_cache) == 1
-        assert resto in view._drill_title.text()
-
-    def test_drill_memo_lru8_evict(self, monkeypatch):
-        """C8 (LRU-8): memo menampung maksimal 8 kombinasi — drill ke-9
-        mengeluarkan yang paling lama tak dipakai (LRU), kunci = (resto,
-        data_version, history_version) — data baru = kunci baru = hitung
-        ulang jujur."""
-        from contextlib import contextmanager
-        import ui.view_scorecard as vs
-        view, ctx, app = _view_scorecard(_df_scorecard(n_resto=10))
-        orig = vs.busy_feedback
-
-        @contextmanager
-        def silent_busy(status_cb=None, label="Memproses"):
-            with orig(status_cb, label):
-                yield
-        monkeypatch.setattr(vs, "busy_feedback", silent_busy)
-        for r in range(9):
-            rec = view._table.model().record(r)
-            view._on_double(rec)
-            app.processEvents()
-        keys = list(view._drill_cache.keys())
-        assert len(view._drill_cache) == 8, (
-            "LRU-8: drill ke-9 harus mengeluarkan entri tertua")
-        restos = [k[0] for k in keys]
-        assert "R0" not in restos, (
-            "entri paling lama (R0, drill pertama) harus ter-evict")
-        assert "R8" in restos and "R1" in restos
-
 
 # ============================================================
 # [D10] PipelineWorker finished → deleteLater
@@ -1073,32 +976,8 @@ class TestB14PersenLog:
 
 
 # ============================================================
-# [SWEEP C7] Enter = drill Scorecard
+# [SWEEP C7] Enter = drill Scorecard (DIHAPUS v2.18.5 — tab Scorecard dibuang)
 # ============================================================
-
-class TestSweepC7EnterDrill:
-    def test_enter_drill_scorecard(self):
-        """C7: Enter/Return di baris terpilih tabel Scorecard = DRILL
-        rincian cabang — padanan keyboard utk klik-2 mouse (dulu hanya
-        mouse: pengguna keyboard-only tak punya jalur sama sekali)."""
-        from PySide6.QtCore import Qt
-        from PySide6.QtTest import QTest
-        view, _ctx, app = _view_scorecard(_df_scorecard())
-        view._table.setCurrentIndex(view._table.model().index(0, 1))
-        app.processEvents()
-        view._table.setCurrentIndex(view._table.model().index(0, 1))
-        app.processEvents()
-        rec = view._table.selected_record()
-        expected = str(rec.get("NAMA RESTO"))
-        QTest.keyClick(view._table, Qt.Key.Key_Return)
-        app.processEvents()
-        assert view._drill is not None and view._drill.isVisible(), (
-            "Enter harus membuka drill rincian cabang (a11y C7)")
-        assert expected in view._drill_title.text()
-        # kontrak: klik-2× mouse tetap jalur utama (eventFilter tak
-        # mengganggu) — pop-up tertutup, dbl-click terhubung
-        assert view._drill.isVisible()
-
 
 # ============================================================
 # [SWEEP B16+B18] Tooltip path file + funnel reset saat pembanding
@@ -1160,4 +1039,4 @@ class TestSweepD25QssFocus:
         # keyboard-visible: rule fokus tombol LEBIH BANYAK dari era lama
         assert QSS.count(":focus") >= 4
         from ui.shared import APP_VERSION
-        assert APP_VERSION == "2.18.4"  # pin versi file test ke-5 (gel-4; dinaikkan v2.15.0)
+        assert APP_VERSION == "2.18.5"  # pin versi file test ke-5 (gel-4; dinaikkan v2.15.0)

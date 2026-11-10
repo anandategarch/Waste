@@ -207,27 +207,6 @@ def _view_periode_files(tmp_path, monkeypatch, months):
     return view, ctx, app
 
 
-def _df_scorecard(n_resto: int = 4, pad: str = "") -> pd.DataFrame:
-    """Dataset sintetis Scorecard (pola v21312/v21313 — item SAMA di ≥ 3
-    resto supaya money_ranking peer ≥ 3 terisi). `pad` = whitespace ekstra
-    di NAMA RESTO (bahan C20: raw vs stripped)."""
-    rows = []
-    for i in range(n_resto):
-        data = {str(d): 0.0 for d in range(1, 32)}
-        data["5"] = 10.0
-        rows.append({
-            "SOURCE DATA": "WASTE BAHAN DAN PACKAGING",
-            "JENIS": "WASTE", "KETERANGAN": "Handling",
-            "NAMA BARANG": "MIE", "NAMA RESTO": f"{pad}R{i}{pad}",
-            "SATUAN": "GR", "ANOMALY STATUS": "Perlu Review",
-            "PROFIL": "Tiap Hari",
-            **data, "TOTAL": float(100 + 10 * i),
-            "KELEBIHAN": 5.0, "PEER MEDIAN (AKTIF)": 50.0,
-            "TOTAL BOM": 10_000.0,
-        })
-    return pd.DataFrame(rows)
-
-
 class _MBStub:
     """Stub QMessageBox (pola repo: modal blocking dihindari offscreen)."""
     calls: list = []
@@ -421,7 +400,8 @@ class TestD24ShortcutGlobal:
         """D24: QTest Ctrl+3 → tab index 2 (Hari Mencurigakan — urutan
         _views); dulu nol shortcut global: pindah tab hanya via mouse.
         v2.17.0 rombak: urutan tab diganti (Pipeline 0, Anomali 1, Hari 2,
-        ...Follow Up 5) — Hari tetap index 2; Ctrl+6 kini → Follow Up."""
+        ...Follow Up terakhir). v2.18.5: Scorecard dihapus (6 → 5 tab) —
+        Hari tetap index 2; Ctrl+5 kini → Follow Up (index 4)."""
         from PySide6.QtCore import Qt
         from PySide6.QtTest import QTest
         from ui.app import MainWindow
@@ -439,19 +419,20 @@ class TestD24ShortcutGlobal:
                        Qt.KeyboardModifier.ControlModifier)
         app.processEvents()
         assert win._tabs.currentIndex() == 0, "Ctrl+1 → tab Pipeline (idx 0)"
-        QTest.keyClick(win, Qt.Key.Key_6,
+        QTest.keyClick(win, Qt.Key.Key_5,
                        Qt.KeyboardModifier.ControlModifier)
         app.processEvents()
-        assert win._tabs.currentIndex() == 5, "Ctrl+6 → tab Follow Up (idx 5)"
+        assert win._tabs.currentIndex() == 4, "Ctrl+5 → tab Follow Up (idx 4)"
 
     def test_shortcut_terpasang_semua_action(self):
-        """D24: 6 action tab (Ctrl+1..Ctrl+6) + action ekspor (Ctrl+E)
-        semuanya ber-shortcut (shortcuts() non-kosong & urut benar)."""
+        """D24: 5 action tab (Ctrl+1..Ctrl+5; v2.18.5 Scorecard dihapus)
+        + action ekspor (Ctrl+E) semuanya ber-shortcut (shortcuts()
+        non-kosong & urut benar)."""
         from PySide6.QtGui import QKeySequence
         from ui.app import MainWindow
         app = _qapp()
         win = MainWindow()
-        assert len(win._tab_actions) == 6, "enam tab = enam shortcut"
+        assert len(win._tab_actions) == 5, "lima tab = lima shortcut"
         for i, act in enumerate(win._tab_actions):
             sc = act.shortcuts()
             assert len(sc) == 1, f"tab {i + 1}: tepat satu shortcut"
@@ -492,45 +473,6 @@ class TestD24ShortcutGlobal:
             "(lambda menangkap self?) — window harus mati saat refcount "
             "turun + gc (D24-fix)")
 
-
-# ============================================================
-# [C14] ⛶ Scorecard = pola reparent 2 tab lain
-# ============================================================
-
-class TestC14FullscreenScorecard:
-    def test_fullscreen_scorecard_pola_tabel_dulu_raise(self):
-        """C14: ⛶ Scorecard kini pola PERSIS Anomali/Hari — tabel di
-        INDEX-0 layout dgn stretch (baris tombol di BAWAH tabel, bukan
-        sebaliknya) + pulih round-trip utuh dengan stretch."""
-        from ui.state import AppContext
-        from ui.view_scorecard import ScorecardView
-        app = _qapp()
-        ctx = AppContext({})
-        ctx.set_dataset(_df_scorecard(4), {"key_akhir": 31})
-        view = ScorecardView(ctx)
-        view.show()
-        app.processEvents()
-        view._refresh()
-        app.processEvents()
-        view._on_fullscreen()
-        app.processEvents()
-        dlg = view._fs_dlg
-        assert dlg is not None and view._table.parent() is dlg
-        assert dlg.layout().indexOf(view._table) == 0, (
-            "tabel harus di index 0 (DI ATAS baris tombol — pola anomali/"
-            "hari; C14 dulu insert-bawah-tombol)")
-        # round-trip: Esc (reject) → tabel pulih ke kartu dgn index asli
-        dlg.reject()
-        app.processEvents()
-        assert view._table.parent() is not dlg
-        assert view._tcl.indexOf(view._table) == view._fs_idx, (
-            "tabel kembali di posisi layout asli (kontrak v2.13.6)")
-        assert view._table.isVisible()
-
-
-# ============================================================
-# [D26] Kunci runtime _config_load_error tak ter-persist
-# ============================================================
 
 class TestD26ConfigLoadError:
     def test_saved_config_tak_memuat_kunci_runtime(self, monkeypatch,
@@ -815,37 +757,3 @@ class TestC15LabelBulanLalu:
 
 
 # ============================================================
-# [C20] Lookup nama cabang drill Scorecard di-strip
-# ============================================================
-
-class TestC20StripLookupDrill:
-    def test_nama_whitespace_ekstra_tetap_match(self):
-        """C20: NAMA RESTO ber-whitespace ekstra (" R1 ") di dataset →
-        drill rincian cabang Scorecard TETAP menampilkan tabel kerugian
-        (lookup di-strip di batas UI; dulu money_ranking RAW vs scorecard
-        stripped → tabel uang KOSONG senyap)."""
-        from ui.state import AppContext
-        from ui.view_scorecard import ScorecardView
-        app = _qapp()
-        ctx = AppContext({})
-        ctx.set_dataset(_df_scorecard(4, pad=" "), {"key_akhir": 31})
-        view = ScorecardView(ctx)
-        view.show()
-        app.processEvents()
-        view._refresh()
-        app.processEvents()
-        # scorecard tampil nama STRIPPED (urutan tabel = sort KELEBIHAN
-        # desc — ambil DINAMIS, pola G4R: record(0) bukan R0)
-        view._table.setCurrentIndex(view._table.model().index(0, 1))
-        app.processEvents()
-        rec = view._table.selected_record()
-        assert rec is not None
-        expected = str(rec.get("NAMA RESTO"))
-        assert expected and expected == expected.strip(), (
-            "scorecard output stripped — record tanpa whitespace (C20)")
-        view._on_double(rec)
-        app.processEvents()
-        assert view._drill is not None and view._drill.isVisible()
-        assert expected in view._drill_title.text()
-        assert view._drill_money.model().rowCount() > 0, (
-            "nama ber-whitespace ekstra harus tetap match (C20; dulu 0)")

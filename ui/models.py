@@ -105,8 +105,9 @@ _NEG_FG = QColor("#dc2626")
 # Threshold tab Pipeline (audit C18: tooltip bohong diam-diam begitu
 # user mengubah config). COLUMN_TOOLTIPS tetap ada sebagai snapshot
 # import-time load_config() — kompatibilitas import lama (test/fixture
-# memakai nama modul); ScorecardView memasang kamus runtime dari
-# ctx.config lewat PandasTableModel.set_tooltip_map (gel-3 C3+C9).
+# memakai nama modul); view tabel memasang kamus runtime dari
+# ctx.config lewat PandasTableModel.set_tooltip_map (gel-3 C3+C9;
+# v2.18.5: konsumen kini tabel Anomali & Hari — Scorecard dihapus).
 
 
 def _th(config: dict | None, key: str, default: float) -> float:
@@ -139,9 +140,10 @@ def build_column_tooltips(config: dict | None = None) -> dict[str, str]:
     """Kamus tooltip judul kolom dgn angka ambang dari ``config``.
 
     v2.13.12 (gel-3 C18): satu pabrik untuk kamus global (snapshot
-    import-time) DAN kamus per-view runtime (Scorecard memakai ctx.config
-    aktif). Entri tanpa angka ambang = teks tetap (verbatim dari v2.9.0).
-    Kunci kamus TIDAK berubah (dikunci test_v290/test_v2100/test_v2102)."""
+    import-time) DAN kamus per-view runtime (view tabel memakai
+    ctx.config aktif). Entri tanpa angka ambang = teks tetap (verbatim
+    dari v2.9.0). Kunci kamus TIDAK berubah (dikunci
+    test_v290/test_v2100/test_v2102)."""
     # Ambang dari config AKTIF (fallback default engine bila korup).
     pr = _fmt_th(_th(config, "STATUS_PRIORITAS", 8))
     po = _fmt_th(_th(config, "STATUS_POTENSI", 5))
@@ -412,11 +414,10 @@ class PandasTableModel(QAbstractTableModel):
         # kontrak test lama `dataframe['Pembanding']` tak tersentuh).
         self._header_map: dict[str, str] = {}
         # v2.13.12 (gel-3 C3+C9): kamus tooltip PER-VIEW menimpa kamus
-        # global (kolom 'HARI' = Senin–Minggu di kartu kalender Scorecard,
-        # tanggal di kartu sistemik, tanggal 1-31 di tabel Anomali — satu
-        # nama, banyak makna per tabel). Hanya ToolTipRole header yang
-        # membaca ini; kontrak lain (set_header_map alias judul, data,
-        # sort) tak tersentuh.
+        # global (kolom 'HARI' = tanggal di kartu sistemik vs tanggal
+        # 1-31 di tabel Anomali — satu nama, banyak makna per tabel).
+        # Hanya ToolTipRole header yang membaca ini; kontrak lain
+        # (set_header_map alias judul, data, sort) tak tersentuh.
         self._tooltip_map: dict[str, str] = {}
 
     def _rebuild_snapshot(self) -> None:
@@ -517,10 +518,9 @@ class PandasTableModel(QAbstractTableModel):
 
     def set_tooltip_map(self, mapping: dict[str, str] | None) -> None:
         """Kamus tooltip judul kolom PER-VIEW menimpa kamus global
-        (v2.13.12 gel-3 C3+C9 — audit: kolom "HARI TERSANGKA" di
-        Scorecard = JUMLAH baris ber-bukti, padahal tooltip global
-        menjelaskan TANGGAL; kolom "HARI" kartu kalender = Senin–Minggu,
-        kartu sistemik = tanggal serentak).
+        (v2.13.12 gel-3 C3+C9 — audit: kolom "HARI" bisa berarti
+        tanggal 1-31 di tabel Anomali atau tanggal serentak di kartu
+        sistemik — satu nama, banyak makna per tabel).
 
         Hanya ToolTipRole headerData yang membaca peta ini (dicari lebih
         dulu sebelum COLUMN_TOOLTIPS global); kontrak lain — alias judul

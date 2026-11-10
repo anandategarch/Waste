@@ -11,10 +11,10 @@ Struktur baru:
     ui/models.py       — PandasTableModel (tabel virtualized tanpa cap)
     ui/workers.py      — pipeline/export/periode di QThread
     ui/widgets.py      — blok anti-terpotong (WLabel, DataTable, KPI)
-    ui/view_*.py       — 6 tab (Anomali default, Follow Up, Hari
-                         Mencurigakan, Scorecard Cabang, Banding Periode,
-                         Pipeline) — v2.13.1: + Scorecard; v2.13.6: tab
-                         Scorecard & Pipeline dibungkus QScrollArea
+    ui/view_*.py       — 5 tab (Pipeline, Anomali, Hari Mencurigakan,
+                         Banding Periode, Follow Up) — v2.13.6: tab
+                         Pipeline dibungkus QScrollArea; v2.18.5: tab
+                         Scorecard Cabang dihapus (permintaan user)
     ui/app.py          — MainWindow + main()
 """
 

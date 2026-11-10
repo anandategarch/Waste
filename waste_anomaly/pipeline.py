@@ -400,8 +400,9 @@ def _run_pipeline(
         "df": df,  # return DataFrame langsung untuk display di UI (no Excel file)
         "rows_processed": len(df),
         "log": "\n".join(log_lines),
-        # v2.13.1: path input — tab Scorecard membaca label bulan file
-        # (pola hari kalender asli). Additive; key tak dipakai modul lain.
+        # v2.13.1: path input — dipakai drill sumber baris di tab Anomali
+        # (buka file/sheet asal; dulu juga tab Scorecard, dihapus v2.18.5).
+        # Additive; key tak dipakai modul lain.
         "workbook_path": str(workbook_path),
     })
     return summary

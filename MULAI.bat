@@ -3,8 +3,8 @@ setlocal EnableExtensions
 chcp 65001 >nul
 cd /d "%~dp0"
 
-REM v2.17.0 - Waste Anomaly Detection (6 tab: Anomali, Follow Up,
-REM Hari Mencurigakan, Scorecard Cabang, Banding Periode, Pipeline).
+REM v2.17.0 - Waste Anomaly Detection (5 tab: Pipeline, Anomali, Hari
+REM Mencurigakan, Banding Periode, Follow Up).
 REM
 REM v2.17.6 - jalankan TANPA jendela CMD hitam (pythonw + ui_app.pyw).
 REM Double-click ui_app.pyw JUGA langsung buka GUI (no console).
@@ -17,6 +17,10 @@ REM v2.18.3 - kolom TOTAL blank di file gabungan folder kini
 REM diisi otomatis (jumlah kolom hari; sel sumber kosong).
 REM v2.18.4 - Banding Periode: match resto lintas sumber
 REM (nama file 'BJMHAS' = kode DBS '1216.BJMHAS').
+REM v2.18.5 - Banding Periode: hanya cabang yang ada di KEDUA bulan
+REM (resto baru/tutup disembunyikan); sort Naik = besar dulu;
+REM filter: klik-ganda nilai = pilih hanya itu; tab Scorecard
+REM Cabang dihapus (permintaan user).
 
 if exist ".venv\Scripts\pythonw.exe" (
     start "" ".venv\Scripts\pythonw.exe" ui_app.pyw

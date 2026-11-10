@@ -2,9 +2,9 @@
 
 Struktur:
 - Toolbar: Ekspor Excel + Bantuan
-- QTabWidget 6 tab (v2.13.1: + Scorecard Cabang): Anomali (default) ·
-  Follow Up · Hari Mencurigakan · Scorecard Cabang · Banding Periode ·
-  Pipeline — render lazy per-view (H2). Tab Scorecard & Pipeline dibungkus
+- QTabWidget 5 tab (v2.18.5: − Scorecard Cabang, dihapus permintaan
+  user): Pipeline · Anomali · Hari Mencurigakan · Banding Periode ·
+  Follow Up — render lazy per-view (H2). Tab Pipeline dibungkus
   QScrollArea (v2.13.6) — konten panjang tetap terjangkau di layar kecil.
 - Status bar: pesan status + hitungan permanen — total baris + DUA
   definisi anomali dilabeli (non-Normal vs prioritas+potensi,
@@ -59,7 +59,6 @@ from .view_followup import FollowUpView
 from .view_hari import HariView
 from .view_periode import PeriodeView
 from .view_pipeline import PipelineView
-from .view_scorecard import ScorecardView
 from .workers import ExportWorker
 from waste_anomaly.followup import followup_path
 
@@ -132,6 +131,7 @@ selesai).</li>
 terlihat di kartu "Ringkasan Run &amp; Log Proses".</li>
 <li>Setelah selesai: <b>Ringkasan Run</b> menampilkan total baris, prioritas,
 potensi, jumlah cabang/item, dst. — hasil siap di tab lain.</li>
+<li>Di layar kecil halaman ini <b>bisa digulir</b> — semua kartu tetap terjangkau.</li>
 </ul>
 <h3>Tab Anomali (pemburu anomali)</h3>
 <ul>
@@ -149,15 +149,6 @@ potensi, jumlah cabang/item, dst. — hasil siap di tab lain.</li>
 <li><b>Centang ✓ di kolom pertama</b> atau tombol <b>☑ Masuk Follow Up</b> di pop-up detail = kumpulkan baris ini ke daftar Follow Up; tombol <b>☑ Centang yang tampil</b> = centang massal hasil filter.</li>
 <li><b>Bila ada file bulan lalu</b> (tab Banding Periode): muncul kolom <b>NILAI BULAN LALU</b> — nilai tanggal yang sama bulan sebelumnya + berapa kali lipatnya.</li>
 </ul>
-<h3>Tab Scorecard Cabang</h3>
-<ul>
-<li>Jawaban untuk pertanyaan manajemen: <b>"kunjungi cabang mana dulu, bawa bukti apa, berapa bisa dihemat?"</b> — tabel per cabang, RANK = urutan kunjungan (urut potensi hemat).</li>
-<li>Kolom penting: <b>INTENSITAS %</b> (waste vs penjualan/BOM), <b>KELEBIHAN</b> (potensi hemat vs tipikal cabang lain), <b>ALASAN DOMINAN</b>, <b>HARI TERSANGKA</b>, <b>STATUS INPUT</b> (verdict pelaporan: Lengkap / Berhenti Input / Memang Tak Pernah).</li>
-<li><b>Klik 2× baris = rincian cabang</b> (pop-up: top kerugian vs tipikal + profil alasan + verdict input).</li>
-<li>KPI: <b>POTENSI HEMAT</b> · <b>INTENSITAS TIPIKAL</b> (median) · <b>CABANG #1</b> · <b>HARI SISTEMIK</b> (hari naik serentak banyak cabang = masalah bersama).</li>
-<li>Kartu pendukung: 💰 <b>Top Kerugian vs Tipikal</b> (ranking uang per baris) · 📅 <b>Pola Hari Kalender</b> (Senin–Minggu asli dari nama bulan file) · 🧪 <b>Kualitas Data</b> (pemeriksaan otomatis — arahkan kursor ke sel PENJELASAN utk baca lengkap) · 📈 <b>Tren Bulanan</b> (butuh ≥ 2 file bulan lalu).</li>
-<li>Di layar kecil halaman ini <b>bisa digulir</b> — semua kartu tetap terjangkau; tombol ⤢ Perbesar Tabel / ⛶ Layar Penuh juga tersedia.</li>
-</ul>
 <h3>Tab Follow Up</h3>
 <ul>
 <li><b>Centang baris mencurigakan</b> (kolom ✓ di tab Anomali <b>atau tab Hari Mencurigakan</b>, atau tombol ☑ di pop-up detail) → baris terkumpul di tab <b>Follow Up</b> dalam format rekap: TOTAL · AVG · MAX · SOURCE DATA · JENIS · KETERANGAN · NAMA BARANG · NAMA RESTO · SATUAN · hari 1–31.</li>
@@ -169,7 +160,7 @@ potensi, jumlah cabang/item, dst. — hasil siap di tab lain.</li>
 </ul>
 <h3>Filter (funnel di judul kolom tabel)</h3>
 <ul>
-<li>SEMUA kolom tabel punya ikon funnel di ujung kanan judulnya — klik = menu: <b>daftar nilai bercentang</b> (angka = jumlah baris), kotak cari, tombol <b>Urut Naik/Turun</b>, dan <b>☑ Pilih Semua</b> (lepas filter kolom itu).</li>
+<li>SEMUA kolom tabel punya ikon funnel di ujung kanan judulnya — klik = menu: <b>daftar nilai bercentang</b> (angka = jumlah baris), kotak cari, tombol <b>Urut Naik / Urut Turun</b> (Naik = <b>besar dulu</b>, Turun = kecil dulu), <b>☑ Pilih Semua</b> (lepas filter kolom itu), dan <b>◉ Hanya Ini</b> (centang hanya hasil cari). <b>Klik-ganda nilai = tampilkan hanya nilai itu</b> — tanpa uncek satu per satu.</li>
 <li>Funnel berwarna <b>merah</b> = kolom itu sedang terfilter. Berlaku di tab Anomali, Hari Mencurigakan, Follow Up (filter tampilan saja — daftar tak berubah), dan Banding Periode (per halaman).</li>
 <li>Di tab Anomali &amp; Hari: kolom NAMA RESTO / NAMA BARANG / JENIS / KETERANGAN / STATUS berbagi state yang sama antar kedua tab (dan KPI ikut terfilter); kolom lain = filter tampilan tabel itu saja.</li>
 <li>Tombol <b>✕ Hapus Filter</b> (tab Anomali &amp; Hari) = lepas SEMUA filter sekaligus.</li>
@@ -238,9 +229,9 @@ def _adaptive_min_height(screen_h: int | None) -> int:
 
 
 class MainWindow(QMainWindow):
-    """Jendela utama: toolbar + 6 tab view + status bar (v2.12.4: tanpa
-    sidebar — filter via funnel judul kolom, tabel lebar penuh; v2.13.1:
-    + tab Scorecard Cabang)."""
+    """Jendela utama: toolbar + 5 tab view + status bar (v2.12.4: tanpa
+    sidebar — filter via funnel judul kolom, tabel lebar penuh; v2.18.5:
+    tab Scorecard Cabang DIHAPUS permintaan user)."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -349,25 +340,24 @@ class MainWindow(QMainWindow):
         # Anomali — alur buruan → tindak lanjut).
         # v2.17.0 (rombak P0 — urutan alur analisa): Pipeline (muat data)
         # di index 0 = entry point, Anomali (analisa utama) index 1,
-        # drill-down Hari/Scorecard/Banding index 2-4, Follow Up (tindak
-        # lanjut) terakhir index 5. Sebelumnya Pipeline di index 5 — user
+        # drill-down Hari/Banding index 2-3, Follow Up (tindak lanjut)
+        # terakhir index 4. Sebelumnya Pipeline di index akhir — user
         # harus tab ke akhir dulu baru bisa muat data (alur terbalik).
+        # v2.18.5: Scorecard Cabang DIHAPUS (permintaan user — tab &
+        # modul insights.py dibuang bersama dead code-nya; 6 → 5 tab).
         self._views: list[tuple[str, QWidget]] = [
             ("Pipeline", PipelineView(self.ctx)),
             ("Anomali", AnomaliView(self.ctx)),
             ("Hari Mencurigakan", HariView(self.ctx)),
-            # v2.13.1: tab Scorecard Cabang (urutan kunjungan audit +
-            # kartu pendukung: top kerugian, pola hari kalender, hari
-            # sistemik) — setelah Hari Mencurigakan, sebelum Banding.
-            ("Scorecard Cabang", ScorecardView(self.ctx)),
             ("Banding Periode", PeriodeView(self.ctx)),
             ("Follow Up", FollowUpView(self.ctx)),
         ]
         for name, view in self._views:
             self._tabs.addTab(view, name)
         # v2.12.0: ref view Follow Up (badge jumlah baris di judul tab).
-        # v2.17.0: Follow Up sekarang di index 5 (sebelumnya 1).
-        self._fu_view = self._views[5][1]
+        # v2.17.0: Follow Up sekarang di index 4 (v2.18.5: tetap 4 setelah
+        # Scorecard dihapus — index terakhir).
+        self._fu_view = self._views[4][1]
         self._update_followup_badge()
         self._tabs.currentChanged.connect(self._on_tab_changed)
         # v2.13.11 (gel-2 D4): first-run — currentChanged terpasang SETELAH
@@ -379,18 +369,19 @@ class MainWindow(QMainWindow):
         self._on_tab_changed(self._tabs.currentIndex())
         # Anti-terpotong: bila tab bar sempit, teks di-elide dengan '…'
         # (konvensi jelas) + tombol panah scroll — TIDAK pernah dipotong
-        # mentah mid-character. 4 tab (v2.9.0) masih muat di jendela
+        # mentah mid-character. 5 tab (v2.18.5) masih muat di jendela
         # normal; jendela sempit memakai tombol scroll.
         self._tabs.setElideMode(Qt.TextElideMode.ElideRight)
         self._tabs.setUsesScrollButtons(True)
         self.setCentralWidget(self._tabs)
-        # v2.13.14 (gel-5 D24) — SHORTCUT GLOBAL pindah tab Ctrl+1..Ctrl+6:
+        # v2.13.14 (gel-5 D24) — SHORTCUT GLOBAL pindah tab Ctrl+1..Ctrl+5:
         # navigasi antar tab dulunya HANYA via mouse (audit D24: nol
         # shortcut global; pengguna keyboard harus klik tab bar).
         # QAction tanpa tombol fisik — addAction(window) memasang shortcut
         # aktif selama jendela fokus (konteks default WindowShortcut).
         # QKeySequence("Ctrl+N") literal: StandardKey tak punya padanan
         # angka (satu-satunya angka: StandardKey.Undo/Redo dsb. — aman).
+        # v2.18.5: 6 → 5 action (Scorecard dihapus — loop generik).
         self._tab_actions: list[QAction] = []
         for i, (name, _view) in enumerate(self._views):
             act = QAction(f"Pindah ke tab {name}", self)
@@ -415,7 +406,7 @@ class MainWindow(QMainWindow):
             self._tab_actions.append(act)
 
     def _on_tab_shortcut(self, _checked: bool = False) -> None:
-        """Slot Ctrl+1..Ctrl+6 — pindah tab sesuai action pengirim
+        """Slot Ctrl+1..Ctrl+5 — pindah tab sesuai action pengirim
         (index lewat property 'tab_index'; receiver lemah — D24-fix)."""
         act = self.sender()
         idx = act.property("tab_index") if act is not None else None

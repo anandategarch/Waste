@@ -206,11 +206,20 @@ def _nk(v):
 class _HeaderFilterMenu(QMenu):
     """Menu filter per kolom (v2.12.3) — filter nilai + opsi sort.
 
-    Susunannya: [↗ Urut Naik] [↘ Urut Turun] · [kotiak cari] · daftar
-    nilai (jumlah barisnya) · [☑ Pilih Semua] [Selesai]. Live-apply
-    di-DEBOUNCE 120 ms — centang beruntun = satu broadcast. Menu tetap
-    terbuka saat tabel ter-update di belakangnya (QMenu menutup saat
-    klik di luar / tombol Selesai).
+    Susunannya: [Urut Naik (besar dulu)] [Urut Turun (kecil dulu)] ·
+    [kotak cari] · daftar nilai (jumlah barisnya) · [☑ Pilih Semua]
+    [◉ Hanya Ini] [Selesai]. Live-apply di-DEBOUNCE 120 ms — centang
+    beruntun = satu broadcast. Menu tetap terbuka saat tabel ter-update
+    di belakangnya (QMenu menutup saat klik di luar / tombol Selesai).
+
+    v2.18.5 (permintaan user ×2):
+    - "Urut Naik" = nilai TERBESAR di atas ("naik" = yang besar naik
+      ke atas). Dulu mengikuti konvensi Excel (naik = kecil→besar) —
+      user menekan Naik dan mendapat nilai terkecil duluan
+      ("kebalik"). Label kini eksplisit "(besar dulu)"/"(kecil dulu)"
+      supaya arahnya terbaca tanpa hafalan.
+    - Klik-ganda nilai = tampilkan HANYA nilai itu (pengganti uncek
+      satu per satu); tombol ◉ Hanya Ini = centang hanya hasil cari.
     """
 
     def __init__(self, view: QTableView, col: str, key: str,
@@ -246,18 +255,31 @@ class _HeaderFilterMenu(QMenu):
         lay.setSpacing(6)
 
         # — Baris sort (permintaan "ada opsi sort") —
+        # v2.18.5: arah DITUKAR per permintaan user ("tekan sort naik
+        # malah mulai dari nilai terkecil — kebalik"): Naik = TERBESAR
+        # dulu, Turun = TERKECIL dulu. Panah ↗/↘ dihapus supaya tak
+        # bentrok dgn indikator ▲/▼ klik-judul-kolom (Qt: ▲ = kecil
+        # dulu) — teks "(besar dulu)"/"(kecil dulu)" eksplisit.
         srow = QWidget(w)
         sl = QHBoxLayout(srow)
         sl.setContentsMargins(0, 0, 0, 0)
         sl.setSpacing(6)
-        b_up = QPushButton("↗ Urut Naik", srow)
-        b_dn = QPushButton("↘ Urut Turun", srow)
-        b_up.setToolTip("Urutkan tabel menurut kolom ini, terkecil/"
-                        "A→Z duluan (klik judul kolom juga bisa).")
-        b_dn.setToolTip("Urutkan tabel menurut kolom ini, terbesar/"
-                        "Z→A duluan (klik judul kolom juga bisa).")
-        b_up.clicked.connect(lambda: self._sort(Qt.SortOrder.AscendingOrder))
-        b_dn.clicked.connect(lambda: self._sort(Qt.SortOrder.DescendingOrder))
+        b_up = QPushButton("Urut Naik (besar dulu)", srow)
+        b_dn = QPushButton("Urut Turun (kecil dulu)", srow)
+        b_up.setToolTip(
+            "Urutkan tabel menurut kolom ini — nilai TERBESAR / 9→0 / "
+            "Z→A di baris paling atas.\n"
+            "(Klik judul kolom tabel juga bisa — klik pertamanya "
+            "kecil dulu, indikator ▲/▼ di judul menunjukkan arah.)")
+        b_dn.setToolTip(
+            "Urutkan tabel menurut kolom ini — nilai TERKECIL / 0→9 / "
+            "A→Z di baris paling atas.\n"
+            "(Klik judul kolom tabel juga bisa — klik pertamanya "
+            "kecil dulu, indikator ▲/▼ di judul menunjukkan arah.)")
+        b_up.clicked.connect(
+            lambda: self._sort(Qt.SortOrder.DescendingOrder))
+        b_dn.clicked.connect(
+            lambda: self._sort(Qt.SortOrder.AscendingOrder))
         sl.addWidget(b_up, 1)
         sl.addWidget(b_dn, 1)
         lay.addWidget(srow)
@@ -266,6 +288,10 @@ class _HeaderFilterMenu(QMenu):
         self._ed = QLineEdit(w)
         self._ed.setPlaceholderText("Cari nilai… (huruf besar/kecil sama)")
         self._ed.setClearButtonEnabled(True)
+        self._ed.setToolTip(
+            "Ketik untuk menyempitkan daftar nilai.\n"
+            "Lalu tombol ◉ Hanya Ini = centang HANYA hasil cari "
+            "(nilai lain dilepas).")
         self._ed.textChanged.connect(self._populate)
         lay.addWidget(self._ed)
 
@@ -275,8 +301,15 @@ class _HeaderFilterMenu(QMenu):
         self._lw.setToolTip(
             "Nilai TERCENTANG = ikut tampil (semantik slicer — chip di "
             "baris slicer ikut sinkron).\nSemua tercentang = filter kolom "
-            "ini lepas.\nAngka dalam kurung = jumlah baris.")
+            "ini lepas.\nAngka dalam kurung = jumlah baris.\n"
+            "v2.18.5: KLIK-GANDA nilai = tampilkan HANYA nilai itu "
+            "(semua nilai lain dilepas — tanpa uncek satu per satu).")
         self._lw.itemChanged.connect(self._on_item)
+        # v2.18.5 — klik-ganda = pilih hanya nilai itu (permintaan user:
+        # "pengen pilih 1 data itu aja dibanding harus uncek satu per
+        # satu"). Dua klik pertama (toggle kotak centang bolak-balik)
+        # netral; handler ini yang menetapkan keadaan akhir.
+        self._lw.itemDoubleClicked.connect(self._on_double_item)
         lay.addWidget(self._lw, 1)
 
         # — Baris aksi —
@@ -287,9 +320,23 @@ class _HeaderFilterMenu(QMenu):
         b_all = QPushButton("☑ Pilih Semua", arow)
         b_all.setToolTip("Centang semua nilai = lepas filter kolom ini.")
         b_all.clicked.connect(self._pick_all)
+        # v2.18.5 — ◉ Hanya Ini: centang HANYA nilai yang cocok kotak
+        # cari (aktif setelah mengetik; tanpa kata kunci tombol mati —
+        # 'hanya semua' tak bermakna). Jalur cepat 1 nilai: ketik →
+        # klik-ganda.
+        b_only = QPushButton("◉ Hanya Ini", arow)
+        b_only.setToolTip(
+            "Centang HANYA nilai yang cocok kotak cari — semua nilai "
+            "lain dilepas. Aktif setelah mengetik kata kunci.\n"
+            "(Jalur cepat 1 nilai: ketik namanya lalu klik-ganda "
+            "nilai di daftar.)")
+        b_only.setEnabled(False)
+        b_only.clicked.connect(self._only_search)
+        self._b_only = b_only
         b_ok = QPushButton("Selesai ✓", arow)
         b_ok.clicked.connect(self.close)
         al.addWidget(b_all, 1)
+        al.addWidget(b_only, 1)
         al.addWidget(b_ok, 1)
         lay.addWidget(arow)
 
@@ -364,6 +411,9 @@ class _HeaderFilterMenu(QMenu):
             note.setFlags(Qt.ItemFlag.NoItemFlags)
             self._lw.addItem(note)
         self._lw.blockSignals(False)
+        # v2.18.5 — ◉ Hanya Ini hanya relevan saat ada kata kunci cari
+        # ('hanya semua nilai' = Pilih Semua, tak bermakna ganda).
+        self._b_only.setEnabled(bool(term))
 
     def _on_item(self, item: QListWidgetItem) -> None:
         v = item.data(Qt.ItemDataRole.UserRole)
@@ -377,6 +427,41 @@ class _HeaderFilterMenu(QMenu):
     def _pick_all(self) -> None:
         for v in self._counts:
             self._checked[_nk(v)] = True
+        self._populate(self._ed.text())
+        self._apply_now()
+
+    def _only_search(self) -> None:
+        """v2.18.5 — centang HANYA nilai yang cocok kotak cari; semua
+        nilai lain dilepas (permintaan user: pilih cepat tanpa uncek
+        satu per satu). Menu tetap terbuka — nilai lain masih bisa
+        ditambah dgn klik biasa (live-apply)."""
+        term = (self._ed.text() or "").strip().lower()
+        if not term:
+            return
+        keep: set = set()
+        for v in self._counts:
+            raw = "" if v is None else str(v)
+            disp = self._fmt(v) or "(kosong)"
+            if term in (disp + "\n" + raw).lower():
+                keep.add(_nk(v))
+        if not keep:
+            return  # 0 cocok — jangan lepaskan seluruh filter senyap
+        for v in self._counts:
+            self._checked[_nk(v)] = _nk(v) in keep
+        self._populate(self._ed.text())
+        self._apply_now()
+
+    def _on_double_item(self, item: QListWidgetItem) -> None:
+        """v2.18.5 — klik-ganda nilai = tampilkan HANYA nilai itu
+        (semua kotak lain dilepas). Dua klik toggle sebelum event ini
+        saling meniadakan; state akhir ditetapkan di sini (live-apply,
+        menu tetap terbuka utk menambah nilai lain dgn klik biasa)."""
+        v = item.data(Qt.ItemDataRole.UserRole)
+        if v is None and "(kosong)" not in item.text():
+            return  # baris catatan non-interaktif
+        key = _nk(v)
+        for vv in self._counts:
+            self._checked[_nk(vv)] = _nk(vv) == key
         self._populate(self._ed.text())
         self._apply_now()
 
@@ -1647,11 +1732,19 @@ class SortControl(QWidget):
     DataTable sendiri sudah setSortingEnabled(True) — klik header juga
     sort. Kontrol ini memberi akses EKSPLISIT (permintaan user: tombol
     sort terlihat, bukan tersembunyi di klik header).
+
+    v2.18.5 — MAKNA "Naik" DITUKAR per permintaan user ("tekan sort
+    naik malah mulai dari nilai terkecil — kebalik"): Naik = nilai
+    TERBESAR di atas ("yang besar naik ke atas"), Turun = TERKECIL di
+    atas. Konsisten dgn tombol funnel Urut Naik/Turun; teks tombol
+    eksplisit "(besar dulu)"/"(kecil dulu)" supaya arah terbaca.
     """
 
     def __init__(self, table, parent=None) -> None:
         super().__init__(parent)
         self._table_ref = weakref.ref(table) if table is not None else None
+        # Default = besar dulu (= "Naik" dalam kosakata user) — analisa
+        # waste hampir selalu mau masalah terbesar di atas.
         self._order = Qt.SortOrder.DescendingOrder
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -1666,14 +1759,16 @@ class SortControl(QWidget):
             "(Klik judul kolom tabel juga bisa sort langsung.)")
         self._cb.currentIndexChanged.connect(self._apply)
         lay.addWidget(self._cb)
-        self._dir = QPushButton("↓", self)
-        self._dir.setFixedWidth(34)
+        self._dir = QPushButton("Naik (besar dulu)", self)
         self._dir.setToolTip(
-            "Klik utk balik arah sort.\n↓ = Turun (besar→kecil / Z→A)\n"
-            "↑ = Naik (kecil→besar / A→Z)")
+            "Klik utk balik arah sort.\n"
+            "Naik = besar dulu (9→0 / Z→A)\n"
+            "Turun = kecil dulu (0→9 / A→Z)\n"
+            "(Klik judul kolom tabel: klik pertamanya kecil dulu — "
+            "indikator ▲/▼ di judul menunjukkan arah.)")
         self._dir.setStyleSheet(
-            "QPushButton { font-weight:700; font-size:13px; "
-            "padding:2px 0; }")
+            "QPushButton { font-weight:700; font-size:12px; "
+            "padding:2px 8px; }")
         self._dir.clicked.connect(self._toggle_dir)
         lay.addWidget(self._dir)
 
@@ -1718,8 +1813,11 @@ class SortControl(QWidget):
         self._order = (Qt.SortOrder.AscendingOrder
                        if self._order == Qt.SortOrder.DescendingOrder
                        else Qt.SortOrder.DescendingOrder)
-        self._dir.setText("↑" if self._order == Qt.SortOrder.AscendingOrder
-                          else "↓")
+        # v2.18.5: Naik = besar dulu (Descending), Turun = kecil dulu
+        # (Ascending) — lihat docstring kelas.
+        self._dir.setText("Turun (kecil dulu)"
+                          if self._order == Qt.SortOrder.AscendingOrder
+                          else "Naik (besar dulu)")
         self._apply()
 
     def _apply(self) -> None:

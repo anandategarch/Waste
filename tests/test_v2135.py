@@ -145,13 +145,13 @@ class TestKlikGandaTakLagiFilter:
         assert view._table.model().rowCount() == n
 
     def test_sinyal_double_clicked_tetap_hidup_untuk_view_lain(self):
-        """Infrastruktur double_clicked TIDAK dihancurkan — tab Scorecard
-        & Banding Periode masih memakainya utk pop-up rincian (bukan
-        filter)."""
+        """Infrastruktur double_clicked TIDAK dihancurkan — tab Banding
+        Periode masih memakainya utk pop-up rincian (bukan filter).
+        (v2.18.5: tab Scorecard dihapus — pengguna tinggal Banding.)"""
         from ui.widgets import DataTable
         assert hasattr(DataTable, "double_clicked")
-        src_s = (UI / "view_scorecard.py").read_text(encoding="utf-8")
-        assert "double_clicked.connect" in src_s
+        src_p = (UI / "view_periode.py").read_text(encoding="utf-8")
+        assert "doubleClicked.connect" in src_p
 
     def test_dblclick_kini_juga_membuka_pop_up(self):
         """doubleClicked diteruskan ke row_clicked (tekan#2 DblClick tidak

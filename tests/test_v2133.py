@@ -1,8 +1,5 @@
-"""test_v2133.py — v2.13.3: ⑧ tren multi-bulan + ⑮ pratinjau ambang + ⑯ re-import TL.
+"""test_v2133.py — v2.13.3 (sisa): ⑯ re-import hasil tindak lanjut.
 
-- branch_trend: tabel per-bulan (butuh ≥ 2 pembanding) + TREN
-  (↗ Naik/↘ Turun/→ Stabil/Baru/Pulih vs pembanding terbaru).
-- scorecard: kolom TREN (aktif dgn 1 pembanding; "—" tanpa pembanding).
 - import_followup_workbook: round-trip file ekspor terisi → resolved
   {fp: info}; baris kosong di-skip; kolom kunci hilang → error jujur;
   file/sheet salah → error (tidak raise).
@@ -11,6 +8,8 @@
   no-op tanpa broadcast.
 - FollowUpView: kolom STATUS TL + PIC muncul bila ada resolusi; label
   "selesai X/Y".
+- ⑧ branch_trend / TREN scorecard DIHAPUS v2.18.5 bersama tab Scorecard
+  Cabang & waste_anomaly/insights.py (permintaan user).
 """
 from __future__ import annotations
 
@@ -25,7 +24,6 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from waste_anomaly.insights import branch_trend  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -33,106 +31,6 @@ REPO = Path(__file__).resolve().parent.parent
 def _qapp():
     from PySide6.QtWidgets import QApplication
     return QApplication.instance() or QApplication([])
-
-
-def _detail() -> pd.DataFrame:
-    """2 cabang × item MIE (TOTAL beda) + kolom minimal pipeline."""
-    return pd.DataFrame({
-        "NAMA RESTO": ["R1", "R1", "R2", "R2"],
-        "NAMA BARANG": ["MIE", "TEH", "MIE", "TEH"],
-        "JENIS": ["WASTE"] * 4,
-        "KETERANGAN": ["Handling"] * 4,
-        "SOURCE DATA": ["W"] * 4,
-        "SATUAN": ["GR"] * 4,
-        "TOTAL": [100.0, 10.0, 50.0, 0.0],
-        "Count Hari": [20, 5, 3, 0],
-    })
-
-
-def _month(label: str, totals: dict[str, float]) -> dict:
-    rows = pd.DataFrame({
-        "NAMA RESTO": list(totals.keys()),
-        "NAMA BARANG": "MIE",
-        "TOTAL": list(totals.values()),
-    })
-    return {"label": label, "agg": rows, "error": None}
-
-
-# ============================================================
-# [A] BRANCH TREND (⑧)
-# ============================================================
-
-class TestBranchTrend:
-    def test_butuh_dua_pembanding(self):
-        df = _detail()
-        assert branch_trend(df, None).empty
-        assert branch_trend(df, [_month("Juli 2026", {"R1": 90.0})]).empty
-
-    def test_kolom_bulan_dan_tren(self):
-        df = _detail()
-        months = [
-            _month("Juli 2026", {"R1": 90.0, "R2": 60.0}),
-            _month("Agustus 2026", {"R1": 80.0, "R2": 60.0}),
-        ]
-        out = branch_trend(df, months)
-        assert list(out.columns[:3]) == ["NAMA RESTO", "Juli 2026",
-                                         "Agustus 2026"]
-        assert "Bulan Ini" in out.columns and "TREN" in out.columns
-        by = {r["NAMA RESTO"]: r for r in out.to_dict("records")}
-        # R1: 100 vs 80 (+25%) → Naik; R2: 50 vs 60 (−17%) → Turun
-        assert by["R1"]["TREN"] == "↗ Naik"
-        assert by["R2"]["TREN"] == "↘ Turun"
-
-    def test_baru_pulih_stabil(self):
-        df = _detail()
-        # R2 bulan lalu aktif tapi sekarang TEH nol & MIE 50 → total 50
-        months = [
-            _month("Juli 2026", {"R9": 5.0, "R2": 55.0}),
-            _month("Agustus 2026", {"R9": 10.0, "R2": 52.0}),
-        ]
-        out = branch_trend(df, months)
-        by = {r["NAMA RESTO"]: r for r in out.to_dict("records")}
-        # R9 tak ada sekarang (0) tapi aktif Juli → Pulih
-        assert by["R9"]["TREN"] == "Pulih"
-        # R2: 50 vs 52 (−3,8%) → Stabil
-        assert by["R2"]["TREN"] == "→ Stabil"
-        # resto baru: tambahkan R8 cuma sekarang
-        df2 = pd.concat([_detail(), pd.DataFrame([{
-            "NAMA RESTO": "R8", "NAMA BARANG": "MIE", "JENIS": "WASTE",
-            "KETERANGAN": "Handling", "SOURCE DATA": "W", "SATUAN": "GR",
-            "TOTAL": 5.0, "Count Hari": 2}])], ignore_index=True)
-        out2 = branch_trend(df2, months)
-        by2 = {r["NAMA RESTO"]: r for r in out2.to_dict("records")}
-        assert by2["R8"]["TREN"] == "Baru"
-
-    def test_urut_bulan_sejarah(self):
-        df = _detail()
-        months = [
-            _month("Agustus 2026", {"R1": 80.0}),
-            _month("Juli 2026", {"R1": 90.0}),
-        ]
-        out = branch_trend(df, months)
-        assert list(out.columns[1:3]) == ["Juli 2026", "Agustus 2026"]
-
-
-# ============================================================
-# [B] SCORECARD TREN COLUMN
-# ============================================================
-
-class TestScorecardTren:
-    def test_tanpa_pembanding_min_stripe(self):
-        from waste_anomaly.insights import SCORECARD_COLS, scorecard
-        assert "TREN" in SCORECARD_COLS
-        out = scorecard(_detail(), None, 31, {})
-        assert (out["TREN"] == "—").all()
-
-    def test_dengan_satu_pembanding(self):
-        from waste_anomaly.insights import scorecard
-        out = scorecard(_detail(), [_month("Agustus 2026",
-                                           {"R1": 80.0})], 31, {})
-        by = {r["NAMA RESTO"]: r for r in out.to_dict("records")}
-        assert by["R1"]["TREN"] == "↗ Naik"
-        assert by["R2"]["TREN"] == "Baru"
 
 
 # ============================================================
@@ -344,38 +242,3 @@ class TestFollowupViewStatusTL:
         assert "STATUS TL" not in cols
         view.close()
         view.deleteLater()
-
-
-# ============================================================
-# [G] DATA ASLI — TREN dgn pembanding repo (1 bulan → kartu kosong)
-# ============================================================
-
-FIXTURE = REPO / "DATA_WASTE.xlsx"
-PEMBANDING = REPO / "REKAP MENTAH_01-31 AGUSTUS 2026_TEGAR.xlsx"
-
-
-@pytest.mark.skipif(not FIXTURE.exists(), reason="fixture tidak ada")
-class TestDataAsli:
-    @pytest.fixture(scope="class")
-    def real(self):
-        from waste_anomaly.pipeline import run_pipeline
-        from waste_anomaly.period_history import load_history_file
-        from waste_anomaly.utils import load_config
-        s = run_pipeline(workbook_path=str(FIXTURE), key_akhir=31)
-        months = []
-        if PEMBANDING.exists():
-            months = [load_history_file(str(PEMBANDING), load_config())]
-        return {"df": s["df"], "months": months}
-
-    def test_tren_kolom_terisi_dgn_1_bulan(self, real):
-        from waste_anomaly.insights import scorecard
-        out = scorecard(real["df"], real["months"], 31, {})
-        assert "TREN" in out.columns
-        vals = set(out["TREN"].dropna().unique())
-        assert vals <= {"↗ Naik", "↘ Turun", "→ Stabil", "Baru", "Pulih",
-                        "—"}
-        assert (out["TREN"] != "—").all()  # ada pembanding → semua ber-tren
-
-    def test_branch_trend_kosong_dgn_1_bulan(self, real):
-        # kartu butuh ≥ 2 bulan — pesan jujur (bukan crash)
-        assert branch_trend(real["df"], real["months"]).empty

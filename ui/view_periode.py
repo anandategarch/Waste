@@ -408,7 +408,7 @@ class PeriodeView(QWidget):
         self._tbl_files.doubleClicked.connect(self._on_double)
         # v2.13.14 (gel-5 B19): rename via KEYBOARD — Enter/F2 di baris
         # terpilih memicu dialog rename (padanan klik-2×; pola eventFilter
-        # Enter drill Scorecard gel-4 C7 — dulu rename cuma bisa mouse).
+        # Enter drill pop-up gel-4 C7 — dulu rename cuma bisa mouse).
         self._tbl_files.installEventFilter(self)
         rl.addWidget(self._tbl_files, 1)
 
@@ -1323,12 +1323,23 @@ class PeriodeView(QWidget):
         # nama file vs pembanding = kode resto; 'BJMHAS' match
         # '1216.BJMHAS'), jadi warning kini berarti set resto memang
         # benar-benar berbeda antara kedua sisi.
+        # v2.18.5 — resto satu-sisi kini DISSEMBUNYIKAN dari tabel
+        # (permintaan user: "belum ada pembandingnya → gak perlu muncul")
+        # — 0 cocok berarti TIDAK ADA baris yang bisa dibandingkan.
         if res.get("resto_overlap_warn"):
             msg += ("  ⚠ 0 cabang cocok antara bulan ini & pembanding — "
                     "set resto kedua sisi berbeda (pencocokan sudah "
                     "toleran konvensi nama file vs kode resto sejak "
-                    "v2.18.4); daftar BARU/HILANG di bawah tidak "
-                    "bermakna.")
+                    "v2.18.4); tidak ada baris yang bisa dibandingkan.")
+        # v2.18.5 — transparansi resto tersembunyi: cabang baru bulan ini
+        # / hanya ada di pembanding tak tampil (belum/tak lagi ada
+        # pembandingnya) — jumlahnya DISEBUT supaya tidak terkesan hilang.
+        only_a = int(res.get("resto_only_a") or 0)
+        only_b = int(res.get("resto_only_b") or 0)
+        if not res.get("resto_overlap_warn") and (only_a or only_b):
+            msg += (f"  ⧩ {only_a + only_b} cabang tanpa pembanding "
+                    f"disembunyikan ({only_a} hanya di bulan ini, "
+                    f"{only_b} hanya di pembanding).")
         self._lbl_compare.setText(msg)
 
     # ------------------------------------------------------------

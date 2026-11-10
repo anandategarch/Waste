@@ -240,8 +240,8 @@ _MONTH_UNPARSEABLE = (9999, 0)
 def label_parseable(label: str) -> bool:
     """Label bulan bisa diparse jadi (tahun, bulan)? (audit v2.18.0).
 
-    Pemilihan "bulan TERBARU" (day_evidence_vs_history, scorecard
-    BARU/PULIH, coverage verdict) memakai max(month_sort_key) — sentinel
+    Pemilihan "bulan TERBARU" (day_evidence_vs_history, verdict
+    kualitas data) memakai max(month_sort_key) — sentinel
     (9999, 0) untuk label aneh ("data1.xlsx") MENANG max() dan terpilih
     sebagai "terbaru" padahal tak informatif. Konsumen kini memfilter
     lewat helper ini sebelum max().
@@ -712,6 +712,35 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
     else:
         ta = _totals_by(a.get("agg"), ["NAMA RESTO", "NAMA BARANG"])
         tb = _totals_by(b.get("agg"), ["NAMA RESTO", "NAMA BARANG"])
+    # v2.18.5 — RESTO INTERSECTION (permintaan user: "misal bulan ini ada
+    # resto CKRBOS tetapi bulan kemarin gak ada, maka gak perlu muncul di
+    # banding periode karna belum ada pembandingnya. Begitu juga misal
+    # bulan kemarin ada bulan ini gak ada gak perlu ditampilkan").
+    # Resto yang hanya ada di SATU sisi (cabang baru bulan ini / tutup /
+    # ganti nama tak-termatch) TAK punya pembanding → barisnya
+    # disembunyikan dari SEMUA tabel banding (Cabang/Item/Baru/Hilang).
+    # Ringkasan sebulan (Total Waste, Waste per Hari, Cabang Aktif,
+    # Item Aktif) TETAP angka penuh bulan masing-masing — itu metrik
+    # bulan, bukan perbandingan. Jumlah cabang tersembunyi diserahkan ke
+    # pemanggil (resto_only_a / resto_only_b) supaya UI memberi tahu —
+    # data tak menghilang senyap.
+    def _resto_set(src: dict) -> set:
+        agg = src.get("agg")
+        if not isinstance(agg, pd.DataFrame) or agg.empty \
+                or "NAMA RESTO" not in agg.columns:
+            return set()
+        return set(_resto_key(agg["NAMA RESTO"]).unique())
+
+    set_a, set_b = _resto_set(a), _resto_set(b)
+    _common = set_a & set_b
+
+    def _keep_common(frame: pd.DataFrame) -> pd.DataFrame:
+        if frame is None or frame.empty \
+                or "NAMA RESTO" not in frame.columns:
+            return frame
+        return frame[_resto_key(frame["NAMA RESTO"]).isin(_common)]
+
+    ta, tb = _keep_common(ta), _keep_common(tb)
     key = (["JENIS", "NAMA RESTO", "NAMA BARANG"] if use_jenis
            else ["NAMA RESTO", "NAMA BARANG"])
     branch_cols = (["JENIS"] if use_jenis else []) + BRANCH_COLS
@@ -834,14 +863,9 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
     # = kode resto) TIDAK lagi menghasilkan 0-overlap. Warning kini
     # hanya nyala bila set resto kedua sisi memang berbeda; angka
     # diserahkan ke pemanggil (UI memberi peringatan) — murni informatif.
-    def _resto_set(src: dict) -> set:
-        agg = src.get("agg")
-        if not isinstance(agg, pd.DataFrame) or agg.empty \
-                or "NAMA RESTO" not in agg.columns:
-            return set()
-        return set(_resto_key(agg["NAMA RESTO"]).unique())
-
-    set_a, set_b = _resto_set(a), _resto_set(b)
+    # v2.18.5: set_a/set_b/_common dihitung SEKALI di atas (dipakai
+    # filter resto intersection); di sini cukup laporan overlap + jumlah
+    # cabang satu-sisi yang disembunyikan.
     resto_overlap = len(set_a & set_b)
     resto_overlap_warn = bool(set_a and set_b and resto_overlap == 0)
 
@@ -858,6 +882,10 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
         "gone_items": gone_items,
         "resto_overlap": resto_overlap,
         "resto_overlap_warn": resto_overlap_warn,
+        # v2.18.5 — cabang SATU-SISI (tanpa pembanding) yang disembunyikan
+        # dari tabel: hanya di bulan ini / hanya di pembanding.
+        "resto_only_a": len(set_a - set_b),
+        "resto_only_b": len(set_b - set_a),
     }
 
 

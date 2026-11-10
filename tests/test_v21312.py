@@ -119,54 +119,6 @@ def _make_view(df: pd.DataFrame | None = None):
     return view, ctx
 
 
-def _df_scorecard(n_resto: int = 4, sama_item: bool = True) -> pd.DataFrame:
-    """Dataset sintetis utk Scorecard (pola test_v21311; sama_item=True
-    → item SAMA di ≥ 3 resto supaya money_ranking (peer ≥ 3) terisi)."""
-    rows = []
-    for i in range(n_resto):
-        data = {str(d): 0.0 for d in range(1, 32)}
-        data["5"] = 10.0
-        rows.append({
-            "SOURCE DATA": "WASTE BAHAN DAN PACKAGING",
-            "JENIS": "WASTE", "KETERANGAN": "Handling",
-            "NAMA BARANG": "MIE" if sama_item else f"MIE-{i}",
-            "NAMA RESTO": f"R{i}",
-            "SATUAN": "GR", "ANOMALY STATUS": "Perlu Review",
-            "PROFIL": "Tiap Hari",
-            **data, "TOTAL": float(100 + 10 * i),
-            "KELEBIHAN": 5.0, "PEER MEDIAN (AKTIF)": 50.0,
-            "TOTAL BOM": 10_000.0,
-        })
-    return pd.DataFrame(rows)
-
-
-def _view_scorecard(df: pd.DataFrame, config: dict | None = None,
-                    summary: dict | None = None):
-    """ScorecardView + dataset (refresh dipaksa — lazy on_shown)."""
-    from ui.state import AppContext
-    from ui.view_scorecard import ScorecardView
-    app = _qapp()
-    ctx = AppContext(config if config is not None else {})
-    ctx.set_dataset(df, summary if summary is not None else {"key_akhir": 31})
-    view = ScorecardView(ctx)
-    view.show()
-    app.processEvents()
-    view._refresh()
-    app.processEvents()
-    return view, ctx, app
-
-
-def _hdr_tip(model, col_name: str) -> str:
-    from PySide6.QtCore import Qt
-    cols = list(model.dataframe.columns)
-    idx = cols.index(col_name)
-    return str(model.headerData(idx, Qt.Horizontal, Qt.ToolTipRole))
-
-
-# ============================================================
-# [D8/D9/D19] BANTUAN (F1) — seksi Pipeline + Impor TL + tanpa token
-# ============================================================
-
 class TestBantuanPipeline:
     def test_seksi_tab_pipeline_lengkap(self):
         """D8: Bantuan memuat seksi 'Tab Pipeline (tempat semua dimulai)'
@@ -353,46 +305,6 @@ class TestTooltipPerView:
         m.set_tooltip_map(None)
         assert m.headerData(0, Qt.Horizontal, Qt.ToolTipRole) == tip_global
 
-    def test_scorecard_hari_tiga_makna(self):
-        """C3 (wiring Scorecard): 'HARI TERSANGKA' tabel utama =
-        JUMLAH BARIS ber-bukti (bukan tanggal — kamus global menjelaskan
-        tanggal); 'HARI' kartu kalender = Senin–Minggu; 'HARI' kartu
-        sistemik = tanggal serentak — satu nama, tiga makna, kini
-        berkamus per tabel."""
-        from ui.view_scorecard import (
-            _SC_TIPS_MAIN,
-            _SC_TIPS_SISTEMIK,
-            _SC_TIPS_WEEKDAY,
-        )
-        view, _ctx, _app = _view_scorecard(
-            _df_scorecard(),
-            summary={"key_akhir": 31,
-                     "workbook_path": "REKAP_SEPTEMBER_2026.xlsx"})
-        tip = _hdr_tip(view._table.model(), "HARI TERSANGKA")
-        assert "JUMLAH BARIS" in tip and "BUKAN tanggal" in tip
-        wk_tip = view._weekday_table.model()._tooltip_map.get("HARI")
-        assert wk_tip is not None and "Senin" in wk_tip
-        sys_tip = view._sistemik_table.model()._tooltip_map.get("HARI")
-        assert sys_tip is not None and "serentak" in sys_tip
-        assert wk_tip != sys_tip  # dua makna berbeda utk kolom sama
-        # kamus per-view memang ada isinya (bukan peta kosong)
-        assert len(_SC_TIPS_MAIN) >= 10
-        assert _SC_TIPS_WEEKDAY and _SC_TIPS_SISTEMIK
-
-    def test_sepuluh_kolom_utama_berkamus(self):
-        """C9: 10/13 kolom tabel utama Scorecard yang dulunya POLOS
-        (hover = nama kolom doang) kini berkamus Bahasa awam."""
-        view, _ctx, _app = _view_scorecard(_df_scorecard())
-        model = view._table.model()
-        cols = list(model.dataframe.columns)
-        for col in ("RANK", "TOTAL WASTE", "INTENSITAS %",
-                    "ALASAN DOMINAN", "ITEM TIAP HARI", "ANOMALI",
-                    "BARU", "PULIH", "STATUS INPUT", "TREN"):
-            assert col in cols, f"kolom {col} tak ada di tabel utama"
-            tip = _hdr_tip(model, col)
-            assert tip and tip != col and len(tip) > 12, (
-                f"kolom {col} masih polos: {tip!r}")
-
 
 class TestAngkaAmbangDariConfig:
     def test_config_override_tooltip_dan_help_ikut(self):
@@ -430,20 +342,6 @@ class TestAngkaAmbangDariConfig:
         assert "≥ 6" in tips["ANOMALY STATUS"]       # valid ikut
         # None seluruhnya (bukan dict thresholds)
         assert "≥ 8" in build_column_tooltips(None)["ANOMALY STATUS"]
-
-    def test_scorecard_runtime_ctx_config(self):
-        """C18: Scorecard memakai config RUNTIME (ctx.config) — bukan
-        snapshot import-time COLUMN_TOOLTIPS (view dgn config beda
-        menampilkan angka beda di tabel yang sama)."""
-        view, _ctx, _app = _view_scorecard(
-            _df_scorecard(), config={"thresholds": {"STATUS_PRIORITAS": 12}})
-        # tabel money (kolom MONEY_COLS berisi ANOMALY STATUS) memakai
-        # kamus runtime → '≥ 12', bukan '≥ 8' snapshot import.
-        model = view._money_table.model()
-        cols = list(model.dataframe.columns)
-        assert "ANOMALY STATUS" in cols, cols
-        tip = _hdr_tip(model, "ANOMALY STATUS")
-        assert "≥ 12" in tip and "≥ 8" not in tip
 
 
 # ============================================================

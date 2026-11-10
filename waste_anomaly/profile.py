@@ -56,9 +56,9 @@ PROFIL_KOSONG = "—"
 PROFIL_BARU_SUFFIX = " — Baru"
 
 # Default pola: sama kunci grup peer stage 6 (grup perbandingan konsisten).
+# (v2.18.5: alias publik PEER_KEYS dihapus — konsumen terakhir
+# insights.money_ranking ikut hilang saat tab Scorecard dibuang.)
 _PEER_KEYS = ("NAMA BARANG", "JENIS", "KETERANGAN", "SOURCE DATA")
-# Nama publik (dipakai insights.money_ranking — grup persentil peer sama).
-PEER_KEYS = _PEER_KEYS
 
 # Kolom output yang SELALU dibuat modul ini.
 PROFILE_COLS = [

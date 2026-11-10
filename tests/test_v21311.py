@@ -16,14 +16,9 @@ Cakupan (9 klaster fix, 20 test):
          berstatus non-Normal • Y prioritas+potensi • run HH:MM:SS"
          (angka prioritas+potensi ≡ semantik _build_summary) + label
          kartu Ringkasan Run "Total anomali (prioritas+potensi)".
-[C1+C5]×2  KPI Scorecard basi: dataset kosong → SEMUA KPI reset
-         ('—'/hitungan '0') + label 5 kartu + tabel DQ/Tren; dataset
-         tanpa kolom penjualan (BOM) → KPI hemat/intensitas/CABANG #1
-         '—' (dulu angka+nama dataset LAMA menempel).
-[C4]×2   Label 💰 jujur: "Top 200 dari N baris ber-kelebihan…" (total
-         nyata dari df KELEBIHAN>0 — dulu kap top_n ditampilkan sebagai
-         jumlah temuan) + suffix "tersaring: N tampil." saat funnel
-         lokal aktif.
+[C1+C5]×2  (DIHAPUS v2.18.5 — KPI Scorecard: tab Scorecard Cabang
+         & waste_anomaly/insights.py dibuang permintaan user.)
+[C4]×2   (DIHAPUS v2.18.5 — label 💰 kartu Scorecard, idem.)
 [C2]     Funnel lokal Follow Up direset saat dataset baru (pola
          Anomali/Hari; dulu menyangkut → tabel 0 baris senyap).
 [B4]×2   Combo pembanding PRESERVE pilihan user by path (kunci identitas
@@ -147,36 +142,6 @@ def _view_periode_files(tmp_path, monkeypatch, months):
     return view, ctx, app, wbs
 
 
-def _df_scorecard(n_resto: int = 4, n_rows: int | None = None,
-                  with_bom: bool = True) -> pd.DataFrame:
-    """Dataset sintetis utk Scorecard (kolom cukup utk insights semua
-    defensif): N baris MIE-i per R{r}; TOTAL naik per resto (intensitas
-    beda → KELEBIHAN>0 utk resto di atas median); BOM hadir/absen."""
-    rows = []
-    n = n_rows if n_rows is not None else n_resto
-    for i in range(n):
-        r = i % n_resto
-        data = {str(d): 0.0 for d in range(1, 32)}
-        data["5"] = 10.0
-        row = {
-            "SOURCE DATA": "WASTE BAHAN DAN PACKAGING",
-            "JENIS": "WASTE", "KETERANGAN": "Handling",
-            "NAMA BARANG": f"MIE-{i}", "NAMA RESTO": f"R{r}",
-            "SATUAN": "GR", "ANOMALY STATUS": "Perlu Review",
-            "PROFIL": "Tiap Hari",
-            **data, "TOTAL": float(100 + 10 * r),
-            "KELEBIHAN": 5.0, "PEER MEDIAN (AKTIF)": 50.0,
-        }
-        if with_bom:
-            row["TOTAL BOM"] = 10_000.0
-        rows.append(row)
-    return pd.DataFrame(rows)
-
-
-# ============================================================
-# [D4] First-run: tab awal ter-render + empty-state semua tab
-# ============================================================
-
 class TestD4FirstRun:
     def test_first_run_label_arah_terrender(self, tmp_path, monkeypatch):
         """D4: MainWindow baru (belum ada data) → label 'Belum ada data —
@@ -288,127 +253,6 @@ class TestD3DuaDefinisi:
 
 # ============================================================
 # [C1+C5] KPI Scorecard basi dibasmi
-# ============================================================
-
-class TestC1C5KpiScorecard:
-    def _view(self, df):
-        from ui.view_scorecard import ScorecardView
-        app = _qapp()
-        ctx = _ctx_dataset(df)
-        view = ScorecardView(ctx)
-        view.show()
-        app.processEvents()
-        view._refresh()
-        app.processEvents()
-        return view, ctx, app
-
-    def test_dataset_kosong_reset_semua_kpi_dan_tabel(self):
-        """C1: dataset berisi → KPI terisi; dataset KOSONG (pipeline baru
-        tanpa hasil / df empty) → SEMUA KPI reset ('—' agregat/nama, '0'
-        hitungan — konvensi C11) + label 5 kartu pendukung + tabel DQ/Tren
-        ikut dikosongkan. Dulu setengah-cabang: tabel utama dikosongkan
-        tapi KPI + label 'Semua pemeriksaan bersih.' data LAMA menempel
-        (klaim tanpa data)."""
-        view, ctx, app = self._view(_df_scorecard())
-        assert view._kpi_hemat._value.text() != "—", (
-            "premis: KPI hemat terisi saat ada data")
-        assert view._kpi_top._value.text() not in ("—", ""), (
-            "premis: CABANG #1 terisi")
-        # dataset baru KOONG
-        ctx.set_dataset(pd.DataFrame(), {"key_akhir": 31})
-        app.processEvents()
-        view._refresh()
-        app.processEvents()
-        assert view._kpi_hemat._value.text() == "—"
-        assert view._kpi_intens._value.text() == "—"
-        assert view._kpi_top._value.text() == "—"
-        assert view._kpi_sistemik._value.text() == "0"
-        for lbl in (view._lbl_money, view._lbl_weekday,
-                    view._lbl_sistemik, view._lbl_dq, view._lbl_trend):
-            assert lbl.text() == "", (
-                f"label kartu '{lbl.objectName() or 'hint'}' harus "
-                "dikosongkan saat dataset kosong (audit C1)")
-        assert view._table.model().rowCount() == 0
-        assert view._dq_table.model().rowCount() == 0
-        assert view._trend_table.model().rowCount() == 0
-        view.close()
-        view.deleteLater()
-
-    def test_dataset_tanpa_bom_kpi_jujur_strip(self):
-        """C5: dataset ADA tapi TANPA kolom penjualan (TOTAL BOM) →
-        resto_intensity kosong → KPI hemat/intensitas/CABANG #1 jujur
-        '—' + konteks menyebut BOM. Dulu angka+nama cabang dataset LAMA
-        terus terpampang di atas tabel dataset baru."""
-        view, ctx, app = self._view(_df_scorecard(with_bom=False))
-        app.processEvents()
-        view._refresh()
-        app.processEvents()
-        assert view._kpi_hemat._value.text() == "—"
-        assert view._kpi_intens._value.text() == "—"
-        assert view._kpi_top._value.text() == "—"
-        for k in (view._kpi_hemat, view._kpi_intens, view._kpi_top):
-            assert "BOM" in k._context.text(), (
-                "konteks harus jujur menyebut penyebab (tanpa BOM)")
-        view.close()
-        view.deleteLater()
-
-
-# ============================================================
-# [C4] Label 💰 — total nyata vs kap top_n + suffix funnel
-# ============================================================
-
-class TestC4LabelMoney:
-    def _view_250(self):
-        from ui.view_scorecard import ScorecardView
-        app = _qapp()
-        # 250 baris ber-kelebihan (10 resto) — di atas kap top_n=200
-        ctx = _ctx_dataset(_df_scorecard(n_resto=10, n_rows=250))
-        view = ScorecardView(ctx)
-        view.show()
-        app.processEvents()
-        view._refresh()
-        app.processEvents()
-        return view, app
-
-    def test_label_top200_dari_total_nyata(self):
-        """C4: label 💰 tampil 'Top 200 dari N baris ber-kelebihan' —
-        total NYATA dihitung dari df (KELEBIHAN>0), bukan kap top_n.
-        Dulu '200 baris ber-kelebihan…' dibaca sebagai jumlah temuan
-        audit (nyata 250 di fixture ini / 928 di data asli)."""
-        view, app = self._view_250()
-        txt = view._lbl_money.text()
-        assert "Top 200 dari 250 baris ber-kelebihan" in txt, (
-            "kap aktif → label jujur Top-200-dari-N (audit C4)")
-        assert "hanya teratas yang ditampilkan" in txt
-        assert view._money_table.model().rowCount() == 200
-        assert "tersaring" not in txt, "tanpa funnel → tanpa suffix"
-        view.close()
-        view.deleteLater()
-
-    def test_label_suffix_tersaring_funnel_aktif(self):
-        """C4: funnel lokal kartu 💰 aktif → suffix '· tersaring: N
-        tampil.' — jumlah baris TAMPIL. Catatan urutan: kap top-200
-        diterapkan DULU di memo (sort stable KELEBIHAN sama = urutan
-        asli) → R0 punya 25 dari 250 baris, tapi hanya 20 yang lolos
-        top-200 → tabel menampilkan 20 (angka suffix jujur mengikuti
-        tabel, bukan hitungan df)."""
-        view, app = self._view_250()
-        # user menyaring NAMA RESTO = R0 (25 baris di df; 20 di top-200)
-        view._lfilters["money"] = {"NAMA RESTO": ["R0"]}
-        view._refresh()
-        app.processEvents()
-        txt = view._lbl_money.text()
-        assert "Top 200 dari 250 baris ber-kelebihan" in txt
-        assert "tersaring: 20 tampil" in txt, (
-            "funnel aktif → suffix jumlah baris yang TAMPIL (audit C4)")
-        assert view._money_table.model().rowCount() == 20, (
-            "suffix harus konsisten dgn jumlah baris tabel")
-        view.close()
-        view.deleteLater()
-
-
-# ============================================================
-# [C2] Funnel Follow Up direset saat dataset baru
 # ============================================================
 
 class TestC2FunnelFollowUp:

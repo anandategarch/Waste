@@ -51,50 +51,6 @@ def _make_ctx():
 # [K] LAYOUT — QScrollArea bungkus view panjang (audit R1 + R2)
 # ============================================================
 
-class TestScrollScorecard:
-    def test_view_dibungkus_scroll(self):
-        _qapp()
-        from PySide6.QtWidgets import QFrame, QScrollArea
-        from ui.view_scorecard import ScorecardView
-        view = ScorecardView(_make_ctx())
-        scrolls = view.findChildren(QScrollArea)
-        assert scrolls, "ScorecardView harus dibungkus QScrollArea (R1)"
-        s = scrolls[0]
-        assert s.widgetResizable(), "widgetResizable supaya lebar ikut viewport"
-        assert s.frameShape() == QFrame.Shape.NoFrame, "tanpa bingkai ganda"
-        view.close()
-        view.deleteLater()
-
-    def test_view_bisa_diciutkan_tapi_konten_utuh(self):
-        """Kontrak inti R1: view tak lagi MEMAKSA tinggi 1.270px —
-        ruang tab 582px di 1366×768 kini cukup + gulir; konten halaman
-        tetap menuntut tinggi penuhnya (tak ada kartu yang dibuang)."""
-        _qapp()
-        from ui.view_scorecard import ScorecardView
-        view = ScorecardView(_make_ctx())
-        vm = view.minimumSizeHint().height()
-        pm = view._page.minimumSizeHint().height()
-        assert vm <= 640, f"view masih memaksa tinggi {vm}px (dulu 1270)"
-        assert pm >= 1000, f"konten halaman menyusut tak wajar: {pm}px"
-        view.close()
-        view.deleteLater()
-
-    def test_semua_kartu_tetap_anak_halaman(self):
-        """Tak ada widget hilang saat dibungkus — tabel/KPI/kartu tren
-        tetap cucu halaman scroll (⤢/⛶ & reparent tabel tak terdampak)."""
-        _qapp()
-        from ui.view_scorecard import ScorecardView
-        view = ScorecardView(_make_ctx())
-        page = view._page
-        for w in (view._kpi_row, view._main_card, view._row2, view._row3,
-                  view._table, view._money_table, view._weekday_table,
-                  view._dq_table, view._sistemik_table, view._trend_table):
-            assert page.isAncestorOf(w), (
-                f"{w.objectName() or type(w).__name__} tak lagi di halaman")
-        view.close()
-        view.deleteLater()
-
-
 class TestScrollPipeline:
     def test_view_dibungkus_scroll(self):
         _qapp()
@@ -145,19 +101,14 @@ class TestScrollPipeline:
 # ============================================================
 
 class TestTeksJujur:
-    def test_label_dq_tak_lagi_menyuruh_klik_2x(self):
-        """U1: tabel DQ tidak punya handler double_clicked — instruksi
-        lama 'klik 2× sel PENJELASAN' mati (klik tak berbuat apa-apa)."""
-        src = (UI / "view_scorecard.py").read_text(encoding="utf-8")
-        assert "klik 2× sel PENJELASAN" not in src
-        assert "arahkan kursor ke sel PENJELASAN" in src
-
-    def test_bantuan_memuat_seksi_scorecard(self):
-        """U2: 1 dari 6 tab tak terdokumentasi di Bantuan (F1)."""
+    def test_bantuan_tanpa_seksi_scorecard(self):
+        """v2.18.5: tab Scorecard Cabang dihapus — Bantuan tak lagi
+        memuat seksinya (panduan utk fitur mati = menipu); info
+        'bisa digulir' tetap ada (kini di seksi Pipeline)."""
         from ui.app import _HELP_HTML
-        assert "Tab Scorecard Cabang" in _HELP_HTML
-        assert "POTENSI HEMAT" in _HELP_HTML
-        assert "digulir" in _HELP_HTML  # info layar kecil v2.13.6
+        assert "Tab Scorecard Cabang" not in _HELP_HTML
+        assert "POTENSI HEMAT" not in _HELP_HTML
+        assert "digulir" in _HELP_HTML  # info layar kecil (Pipeline)
 
     def test_docstring_modul_bebas_angka_basi(self):
         """Docstring/deskripsi struktur harus bilang 6 tab. (Komentar
@@ -168,10 +119,11 @@ class TestTeksJujur:
             tree = ast.parse(path.read_text(encoding="utf-8"))
             return ast.get_docstring(tree) or ""
 
-        assert "6 tab" in _docstring(UI / "app.py")
-        assert "5 view" not in _docstring(UI / "app.py")
-        assert "6 tab" in _docstring(REPO / "ui_app.py")
-        assert "3 view" not in _docstring(REPO / "ui_app.py")
+        # v2.18.5: 6 → 5 tab (Scorecard Cabang dihapus)
+        assert "5 tab" in _docstring(UI / "app.py")
+        assert "6 tab" not in _docstring(UI / "app.py")
+        assert "5 tab" in _docstring(REPO / "ui_app.py")
+        assert "6 tab" not in _docstring(REPO / "ui_app.py")
 
 
 # ============================================================
@@ -179,11 +131,12 @@ class TestTeksJujur:
 # ============================================================
 
 class TestBannerBat:
-    def test_mulai_bat_versi_dan_6_tab(self):
+    def test_mulai_bat_versi_dan_5_tab(self):
         b = (REPO / "MULAI.bat").read_bytes().decode("utf-8")
         assert "v2.17.0" in b
-        assert "6 tab" in b
-        assert "Scorecard" in b, "banner harus menyebut tab baru"
+        # v2.18.5: 6 → 5 tab (Scorecard Cabang dihapus permintaan user)
+        assert "5 tab" in b
+        assert "v2.18.5" in b
 
     def test_mulai_bat_tanpa_iklan_fitur_terhapus(self):
         b = (REPO / "MULAI.bat").read_bytes().decode("utf-8")
@@ -213,15 +166,15 @@ class TestBannerBat:
 class TestVersi:
     def test_app_version(self):
         from ui.shared import APP_VERSION
-        assert APP_VERSION == "2.18.4"
+        assert APP_VERSION == "2.18.5"
 
     def test_engine_version_sinkron(self):
         from waste_anomaly import __version__
         cfg = json.loads(
             (REPO / "waste_anomaly" / "config.json").read_text(
                 encoding="utf-8"))
-        assert __version__ == "2.18.4"
-        assert cfg.get("version") == "2.18.4"
+        assert __version__ == "2.18.5"
+        assert cfg.get("version") == "2.18.5"
 
     def test_docstring_init_tidak_basi(self):
         src = (REPO / "waste_anomaly" / "__init__.py").read_text(

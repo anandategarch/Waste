@@ -166,45 +166,6 @@ def _df_fu() -> pd.DataFrame:
     })
 
 
-def _df_scorecard_sistemik(n_resto: int = 4,
-                           spikes: tuple = (10, 20)) -> pd.DataFrame:
-    """Dataset dengan HARI SISTEMIK ≥ 2 (semua resto naik serentak di hari
-    spike → median harian 5, nilai 50 = 10×) + label bulan utk kartu
-    kalender (workbook_path di summary)."""
-    rows = []
-    for i in range(n_resto):
-        data = {str(d): 5.0 for d in range(1, 31)}
-        for s in spikes:
-            data[str(s)] = 50.0
-        rows.append({
-            "SOURCE DATA": "W", "JENIS": "WASTE", "KETERANGAN": "Handling",
-            "NAMA BARANG": "MIE", "NAMA RESTO": f"R{i}", "SATUAN": "GR",
-            "ANOMALY STATUS": "Perlu Review", "PROFIL": "Tiap Hari",
-            **data, "TOTAL": float(sum(data.values())),
-            "KELEBIHAN": 5.0, "PEER MEDIAN (AKTIF)": 50.0,
-            "TOTAL BOM": 10_000.0,
-        })
-    return pd.DataFrame(rows)
-
-
-def _view_scorecard(df: pd.DataFrame, summary: dict | None = None):
-    from ui.state import AppContext
-    from ui.view_scorecard import ScorecardView
-    app = _qapp()
-    ctx = AppContext({})
-    ctx.set_dataset(df, summary or {"key_akhir": 31})
-    view = ScorecardView(ctx)
-    view.show()
-    app.processEvents()
-    view._refresh()
-    app.processEvents()
-    return view, ctx, app
-
-
-# ============================================================
-# [A15] Indikator skor lintas-tab di tab Hari
-# ============================================================
-
 class TestA15IndikatorSkorLintasTab:
 
     def test_indikator_skor_aktif_dan_hilang(self):
@@ -315,65 +276,6 @@ class TestB24HelpRenameBanding:
 # [C6] Funnel kartu kalender/sistemik Scorecard aktif
 # ============================================================
 
-class TestC6FunnelKartuSkor:
-
-    def test_funnel_kartu_kalender_aktif(self):
-        """Ikon funnel terpasang (plumbing hidup) + apply menyaring tabel
-        + label kartu menyatakan jumlah tersaring (dulu tabel kartu TANPA
-        funnel: menu tak bisa dibuka — audit C6)."""
-        view, ctx, app = _view_scorecard(
-            _df_scorecard_sistemik(),
-            {"key_akhir": 31,
-             "workbook_path": "/x/WASTE_SEPTEMBER_2026.xlsx"})
-        try:
-            assert view._weekday_table._hf_has("HARI"), (
-                "funnel kartu kalender tak terpasang (C6)")
-            assert view._weekday_table.model().rowCount() == 7  # Sen..Mgg
-            # apply funnel via jalur apply_fn (kontrak menu → _on_page_filter)
-            view._on_page_filter("weekday", "HARI", ["Senin"])
-            app.processEvents()
-            assert view._weekday_table.model().rowCount() == 1
-            assert view._lfilters_state("weekday", "HARI") == ["Senin"]
-            assert "tersaring: 1 dari 7 tampil" in view._lbl_weekday.text()
-            # refresh penuh mempertahankan funnel (apply_local) + suffix
-            view._refresh()
-            app.processEvents()
-            assert view._weekday_table.model().rowCount() == 1
-            assert "tersaring: 1 dari 7 tampil" in view._lbl_weekday.text()
-            # lepas → tabel & label pulih
-            view._on_page_filter("weekday", "HARI", None)
-            app.processEvents()
-            assert view._weekday_table.model().rowCount() == 7
-            assert "tersaring" not in view._lbl_weekday.text()
-        finally:
-            view.close()
-            view.deleteLater()
-
-    def test_funnel_kartu_sistemik_aktif(self):
-        """Funnel kartu sistemik aktif + label kartu kini MENYATAKAN
-        jumlah hari sistemik (dulu label kosong saat ada hari sistemik —
-        efek funnel tak terbaca)."""
-        view, ctx, app = _view_scorecard(
-            _df_scorecard_sistemik())
-        try:
-            assert view._sistemik_table._hf_has("HARI"), (
-                "funnel kartu sistemik tak terpasang (C6)")
-            assert view._sistemik_table.model().rowCount() == 2  # hari 10,20
-            assert "2 hari sistemik" in view._lbl_sistemik.text()
-            view._on_page_filter("sistemik", "HARI", [10])
-            app.processEvents()
-            assert view._sistemik_table.model().rowCount() == 1
-            assert "1 hari sistemik" in view._lbl_sistemik.text()
-            assert "tersaring: 1 dari 2 tampil" in view._lbl_sistemik.text()
-        finally:
-            view.close()
-            view.deleteLater()
-
-
-# ============================================================
-# [C12] Dataset tanpa kolom BUKTI HARI → pesan jujur
-# ============================================================
-
 class TestC12TanpaKolomBuktiHari:
 
     def test_pesan_jujur_bukan_menyalahkan_filter(self):
@@ -441,37 +343,6 @@ class TestC17LabelFollowupScope:
 
 # ============================================================
 # [C19] Drill Scorecard ditutup saat re-run dataset
-# ============================================================
-
-class TestC19DrillScorecardBasi:
-
-    def test_drill_ditutup_saat_data_ready(self):
-        """Drill rincian cabang TERBUKA saat dataset berganti (data_ready)
-        → dialog di-hide + cache drill dikosongkan — dulu angka dataset
-        LAMA terus terpampang di atas tabel dataset baru (audit C19)."""
-        view, ctx, app = _view_scorecard(_df_scorecard_sistemik())
-        try:
-            view._table.selectRow(0)
-            rec = view._table.selected_record()
-            assert rec is not None
-            view._on_double(rec)
-            app.processEvents()
-            assert view._drill is not None and view._drill.isVisible()
-            assert len(view._drill_cache) == 1
-            # re-run pipeline → dataset baru → drill ditutup + cache bersih
-            ctx.set_dataset(_df_scorecard_sistemik(n_resto=6),
-                            {"key_akhir": 31})
-            app.processEvents()
-            assert not view._drill.isVisible(), (
-                "drill basi masih terbuka di atas dataset baru (C19)")
-            assert len(view._drill_cache) == 0
-        finally:
-            view.close()
-            view.deleteLater()
-
-
-# ============================================================
-# [C21] Kontras tab non-aktif ≥ WCAG AA
 # ============================================================
 
 def _rel_lum(hex_color: str) -> float:

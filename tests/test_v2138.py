@@ -183,11 +183,12 @@ class TestDeadCodeUI:
         assert "def set_workbook" not in src
         assert "def current_workbook" in src  # yang hidup tetap
 
-    def test_scorecard_tanpa_sc_cols(self):
-        src = _src("ui/view_scorecard.py")
-        assert "SC_COLS = [" not in src  # definisi konstanta lokal dilarang
-        # sumber kolom tetap satu: insights.SCORECARD_COLS
-        assert "SCORECARD_COLS" in _src("waste_anomaly/insights.py")
+    def test_scorecard_dan_insights_terhapus_total(self):
+        """v2.18.5: tab Scorecard Cabang dihapus permintaan user — file
+        view_scorecard.py & waste_anomaly/insights.py TIDAK boleh kembali
+        (dead code dibuang bersama fiturnya)."""
+        assert not (REPO / "ui" / "view_scorecard.py").exists()
+        assert not (REPO / "waste_anomaly" / "insights.py").exists()
 
     def test_ui_init_tanpa_lazy_export(self):
         src = _src("ui/__init__.py")

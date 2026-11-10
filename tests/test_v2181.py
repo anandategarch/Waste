@@ -203,16 +203,24 @@ class TestRestoOverlap:
 
     def test_folder_flow_vs_kode_resto_warn(self):
         """Alur folder: NAMA RESTO = nama file; pembanding = kode resto
-        asli → 0 match → semua BARU/HILANG palsu. Kontrak: warn nyala."""
+        asli → 0 match → semua BARU/HILANG palsu. Kontrak: warn nyala.
+        v2.18.5: resto satu-sisi disembunyikan (permintaan user "belum
+        ada pembandingnya → gak perlu muncul") → 0-cocok = SEMUA tabel
+        banding kosong (dulu BARU/HILANG terisi 2+2 baris palsu)."""
         from waste_anomaly.period_history import compare_quantity
         a = _month("Bulan Ini", ["BJMHAS", "MLGPAR"])       # nama file
         b = _month("Juli 2026", ["1042.KWGGAL", "B.1002.SBY"])  # kode asli
         res = compare_quantity(a, b)
         assert res["resto_overlap"] == 0
         assert res["resto_overlap_warn"] is True
-        # tabel tetap terisi (informatif — bukan crash/hidden)
-        assert len(res["new_items"]) == 2
-        assert len(res["gone_items"]) == 2
+        # v2.18.5 — tabel kosong: tak ada baris yang bisa dibandingkan
+        # (resto satu-sisi disembunyikan, jumlahnya dilaporkan).
+        assert len(res["branch"]) == 0
+        assert len(res["items"]) == 0
+        assert len(res["new_items"]) == 0
+        assert len(res["gone_items"]) == 0
+        assert res["resto_only_a"] == 2
+        assert res["resto_only_b"] == 2
 
     def test_satu_sisi_kosong_tanpa_warn(self):
         """Bulan tanpa data (agg kosong) ≠ salah penamaan — jangan
@@ -222,6 +230,10 @@ class TestRestoOverlap:
         empty = _month("Juli 2026", [])
         res = compare_quantity(a, empty)
         assert res["resto_overlap_warn"] is False
+        # v2.18.5: pembanding kosong → tak ada resto yang punya pembanding
+        # → semua tabel banding kosong (A-only = 1 resto disembunyikan).
+        assert res["resto_only_a"] == 1
+        assert len(res["branch"]) == 0
 
 
 # ============================================================
@@ -331,7 +343,7 @@ class TestVersiSinkron:
         from waste_anomaly import __version__
         from waste_anomaly.utils import load_config
         cfg = load_config()
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.18.4"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.18.5"
         init_src = (REPO / "waste_anomaly" / "__init__.py").read_text(
             encoding="utf-8")
         assert "Versi: 2.18.4" in init_src

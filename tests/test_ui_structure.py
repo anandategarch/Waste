@@ -52,10 +52,10 @@ DATA_VIEWS = {
 
 # v2.9.0: 3 → 4 tab (+ Hari Mencurigakan); v2.12.0: 4 → 5 (+ Follow Up);
 # v2.17.0 rombak P0: urutan alur analisa — Pipeline index 0 (entry point
-# muat data), Anomali index 1, drill Hari/Scorecard/Banding index 2-4,
-# Follow Up (tindak lanjut) terakhir index 5.
+# muat data), Anomali index 1, drill Hari/Banding index 2-3, Follow Up
+# (tindak lanjut) terakhir. v2.18.5: Scorecard Cabang DIHAPUS (6 → 5).
 VIEW_TAB_TITLES = [
-    "Pipeline", "Anomali", "Hari Mencurigakan", "Scorecard Cabang",
+    "Pipeline", "Anomali", "Hari Mencurigakan",
     "Banding Periode", "Follow Up",
 ]
 
@@ -166,23 +166,23 @@ class TestUiStructure:
         src = inspect.getsource(MainWindow._build_body)
         for title in VIEW_TAB_TITLES:
             assert f'("{title}"' in src, f"tab '{title}' tidak dibangun"
-        # 6 judul (v2.13.1 + Scorecard Cabang), tidak ada duplikat
-        assert len(VIEW_TAB_TITLES) == len(set(VIEW_TAB_TITLES)) == 6
+        # 5 judul (v2.18.5: Scorecard Cabang dihapus), tidak ada duplikat
+        assert len(VIEW_TAB_TITLES) == len(set(VIEW_TAB_TITLES)) == 5
 
     def test_window_dibangun_offscreen(self):
-        """MainWindow + 6 view ter-instantiate tanpa display (smoke).
+        """MainWindow + 5 view ter-instantiate tanpa display (smoke).
 
         Judul dibandingkan tanpa badge '(N)' — bila followup.json ada
         isinya (app pernah dijalankan di repo), tab Follow Up tampil
-        'Follow Up (N)' yang tetap sah. v2.13.1: + tab Scorecard Cabang
-        (setelah Hari Mencurigakan)."""
+        'Follow Up (N)' yang tetap sah. v2.18.5: tab Scorecard Cabang
+        dihapus (6 → 5)."""
         import sys
         from PySide6.QtWidgets import QApplication
         app = QApplication.instance() or QApplication(sys.argv)
         from ui.app import MainWindow
         win = MainWindow()
-        assert win._tabs.count() == 6
-        for i in range(6):
+        assert win._tabs.count() == 5
+        for i in range(5):
             assert win._tabs.tabText(i).split(" (")[0] == VIEW_TAB_TITLES[i]
         win.close()
 

@@ -1481,8 +1481,8 @@ class DetailDialog(QDialog):
         navigasi baris (panah/klik) saat pop-up sudah terbuka cukup
         mengganti kontennya; activateWindow() dihapus dari jalur ini
         (fokus tabel tetap milik tabel — navigasi keyboard hidup).
-        Jalur niat-eksplisit (drill banding / ⛶ layar penuh / pop-up
-        Scorecard) tidak tersentuh — mereka tetap mengaktifkan."""
+        Jalur niat-eksplisit (drill banding / ⛶ layar penuh) tidak
+        tersentuh — mereka tetap mengaktifkan."""
         sig = self._record_sig(rec)
         if self.isVisible() and sig == self._shown_sig:
             return

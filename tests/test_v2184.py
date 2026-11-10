@@ -174,14 +174,17 @@ class TestCompareQuantityLintasSumber:
         assert abs(it.loc["BJMHAS", "Pembanding"] - 80.0) < 1e-9
 
     def test_sisi_kosong_tak_crash(self):
-        """Satu sisi tanpa data → tabel tetap terbentuk (pola v2.18.1
-        R181-4 'satu sisi kosong tanpa warn')."""
+        """Satu sisi tanpa data → tabel tetap TERBENTUK (kolom utuh,
+        tanpa crash; pola v2.18.1 R181-4). v2.18.5: resto satu-sisi
+        disembunyikan → semua tabel 0 baris."""
         from waste_anomaly.period_history import compare_quantity
         res = compare_quantity(_month("Bulan Ini", []),
                                _month("Juli 2026", _B_ROWS))
         assert res["resto_overlap_warn"] is False
-        assert len(res["gone_items"]) == 2
+        assert len(res["gone_items"]) == 0
         assert len(res["new_items"]) == 0
+        assert len(res["branch"]) == 0
+        assert res["resto_only_b"] == 2  # 2 resto pembanding tersembunyi
 
     def test_ringkasan_cabang_aktif(self):
         from waste_anomaly.period_history import compare_quantity
@@ -197,9 +200,11 @@ class TestCompareQuantityLintasSumber:
 # ============================================================
 
 class TestDisplayNamaAsli:
-    def test_baru_hilang_tampil_nama_sumber(self):
-        """B-only resto tampil nama ASLI B ('1370.KGNSUD' — bukan stem);
-        A-side match tampil nama A (funnel/export kontrak tak berubah)."""
+    def test_resto_satu_sisi_disembunyikan(self):
+        """v2.18.5 (permintaan user: "misal bulan kemarin ada bulan ini
+        gak ada gak perlu ditampilkan"): resto B-only (1370.KGNSUD)
+        TIDAK tampil di tabel mana pun; resto yang match tampil nama ASLI
+        sumber A ("BJMHAS", bukan stem apalagi kode B)."""
         from waste_anomaly.period_history import compare_quantity
         b = _B_ROWS + [
             {"resto": "1370.KGNSUD", "barang": "CABE RAWIT",
@@ -207,12 +212,15 @@ class TestDisplayNamaAsli:
              "hari": {"5": 70.0}}]
         res = compare_quantity(_month("Bulan Ini", _A_ROWS),
                                _month("Juli 2026", b))
-        assert list(res["gone_items"]["NAMA RESTO"]) == ["1370.KGNSUD"]
-        # branch = outer join: match tampil nama A; B-only tampil nama B
-        assert set(res["branch"]["NAMA RESTO"]) == {
-            "BJMHAS", "MLGPAR", "1370.KGNSUD"}
+        # B-only resto disembunyikan dari SEMUA tabel banding
+        assert len(res["gone_items"]) == 0
+        assert set(res["branch"]["NAMA RESTO"]) == {"BJMHAS", "MLGPAR"}
+        # jumlahnya dilaporkan jujur ke pemanggil (UI menampilkan info)
+        assert res["resto_only_b"] == 1
+        assert res["resto_only_a"] == 0
+        # resto match tampil nama A (funnel/export kontrak tak berubah)
         br = res["branch"].set_index("NAMA RESTO")
-        assert abs(br.loc["1370.KGNSUD", "Bulan Ini"]) < 1e-9  # B-only
+        assert abs(br.loc["BJMHAS", "Bulan Ini"] - 100.0) < 1e-9
 
     def test_item_baru_tampil_nama_a(self):
         from waste_anomaly.period_history import compare_quantity
@@ -377,8 +385,12 @@ class TestKontrakLama:
         res = compare_quantity(a, b)
         assert res["resto_overlap"] == 0
         assert res["resto_overlap_warn"] is True
-        assert len(res["new_items"]) == 1
-        assert len(res["gone_items"]) == 1
+        # v2.18.5: resto satu-sisi disembunyikan (permintaan user) —
+        # tabel kosong, jumlah disembunyi dilaporkan jujur.
+        assert len(res["new_items"]) == 0
+        assert len(res["gone_items"]) == 0
+        assert res["resto_only_a"] == 1
+        assert res["resto_only_b"] == 1
 
     def test_display_kontrak_kolom_tidak_berubah(self):
         """Kolom tabel banding persis kontrak lama (UI merender kunci
@@ -455,7 +467,7 @@ class TestVersiSinkron:
         from waste_anomaly import __version__
         from waste_anomaly.utils import load_config
         cfg = load_config()
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.18.4"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.18.5"
         init_src = (REPO / "waste_anomaly" / "__init__.py").read_text(
             encoding="utf-8")
         assert "Versi: 2.18.4" in init_src

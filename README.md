@@ -1,20 +1,19 @@
 # Waste Anomaly Detection
 
-**Anomaly workbench** Python + PySide6 (Qt) untuk deteksi anomali waste di cabang resto — replika 1:1 pipeline Power Query M code. Membaca rekap waste bulanan (Excel), menjalankan 14-stage pipeline in-memory, men-skor setiap baris dengan **12 sinyal anomali**, dan menyajikan hasilnya di UI 6 tab interaktif + export Excel 10 sheet.
+**Anomaly workbench** Python + PySide6 (Qt) untuk deteksi anomali waste di cabang resto — replika 1:1 pipeline Power Query M code. Membaca rekap waste bulanan (Excel), menjalankan 14-stage pipeline in-memory, men-skor setiap baris dengan **12 sinyal anomali**, dan menyajikan hasilnya di UI 5 tab interaktif + export Excel 10 sheet.
 
-> Versi **v2.18.4** · 1.237 test (pytest) · CI GitHub Actions (matrix Python × OS) · MIT License
+> Versi **v2.18.5** · 1.197 test (pytest) · CI GitHub Actions (matrix Python × OS) · MIT License
 
 ## Fitur Utama
 
 - **Sekali jalan** — pilih file rekap mentah → pipeline langsung, tanpa file olahan antara
 - **Proses dari Folder** — pindai seluruh folder `.xlsx` (format BJMHAS, nama resto dari nama file), gabung jadi satu dataset
 - **12 sinyal anomali** (S1–S12) + composite score → status Prioritas Tinggi / Potensi Anomali / Perlu Review / Normal
-- **6 tab analisa**: Pipeline · Anomali · Hari Mencurigakan · Scorecard Cabang · Banding Periode · Follow Up
+- **5 tab analisa**: Pipeline · Anomali · Hari Mencurigakan · Banding Periode · Follow Up
 - **Drill-down interaktif** — klik baris = pop-up detail (ringkasan, chip sinyal, peta nilai per hari 1–31, tombol fokus cabang/item/alasan)
-- **Filter funnel di judul semua kolom tabel** (daftar nilai bercentang + pencarian + Pilih Semua)
-- **Banding multi-bulan** (1 file = 1 bulan; mode 📊 Tipikal = median gabungan ≥2 bulan)
+- **Filter funnel di judul semua kolom tabel** — daftar nilai bercentang + pencarian + Pilih Semua + **klik-ganda nilai = pilih hanya itu** + tombol ◉ Hanya Ini (hasil cari)
+- **Banding multi-bulan** (1 file = 1 bulan; mode 📊 Tipikal = median gabungan ≥2 bulan) — hanya cabang yang ada di **kedua** bulan (resto baru/tutup disembunyikan, jumlahnya dilaporkan)
 - **Follow Up** — centang ✓ baris mencurigakan → shortlist rekap + ekspor + impor hasil tindak lanjut
-- **Scorecard Cabang** — urutan kunjungan audit, potensi hemat, pola hari, kualitas data, tren
 - **Data quality otomatis** — 7+1 pemeriksaan jalan di setiap run & ikut ke export
 - **Tabel virtualized** — 25.901+ baris tanpa cap, sort numerik, warna status per baris
 
@@ -62,15 +61,14 @@
 
 Tanpa sheet ini pipeline tetap jalan — sinyal BOM & STATUS tidak terpicu. Pipeline **idempotent**: kolom output lama di file di-drop & dihitung ulang otomatis.
 
-## UI — 6 Tab (urutan alur kerja)
+## UI — 5 Tab (urutan alur kerja)
 
 | Tab | Fungsi |
 |-----|--------|
 | ▶ Pipeline | Entry point: pilih workbook/folder, key akhir, Run/⏹Batal, progres per-stage, log, editor threshold |
 | 🔍 Anomali | Pusat analisa: KPI strip 6 kartu, tabel ter-ranked skor, pop-up detail, % to BOM |
 | 📅 Hari Mencurigakan | Bukti per-hari: HARI TERSANGKA, tipikal cabang lain, rasio vs bulan lalu |
-| 🏢 Scorecard Cabang | Urutan kunjungan audit, top kerugian, pola hari kalender, kualitas data, tren multi-bulan |
-| 📊 Banding Periode | Banding bulan-ke-bulan + mode Tipikal (median ≥2 bulan) |
+| 📊 Banding Periode | Banding bulan-ke-bulan + mode Tipikal (median ≥2 bulan); hanya cabang yang ada di kedua bulan |
 | ✅ Follow Up | Shortlist baris tercentang ✓ — format rekap, ekspor & impor hasil tindak lanjut |
 
 ## 12 Sinyal Anomali (S1–S12)
@@ -115,10 +113,10 @@ Klik **💾 Export Excel** di toolbar (background thread, UI tetap responsif):
 Waste/
 ├── MULAI.bat / SETUP.bat / BUILD_EXE.bat   ← entry point, install, build exe
 ├── ui_app.py                               ← launcher tipis (pythonw, tanpa CMD)
-├── ui/                                     ← paket UI PySide6 (14 file):
-│   ├── app.py                              ← MainWindow + 6 tab + Bantuan F1
+├── ui/                                     ← paket UI PySide6 (13 file):
+│   ├── app.py                              ← MainWindow + 5 tab + Bantuan F1
 │   ├── view_pipeline / view_anomali / view_hari /
-│   │   view_scorecard / view_periode / view_followup.py
+│   │   view_periode / view_followup.py
 │   ├── workers.py                          ← QThread: pipeline/export/history
 │   ├── models.py                           ← tabel virtualized (PandasTableModel)
 │   └── widgets.py, theme.py, state.py, shared.py, followup_table.py, icons.py
@@ -129,12 +127,11 @@ Waste/
 │   ├── rekap_import.py                     ← olah rekap mentah / folder BJMHAS
 │   ├── day_focus.py / profile.py           ← bukti hari & profil baris
 │   ├── period_history.py / period_compare.py ← banding multi-bulan
-│   ├── insights.py                         ← analisa scorecard
 │   ├── temporal.py / priority.py / data_quality.py ← sheet analisa
 │   ├── exporter.py                         ← xlsx writer + mode streaming
 │   ├── schema.py / loader.py / logging_setup.py / frozen.py / utils.py
 │   └── config.json                         ← thresholds + nama sheet (editable)
-├── tests/                                  ← 52 file, 1.151 test pytest
+├── tests/                                  ← 54 file, 1.197 test pytest
 ├── .github/workflows/ci.yml                ← CI matrix Python × OS
 ├── sample_workbook.xlsx                    ← fixture test in-repo
 └── requirements.txt · LICENSE · waste_anomaly.spec
@@ -165,7 +162,7 @@ Edit `waste_anomaly/config.json` → section `thresholds` (mis. `TH_SPIKE`, `STA
 
 ## Testing, CI & Packaging
 
-- **Test:** `python -m pytest tests/ -x -q` — 1.151 test (golden regression, unit sinyal, UI offscreen, validasi skema, dsb.)
+- **Test:** `python -m pytest tests/ -x -q` — TESTS_FILE_PLACEHOLDER test (golden regression, unit sinyal, UI offscreen, validasi skema, dsb.)
 - **CI:** GitHub Actions — lint (ruff) + full suite, matrix Python × OS
 - **EXE standalone:** jalankan `BUILD_EXE.bat` di Windows → `dist/WasteAnomalyDetection.exe` (jalan tanpa Python, config & log tersimpan berdampingan exe)
 
@@ -182,6 +179,7 @@ Edit `waste_anomaly/config.json` → section `thresholds` (mis. `TH_SPIKE`, `STA
 
 ## Changelog
 
+**v2.18.5** — UX Banding Periode + pembersihan (permintaan user): (1) **hanya cabang yang ada di kedua bulan** yang tampil — resto yang hanya ada bulan ini (belum ada pembanding) atau hanya di pembanding (tutup/ganti nama) disembunyikan dari semua tabel banding, jumlahnya dilaporkan di baris status; (2) **tombol sort dibalik** sesuai intuisi user — *Urut Naik* = nilai **terbesar** dulu, *Urut Turun* = terkecil dulu (dulu mengikuti konvensi Excel yang terasa kebalik; label kini eksplisit); (3) **pilih 1 nilai cepat** di menu filter funnel: klik-ganda nilai = tampilkan hanya itu + tombol ◉ *Hanya Ini* (centang hanya hasil pencarian) — tanpa uncek satu per satu; (4) **tab Scorecard Cabang dihapus** bersama dead code-nya (`ui/view_scorecard.py`, `waste_anomaly/insights.py`, alias `PEER_KEYS`).
 **v2.18.4** — Fix Banding Periode lintas sumber: pencocokan cabang kini memakai *stem* kode resto di semua join (`BJMHAS` dari alur “Proses dari Folder” = `1216.BJMHAS` / `B.1001.MLGPAR` dari file pembanding DBS/Power Query) — dulu join exact 0-cocok → SELURUH item tampil BARU/HILANG palsu (v2.18.1 hanya memberi peringatan). Tercakup: Ringkasan/Cabang/Item/Baru/Hilang, drill-down (`compare_level` + `drill_day_detail`), kolom BULAN LALU di tab Anomali (`change_vs_history`) & NILAI BULAN LALU di tab Hari (`day_evidence_vs_history`); kolom tampil tetap nama asli sumber; nama wajar bertitik (`V.20`, `NO.1`) tak distrip; +23 test regresi.
 
 **v2.18.3** — Fix kolom `TOTAL` blank pada file hasil "Proses dari Folder": sel TOTAL kosong di file gabungan kini diisi otomatis dengan jumlah kolom hari 1–31 (sel TOTAL memang dibiarkan kosong di file sumber — terukur 22/48.202 baris — atau kolom TOTAL tidak ada di sheet); baris tanpa satu pun nilai hari tetap kosong (jujur, tanpa fabrikasi 0). Nilai TOTAL yang sudah terisi dipertahankan. Analisa tidak berubah (pipeline & Banding Periode selalu menghitung ulang TOTAL dari kolom hari sesuai Key Akhir) — murni kejujuran file output; log folder + summary kini mencatat jumlah sel yang diisi; +8 test regresi.
