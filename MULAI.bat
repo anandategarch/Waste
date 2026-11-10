@@ -13,6 +13,8 @@ REM v2.18.1 - chcp 65001: pesan error UTF-8 Indonesia tidak jadi
 REM mojibake di console OEM codepage (pola SETUP/BUILD_EXE).
 REM v2.18.2 - Proses dari Folder: pemilihan sheet rekap berbasis
 REM skor (file dgn sheet seksi DEVIASI tak lagi salah baca).
+REM v2.18.3 - kolom TOTAL blank di file gabungan folder kini
+REM diisi otomatis (jumlah kolom hari; sel sumber kosong).
 
 if exist ".venv\Scripts\pythonw.exe" (
     start "" ".venv\Scripts\pythonw.exe" ui_app.pyw

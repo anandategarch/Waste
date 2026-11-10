@@ -583,6 +583,12 @@ class PipelineView(QWidget):
                     f"isi file.")
         for fn, reason in skipped:
             self._ctx.log(f"  ✕ {fn} dilewati: {reason}")
+        # v2.18.3 — transparansi isi-ulang kolom TOTAL (anti silent-error).
+        total_filled = result.get("total_filled", 0)
+        if total_filled:
+            self._ctx.log(
+                f"  ℹ Kolom TOTAL: {fmt_id(total_filled)} sel kosong "
+                "diisi jumlah kolom hari (sel TOTAL blank di file sumber).")
         self._ctx.log(
             f"  File gabungan (sementara): {Path(temp).name}")
         if synth:

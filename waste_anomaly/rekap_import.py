@@ -499,6 +499,43 @@ def find_rekap_sheet_lenient(path, config: dict | None = None,
     return sn, hr
 
 
+def _fill_total_column(df: pd.DataFrame) -> int:
+    """v2.18.3: isi sel TOTAL kosong dengan jumlah kolom hari (in-place).
+
+    Latar — bug user "kolom total pada file hasil program (proses dari
+    folder) kok blank?": TOTAL di file gabungan selama ini PASSTHROUGH
+    mentah sheet sumber. Terukur di file bukti (HASIL OLAH REKAP MENTAH
+    PROGRAM.xlsx, 48.202 baris): (a) 22 sel TOTAL kosong di file sumber
+    sendiri (baris STOK AWAL/BARANG MASUK — sel TOTAL memang tak diisi
+    orang), (b) sheet tanpa kolom TOTAL → kolom union concat = NaN utk
+    seluruh baris file itu. Semantik pengisian = jumlah kolom hari
+    '1'..'31' yang ada (identik "TOTAL KESELURUHAN" Power Query user &
+    stage_02): sel hari kosong dihitung 0 (skipna), baris TANPA satu
+    pun nilai hari → TOTAL tetap kosong (min_count=1 — jujur, tanpa
+    fabrikasi 0). TOTAL non-kosong dipertahankan (terukur: sumber
+    akurat — 0 selisih vs jumlah hari pada 2.000 baris sampel).
+
+    Return banyak sel yang diisi. Mutasi in-place (frame gabungan
+    internal load_rekap_folder — bukan API publik).
+    """
+    day_cols = [c for c in df.columns if c in _DAY_SET]
+    if not day_cols:
+        return 0
+    day_sum = df[day_cols].apply(pd.to_numeric, errors="coerce").sum(
+        axis=1, min_count=1)
+    if "TOTAL" in df.columns:
+        tot = pd.to_numeric(df["TOTAL"], errors="coerce")
+        blank = tot.isna()
+        n = int(blank.sum())
+        if n:
+            df["TOTAL"] = tot.where(~blank, day_sum)
+        return n
+    # Tak ada file pun yang punya kolom TOTAL → tambah di akhir (union
+    # concat menempatkan kolom ekstra di belakang — konsisten).
+    df["TOTAL"] = day_sum
+    return int(len(df))
+
+
 def load_rekap_folder(folder_path, config: dict | None = None,
                       logger=None, cancel_check=None) -> dict:
     """Scan folder file .xlsx → baca sheet REKAP MENTAH tiap file →
@@ -520,7 +557,7 @@ def load_rekap_folder(folder_path, config: dict | None = None,
              "rows_per_file": {name: int}, "synthesized": [name,...],
              "skipped": [(name, reason),...], "engine": str, "elapsed_s": float,
              "sheets": {name: {sheet, score, low_confidence, blank_dropped}},
-             "low_confidence": [name,...]}.
+             "low_confidence": [name,...], "total_filled": int}.
     Raise RekapImportError bila folder tak ada / kosong / tak ada file rekap.
     """
     import tempfile
@@ -652,6 +689,16 @@ def load_rekap_folder(folder_path, config: dict | None = None,
     # Gabung semua frame (kolom union — fillna NaN bila beda struktur)
     combined = pd.concat([f for _, f, _ in frames], ignore_index=True,
                          sort=False)
+    # v2.18.3 — ISI sel TOTAL kosong di gabungan (bug user: "kolom
+    # total pada file hasil program kok blank?"). Passthrough mentah
+    # meninggalkan celah dari sel TOTAL kosong di sumber + kolom union
+    # NaN (file tanpa kolom TOTAL). Analisa TIDAK terpengaruh (stage_02
+    # & Banding Periode selalu menghitung ulang TOTAL dari kolom hari
+    # dgn key_akhir) — ini murni kejujuran file hasil gabungan.
+    n_total_filled = _fill_total_column(combined)
+    if n_total_filled:
+        _log(logger, f"[rekap_folder] kolom TOTAL diisi: {n_total_filled} "
+                     f"sel kosong → jumlah kolom hari")
     # Tulis temp file (sheet "REKAP MENTAH" — siap di-feed run_pipeline;
     # find_rekap_sheet STRICT akan deteksi karena NAMA RESTO kini ada).
     # v2.17.5 — openpyxl WRITE-ONLY mode (~5-10x lebih cepat dari normal
@@ -692,6 +739,9 @@ def load_rekap_folder(folder_path, config: dict | None = None,
         # warning; anti silent-error).
         "sheets": sheets_info,
         "low_confidence": low_confidence,
+        # v2.18.3 — transparansi isi-ulang kolom TOTAL (anti
+        # silent-error; UI mencatat di log folder).
+        "total_filled": n_total_filled,
     }
 
 

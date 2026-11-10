@@ -2,7 +2,7 @@
 
 **Anomaly workbench** Python + PySide6 (Qt) untuk deteksi anomali waste di cabang resto — replika 1:1 pipeline Power Query M code. Membaca rekap waste bulanan (Excel), menjalankan 14-stage pipeline in-memory, men-skor setiap baris dengan **12 sinyal anomali**, dan menyajikan hasilnya di UI 6 tab interaktif + export Excel 10 sheet.
 
-> Versi **v2.18.2** · 1.206 test (pytest) · CI GitHub Actions (matrix Python × OS) · MIT License
+> Versi **v2.18.3** · 1.214 test (pytest) · CI GitHub Actions (matrix Python × OS) · MIT License
 
 ## Fitur Utama
 
@@ -181,6 +181,8 @@ Edit `waste_anomaly/config.json` → section `thresholds` (mis. `TH_SPIKE`, `STA
 | `pip install PySide6` gagal (path panjang Windows) | Pakai `SETUP.bat` versi terbaru (otomatis `.venv`); atau pindahkan folder ke path pendek |
 
 ## Changelog
+
+**v2.18.3** — Fix kolom `TOTAL` blank pada file hasil "Proses dari Folder": sel TOTAL kosong di file gabungan kini diisi otomatis dengan jumlah kolom hari 1–31 (sel TOTAL memang dibiarkan kosong di file sumber — terukur 22/48.202 baris — atau kolom TOTAL tidak ada di sheet); baris tanpa satu pun nilai hari tetap kosong (jujur, tanpa fabrikasi 0). Nilai TOTAL yang sudah terisi dipertahankan. Analisa tidak berubah (pipeline & Banding Periode selalu menghitung ulang TOTAL dari kolom hari sesuai Key Akhir) — murni kejujuran file output; log folder + summary kini mencatat jumlah sel yang diisi; +8 test regresi.
 
 **v2.18.2** — Fix "Proses dari Folder" salah baca sheet: pemilihan sheet rekap kini berbasis skor bukti (nama sheet, kolom `SOURCE DATA`, JENIS kanonik) — file workbook yang sheet seksi DEVIASI-nya muncul lebih duluan tidak lagi salah terbaca (bukti: 5/20 file folder DEVIASI WEEKLY salah data → Banding Periode salah semua); baris kosong interleaved dibuang; log folder kini menampilkan sheet terpilih + peringatan utk sheet meragukan; +19 test regresi.
 
