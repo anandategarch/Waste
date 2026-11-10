@@ -15,6 +15,8 @@ REM v2.18.2 - Proses dari Folder: pemilihan sheet rekap berbasis
 REM skor (file dgn sheet seksi DEVIASI tak lagi salah baca).
 REM v2.18.3 - kolom TOTAL blank di file gabungan folder kini
 REM diisi otomatis (jumlah kolom hari; sel sumber kosong).
+REM v2.18.4 - Banding Periode: match resto lintas sumber
+REM (nama file 'BJMHAS' = kode DBS '1216.BJMHAS').
 
 if exist ".venv\Scripts\pythonw.exe" (
     start "" ".venv\Scripts\pythonw.exe" ui_app.pyw

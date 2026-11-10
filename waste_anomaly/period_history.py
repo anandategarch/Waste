@@ -32,6 +32,14 @@ v2.10.2 — drill-down pop-up + kolom perubahan:
   PERUBAHAN di tabel Anomali — memisahkan lonjakan baru (kandidat salah
   input) dari waste kronis (stabil tinggi). Threshold TH_CHANGE_*.
 
+v2.18.4 — MATCH RESTO LINTAS SUMBER (join pakai STEM kode resto): pipeline
+folder-flow mensintesis NAMA RESTO dari NAMA FILE ("BJMHAS") sedangkan file
+pembanding DBS/Power Query memakai kode resto ("1216.BJMHAS",
+"B.1001.MLGPAR") — join exact 0-overlap → SEMUA item BARU/HILANG palsu
+(v2.18.1 hanya memberi peringatan). SEMUA join banding kini memakai kunci
+stem: compare_quantity / compare_level / drill_day_detail /
+change_vs_history / day_evidence_vs_history; kolom tampil tetap nama asli.
+
 Semua fungsi defensif: gagal baca → dict berisi "error" (tidak pernah
 raise), kolom hilang → hasil kosong berformat. Perhitungan vektor
 (load + agregat data asli 54.160 baris ≈ 2-3 dtk di worker thread;
@@ -283,6 +291,44 @@ def _key_text(s: pd.Series) -> pd.Series:
     """
     s = s.astype("object").where(s.notna(), "")
     return s.astype(str).str.strip()
+
+
+# v2.18.4 — segmen "kode" di nama resto DBS: digit ('1216') atau 1 huruf
+# + digit ('B', 'B1001'). Dipakai _resto_stem utk membedakan prefix kode
+# ('1216.BJMHAS' → 'BJMHAS') dari nama dengan titik wajar ('V.20', 'NO.1'
+# — segmen akhir murni angka → BUKAN prefix kode, tak distrip).
+_RESTO_CODE_SEG = re.compile(r"^(?:[A-Za-z]\d*|\d+)$")
+
+
+def _resto_stem(name: object) -> str:
+    """Stem kode resto utk MATCHING lintas sumber (v2.18.4).
+
+    Dua konvensi nama resto di lapangan: pipeline folder-flow mensintesis
+    NAMA RESTO dari NAMA FILE ("BJMHAS.xlsx" → "BJMHAS") sedangkan file
+    pembanding DBS/Power Query memakai kode resto ("1216.BJMHAS",
+    "B.1001.MLGPAR"). Join exact-match → 0 overlap → SEMUA item tampil
+    BARU/HILANG palsu (repro file user: 20 resto stem vs 20 resto kode,
+    interseksi 0 — "REKAP MENTAH_01-07 OKTOBER 2026_TEGAR.xlsx").
+
+    Aturan: belah pada '.'; bila SEMUA segmen kecuali TERAKHIR berpola
+    kode (digit / 1 huruf+digit) DAN segmen terakhir memuat huruf (bukan
+    murni angka) → kembalikan segmen terakhir; selain itu nama apa
+    adanya (strip). 'V.20'/'NO.1'/'12.34' tak berubah; 'BDGUKU' utuh.
+    """
+    s = str(name if name is not None else "").strip()
+    if "." not in s:
+        return s
+    segs = [x.strip() for x in s.split(".")]
+    stem = segs[-1]
+    if (not stem or stem.isdigit()
+            or not all(_RESTO_CODE_SEG.match(x) for x in segs[:-1])):
+        return s
+    return stem
+
+
+def _resto_key(s: pd.Series) -> pd.Series:
+    """Kunci match NAMA RESTO (NA-safe + stem kode) — pola _key_text."""
+    return _key_text(s).map(_resto_stem)
 
 
 def _day_cols_of(df: pd.DataFrame) -> list[str]:
@@ -675,21 +721,66 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
     empty_items = pd.DataFrame(columns=item_cols)
     empty_new = pd.DataFrame(columns=new_cols)
     empty_gone = pd.DataFrame(columns=gone_cols)
+    # v2.18.4 — MATCH RESTO LINTAS SUMBER: pipeline folder-flow menama-i
+    # resto dari NAMA FILE ("BJMHAS") sedangkan file pembanding DBS/PQ
+    # memakai kode resto ("1216.BJMHAS", "B.1001.MLGPAR") — join exact
+    # 0-overlap → SEMUA item BARU/HILANG palsu (v2.18.1 hanya memberi
+    # peringatan). Join kini memakai kunci stem '_rk'; kolom NAMA RESTO
+    # tampil tetap nama asli sumber (coalesce A→B pasca merge).
+    mkey = [k if k != "NAMA RESTO" else "_rk" for k in key]
+
+    def _with_rk(frame: pd.DataFrame | None) -> pd.DataFrame:
+        """TOTAL per mkey + kunci '_rk' + display nama resto asli.
+
+        Varian nama utk resto yang sama (campuran sumber dalam 1 sisi)
+        digabung (sum) — outer-merge tetap 1 baris per kunci (tanpa
+        lipat-ganda baris); display = varian pertama."""
+        if frame is None:
+            return pd.DataFrame(columns=key + ["TOTAL", "_rk"])
+        if frame.empty:
+            out = frame.copy()
+            if "_rk" not in out.columns:
+                out["_rk"] = pd.Series(dtype=object)
+            return out
+        out = frame.copy()
+        out["_rk"] = _resto_key(out["NAMA RESTO"])
+        return out.groupby(mkey, as_index=False, dropna=False).agg(
+            TOTAL=("TOTAL", "sum"),
+            **{"NAMA RESTO": ("NAMA RESTO", "first")})
+
+    def _coalesce_resto(m: pd.DataFrame) -> pd.DataFrame:
+        """Outer-merge 'NAMA RESTO_x/_y' → satu kolom display (A menang)."""
+        if {"NAMA RESTO_x", "NAMA RESTO_y"} <= set(m.columns):
+            m["NAMA RESTO"] = (m["NAMA RESTO_x"].fillna(m["NAMA RESTO_y"])
+                               .fillna(""))
+            m = m.drop(columns=["NAMA RESTO_x", "NAMA RESTO_y"])
+        return m
+
+    ta, tb = _with_rk(ta), _with_rk(tb)
     if ta.empty and tb.empty:
         branch = pd.DataFrame(columns=branch_cols)
         items, new_items, gone_items = empty_items, empty_new, empty_gone
     else:
         if use_jenis:
-            ga = ta.groupby(["JENIS", "NAMA RESTO"], as_index=False,
-                            dropna=False)["TOTAL"].sum()
-            gb = tb.groupby(["JENIS", "NAMA RESTO"], as_index=False,
-                            dropna=False)["TOTAL"].sum()
-            on = ["JENIS", "NAMA RESTO"]
+            ga = ta.groupby(["JENIS", "_rk"], as_index=False,
+                            dropna=False).agg(
+                TOTAL=("TOTAL", "sum"),
+                **{"NAMA RESTO": ("NAMA RESTO", "first")})
+            gb = tb.groupby(["JENIS", "_rk"], as_index=False,
+                            dropna=False).agg(
+                TOTAL=("TOTAL", "sum"),
+                **{"NAMA RESTO": ("NAMA RESTO", "first")})
+            on = ["JENIS", "_rk"]
         else:
-            ga = ta.groupby("NAMA RESTO", as_index=False)["TOTAL"].sum()
-            gb = tb.groupby("NAMA RESTO", as_index=False)["TOTAL"].sum()
-            on = "NAMA RESTO"
+            ga = ta.groupby("_rk", as_index=False).agg(
+                TOTAL=("TOTAL", "sum"),
+                **{"NAMA RESTO": ("NAMA RESTO", "first")})
+            gb = tb.groupby("_rk", as_index=False).agg(
+                TOTAL=("TOTAL", "sum"),
+                **{"NAMA RESTO": ("NAMA RESTO", "first")})
+            on = "_rk"
         mb = ga.merge(gb, on=on, how="outer")
+        mb = _coalesce_resto(mb)
         # v2.13.4: coerce numerik dulu (pola compare_level) — FutureWarning
         # downcasting fillna pada kolom object tidak muncul lagi.
         for _c in ("TOTAL_x", "TOTAL_y"):
@@ -703,7 +794,8 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
             ascending=False).index).head(top_n)
         branch = mb.reset_index(drop=True)[branch_cols]
 
-        m = ta.merge(tb, on=key, how="outer")
+        m = ta.merge(tb, on=mkey, how="outer")
+        m = _coalesce_resto(m)
         # v2.13.4: coerce numerik dulu (pola compare_level).
         for _c in ("TOTAL_x", "TOTAL_y"):
             m[_c] = pd.to_numeric(m[_c], errors="coerce").fillna(0.0)
@@ -720,7 +812,8 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
         # ≤0 DAN bulan ini ≤0) — baris all-zero umum (23rb/25,9rb data
         # asli) tampil ganda di tabel Baru & Hilang. Kini butuh nilai >0
         # di sisi yang diklaim ada.
-        full = ta.merge(tb, on=key, how="outer")
+        full = ta.merge(tb, on=mkey, how="outer")
+        full = _coalesce_resto(full)
         # v2.13.4: coerce numerik dulu (pola compare_level).
         for _c in ("TOTAL_x", "TOTAL_y"):
             full[_c] = pd.to_numeric(full[_c], errors="coerce").fillna(0.0)
@@ -735,18 +828,18 @@ def compare_quantity(a: dict, b: dict, top_n: int = 100) -> dict:
             "Pembanding", ascending=False).head(
             top_n).reset_index(drop=True)[gone_cols]
 
-    # v2.18.1 — overlap resto (audit Banding Periode): alur 'Proses dari
-    # Folder' mensintesis NAMA RESTO dari NAMA FILE — bila pembanding
-    # memakai kode resto asli (mis. B.1001.MLGPAR), join 0-match dan
-    # SEMUA item tampil BARU/HILANG palsu (ringkasan tetap tampak masuk
-    # akal → menyesatkan senyap). Angka overlap diserahkan ke pemanggil
-    # (UI memberi peringatan); murni informatif, tak mengubah tabel.
+    # v2.18.1 — overlap resto (audit Banding Periode) + v2.18.4: overlap
+    # dihitung dari STEM kode resto ('BJMHAS' ↔ '1216.BJMHAS' dianggap
+    # cocok) — beda konvensi nama (folder flow = nama file vs pembanding
+    # = kode resto) TIDAK lagi menghasilkan 0-overlap. Warning kini
+    # hanya nyala bila set resto kedua sisi memang berbeda; angka
+    # diserahkan ke pemanggil (UI memberi peringatan) — murni informatif.
     def _resto_set(src: dict) -> set:
         agg = src.get("agg")
         if not isinstance(agg, pd.DataFrame) or agg.empty \
                 or "NAMA RESTO" not in agg.columns:
             return set()
-        return set(_key_text(agg["NAMA RESTO"]).unique())
+        return set(_resto_key(agg["NAMA RESTO"]).unique())
 
     set_a, set_b = _resto_set(a), _resto_set(b)
     resto_overlap = len(set_a & set_b)
@@ -823,7 +916,31 @@ def compare_level(a: dict, b: dict, keys: list[str],
     ga, gb = _tot(a), _tot(b)
     if ga.empty and gb.empty:
         return pd.DataFrame(columns=out_cols)
-    m = ga.merge(gb, on=keys, how="outer")
+    # v2.18.4 — match resto lintas sumber (pola compare_quantity): join
+    # pakai stem kode resto '_rk'; display nama asli (coalesce A→B).
+    if "NAMA RESTO" in keys:
+        mkeys = [k if k != "NAMA RESTO" else "_rk" for k in keys]
+
+        def _rk(frame: pd.DataFrame) -> pd.DataFrame:
+            if frame.empty:
+                out = frame.copy()
+                if "_rk" not in out.columns:
+                    out["_rk"] = pd.Series(dtype=object)
+                return out
+            o = frame.copy()
+            o["_rk"] = _resto_key(o["NAMA RESTO"])
+            return o.groupby(mkeys, as_index=False, dropna=False).agg(
+                TOTAL=("TOTAL", "sum"),
+                **{"NAMA RESTO": ("NAMA RESTO", "first")})
+
+        ga, gb = _rk(ga), _rk(gb)
+        m = ga.merge(gb, on=mkeys, how="outer")
+        if {"NAMA RESTO_x", "NAMA RESTO_y"} <= set(m.columns):
+            m["NAMA RESTO"] = (m["NAMA RESTO_x"].fillna(m["NAMA RESTO_y"])
+                               .fillna(""))
+            m = m.drop(columns=["NAMA RESTO_x", "NAMA RESTO_y"])
+    else:
+        m = ga.merge(gb, on=keys, how="outer")
     # Outer merge menghasilkan NaN; angka coerced numerik dulu (hindari
     # FutureWarning fillna object + tahan kolom object dari frame lama).
     for c in ("TOTAL_x", "TOTAL_y"):
@@ -859,9 +976,12 @@ def drill_day_detail(a: dict, b: dict, resto: str,
         agg = src.get("agg")
         if agg is None or agg.empty:
             return np.zeros(len(days), dtype=float)
-        rk = str(resto).strip()
+        # v2.18.4 — resto match via STEM kode: klik baris display 'BJMHAS'
+        # (folder flow) ATAU '1216.BJMHAS' (pembanding) → keduanya
+        # menemukan baris agg sisi lain (dulu exact-match 0 hasil).
+        rk = _resto_stem(resto)
         ik = str(barang).strip()
-        sub = agg[(agg["NAMA RESTO"].astype(str).str.strip() == rk)
+        sub = agg[(_resto_key(agg["NAMA RESTO"]) == rk)
                   & (agg["NAMA BARANG"].astype(str).str.strip() == ik)]
         if sub.empty:
             return np.zeros(len(days), dtype=float)
@@ -975,7 +1095,11 @@ def change_vs_history(df: pd.DataFrame, baseline: dict | None,
         tmp = pd.DataFrame(index=frame.index)
         for k in keys:
             s = _key_text(frame[k])
-            if k in ("JENIS",):
+            if k == "NAMA RESTO":
+                # v2.18.4 — stem kode resto: anomali folder-flow ('BJMHAS')
+                # match agg_detail pembanding ('1216.BJMHAS').
+                s = s.map(_resto_stem)
+            elif k in ("JENIS",):
                 s = s.str.upper()
             elif k == "KETERANGAN":
                 s = s.str.casefold()
@@ -1167,7 +1291,9 @@ def day_evidence_vs_history(df: pd.DataFrame, months: list[dict],
     # anomali memegang pd.NA (StringDtype) → astype(str) literal "<NA>";
     # agg pembanding (object dtype) → "nan". Keterangan kosong tidak
     # pernah match walau nilai sama. _key_text → "" konsisten.
-    resto = (_key_text(out["NAMA RESTO"]).to_numpy()
+    # v2.18.4 — resto memakai STEM kode ('BJMHAS' ↔ '1216.BJMHAS'):
+    # df anomali folder-flow match agg pembanding kode resto DBS.
+    resto = (_resto_key(out["NAMA RESTO"]).to_numpy()
              if "NAMA RESTO" in out.columns
              else np.array([""] * n))
     barang = _key_text(out["NAMA BARANG"]).to_numpy()
@@ -1187,8 +1313,13 @@ def day_evidence_vs_history(df: pd.DataFrame, months: list[dict],
         long = agg.melt(id_vars=["NAMA RESTO", "NAMA BARANG"],
                         value_vars=dcols, var_name="_day",
                         value_name="_val")
-        long["_rk"] = _key_text(long["NAMA RESTO"])
+        long["_rk"] = _resto_key(long["NAMA RESTO"])
         long["_ik"] = _key_text(long["NAMA BARANG"])
+        # v2.18.4 — varian nama utk resto sama (stem identik — campuran
+        # sumber, mis. Tipikal lintas konvensi) → 1 baris per kunci:
+        # first (anti lipat-ganda merge; panjang wajib tetap len(cand)).
+        long = long.groupby(["_rk", "_ik", "_day"], as_index=False).agg(
+            _val=("_val", "first"))
         m = cand.merge(long[["_rk", "_ik", "_day", "_val"]],
                        on=["_rk", "_ik", "_day"], how="left")
         return m["_val"].to_numpy(dtype=float)

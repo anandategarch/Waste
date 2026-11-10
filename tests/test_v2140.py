@@ -668,14 +668,14 @@ class TestManifestBantuanVersi:
         from waste_anomaly import __version__
         from waste_anomaly.utils import load_config
         cfg = load_config()
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.18.3"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.18.4"
         init_src = (REPO / "waste_anomaly" / "__init__.py").read_text(
             encoding="utf-8")
-        assert "Versi: 2.18.3" in init_src
+        assert "Versi: 2.18.4" in init_src
         mulai = (REPO / "MULAI.bat").read_bytes()
-        assert b"v2.18.3" in mulai
+        assert b"v2.18.4" in mulai
         readme = (REPO / "README.md").read_text(encoding="utf-8")
-        assert "v2.18.3" in readme
+        assert "v2.18.4" in readme
 
     def test_crlf_bat_utuh(self):
         """MULAI.bat/SETUP.bat tetap CRLF penuh (kontrak gelombang 1-6)."""
