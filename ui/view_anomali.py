@@ -110,7 +110,7 @@ from .models import (
     fmt_pct,
     fmt_ratio_x,
 )
-from .shared import baseline_label, fmt_id
+from .shared import _apply_filters, baseline_label, fmt_id
 from .state import AppContext
 from .widgets import (
     Card,
@@ -1839,6 +1839,9 @@ class AnomaliView(FollowupTableMixin, QWidget):
         # identitas (lihat followup_table._mask_local — anti tabrakan id
         # pasca-GC, audit A5).
         self._mask_cache: OrderedDict[tuple, tuple] = OrderedDict()
+        # v2.19.1 (audit bug C): memo 1-slot df sumber anomali tanpa
+        # filter baris keterangan/status (jalur rebuild lintas-tab).
+        self._src_cache: tuple | None = None
         ctx.data_ready.connect(self._on_data_ready)
         ctx.filters_changed.connect(self._on_filters_changed)
         # v2.10.2: pembanding siap / pilihan combo berganti → kolom
@@ -1856,6 +1859,8 @@ class AnomaliView(FollowupTableMixin, QWidget):
         self._disp_cache.clear()
         self._fps_src, self._fps = None, None
         self._change_cache.clear()
+        # v2.19.1 (audit bug C): memo df sumber ikut basi bersama dataset.
+        self._src_cache = None
         # v2.12.4: dataset baru → nilai funnel lokal bisa jadi tak ada lagi
         # di data baru — reset (state global sudah direset set_dataset).
         self._hfilters.clear()
@@ -1970,6 +1975,134 @@ class AnomaliView(FollowupTableMixin, QWidget):
             return int((self._ctx.summary or {}).get("key_akhir", 31))
         except (TypeError, ValueError):
             return 31
+
+    # v2.19.1 (audit bug B+C) — kolom TURUNAN grup yang TIDAK boleh
+    # difilter di level baris: nilai KETERANGAN grup = JOIN alasan anggota
+    # ('Handling | Cancel Nota' — tak pernah cocok dgn nilai baris tunggal
+    # → tabel 0 baris), ANOMALY STATUS grup = paling parah (worst-of-group
+    # → filter baris memangkas TOTAL grup diam-diam: grup 2-anggota
+    # 100+40 tampil TOTAL 40). Keduanya difilter LEVEL GRUP: isin pada
+    # df grup SETELAH agregasi (pola combo 'Perubahan:' v2.19.0).
+    # Kunci grup (NAMA RESTO/NAMA BARANG/JENIS) tetap GLOBAL level-baris —
+    # isin kunci ≡ isin grup, TOTAL utuh, sinkron antar-tab tetap hidup.
+    _GRP_FILTER_COLS = frozenset({"KETERANGAN", "ANOMALY STATUS"})
+    _GRP_FILTER_KEYS = frozenset({"keterangan", "status"})
+
+    def _on_header_filter(self, col: str, key: str, values) -> None:
+        """Override mixin — funnel KETERANGAN/ANOMALY STATUS = LOKAL grup.
+
+        Funnel di tab ini menawarkan nilai KOLOM TAMPILAN (join/worst
+        grup — menu dibaca dari df model), jadi filternya harus isin pada
+        df grup, BUKAN set_filter global level-baris (nilai join tak
+        pernah match baris → 0 baris; status memangkas TOTAL).
+        Interaksi funnel kolom ini = AMBIL ALIH dim dari filter global
+        (anti-loop: tanpa ini, membersihkan lokal membuat filter global
+        — dipasang dari tab Hari — muncul kembali; baris yang barusan
+        di-uncheck tetap tampil)."""
+        if col in self._GRP_FILTER_COLS or key in self._GRP_FILTER_KEYS:
+            vals = [v for v in (values or [])]
+            if vals:
+                self._hfilters[col] = vals
+            else:
+                self._hfilters.pop(col, None)
+            gv = self._ctx.active_filters.get(key)
+            if gv:
+                # Lepas dim global (broadcast → render view ini + tab
+                # lain; TANPA render ganda — jalur lokal tak refresh lagi).
+                self._ctx.set_filter(key, None)
+                return
+            self._refresh_table()
+            return
+        FollowupTableMixin._on_header_filter(self, col, key, values)
+
+    def _hf_state(self, col: str):
+        """Override mixin — status funnel KETERANGAN/ANOMALY STATUS.
+
+        Aktif (terisi merah) bila filter LOKAL grup aktif, ATAU filter
+        GLOBAL dim itu aktif (dipasang dari tab Hari — data grup ikut
+        tersaring level grup oleh _anomali_source_df + _grp_global_mask).
+        Utk kasus global, nilai yg dikembalikan = nilai grup yg SEDANG
+        TAMPIL (cache per-render _grp_paint_vals) supaya menu funnel
+        membuka dgn centangan yg benar (nilai join — bukan nilai baris
+        global yg tak pernah match)."""
+        if col in self._GRP_FILTER_COLS:
+            v = self._hfilters.get(col)
+            if v:
+                return list(v)
+            key = _HF_COLS.get(col)
+            gv = self._ctx.active_filters.get(key) if key else None
+            if isinstance(gv, list) and gv or (isinstance(gv, str) and gv):
+                paint = getattr(self, "_grp_paint_vals", None) or {}
+                return list(paint.get(col) or [])
+            return None
+        return FollowupTableMixin._hf_state(self, col)
+
+    def _grp_global_mask(self, shown: pd.DataFrame, col: str):
+        """Mask level-grup utk filter GLOBAL dim kolom turunan (v2.19.1).
+
+        Filter global keterangan/status dipasang dari tab HARI (level
+        baris di sana). Di view grup, penerapannya:
+        - KETERANGAN  : keanggotaan alasan dalam JOIN grup — grup yang
+          MELIBATKAN alasan terpilih tampil (TOTAL utuh; isin nilai
+          tunggal pada join tak pernah match → 0 baris).
+        - ANOMALY STATUS: worst-of-group (nilai yg TAMPIL di kolom) in
+          vals — konsisten dgn kolom tampilan.
+        Return None bila dim tak difilter global (funnel lokal sudah
+        di-apply _mask_local di atas — isin nilai grup persis)."""
+        v = self._hfilters.get(col)
+        if v:
+            return None  # lokal aktif — global diambil alih (anti-loop)
+        key = _HF_COLS.get(col)
+        gv = self._ctx.active_filters.get(key) if key else None
+        if isinstance(gv, list) and gv:
+            vals = gv
+        elif isinstance(gv, str) and gv:
+            vals = [gv]
+        else:
+            return None
+        if col == "KETERANGAN":
+            vs = {str(x) for x in vals}
+            parts = shown[col].astype(str).str.split(r"\s*\|\s*")
+            return parts.map(lambda ps: any(p in vs for p in ps))
+        return shown[col].isin(vals)
+
+    def _anomali_source_df(self) -> pd.DataFrame | None:
+        """v2.19.1 (audit bug C lintas-tab) — df anomali TANPA filter
+        baris-level keterangan/status.
+
+        Filter global kedua dim itu (dipasang dari funnel tab Hari /
+        drill pop-up baris) diterapkan LEVEL GRUP di view ini (lihat
+        _refresh_table_impl) supaya TOTAL grup tak terpangkas diam-diam.
+        Tanpa filter itu aktif → ctx.anomali_df() apa adanya (memoized,
+        objek stabil → cache fit/enrich tetap kena). Memo 1-slot utk
+        jalur rebuild (df baru per panggilan tanpa memo akan terus
+        me-miss cache enrich change_vs_history)."""
+        ctx = self._ctx
+        af = ctx.active_filters or {}
+        if not any(af.get(k) for k in self._GRP_FILTER_KEYS):
+            self._src_cache = None
+            return ctx.anomali_df()
+        if ctx.df is None:
+            return None
+        sig = (id(ctx.df), ctx.data_version, ctx.score_min,
+               tuple(sorted((k, tuple(v) if isinstance(v, list) else v)
+                            for k, v in af.items()
+                            if k not in self._GRP_FILTER_KEYS)))
+        cached = self._src_cache
+        if cached is not None and cached[0] == sig and cached[1] is not None:
+            return cached[1]
+        safe = {k: v for k, v in af.items()
+                if k not in self._GRP_FILTER_KEYS}
+        base = _apply_filters(ctx.df, safe) if safe else ctx.df
+        # Replikasi aturan ctx.anomali_df (state.py): baris Normal
+        # dibuang + ambang skor — TANPA filter keterangan/status.
+        if "ANOMALY STATUS" in base.columns:
+            base = base[base["ANOMALY STATUS"] != "Normal"]
+        if ctx.score_min > 0 and "ANOMALY SCORE" in base.columns:
+            base = base[pd.to_numeric(base["ANOMALY SCORE"], errors="coerce")
+                        .fillna(0) >= ctx.score_min]
+        self._src_cache = (sig, base)
+        return base
 
     def _display_df(self, df: pd.DataFrame) -> pd.DataFrame:
         """Override mixin — df tampilan = AGRAGASI GRUP per item×cabang.
@@ -2095,7 +2228,11 @@ class AnomaliView(FollowupTableMixin, QWidget):
             self._spin_score.blockSignals(True)
             self._spin_score.setValue(self._ctx.score_min)
             self._spin_score.blockSignals(False)
-        df = self._ctx.anomali_df()
+        # v2.19.1 (audit bug C): df sumber TANPA filter baris keterangan/
+        # status — kedua dim itu kolom TURUNAN grup (join alasan /
+        # worst-of-group), filternya diterapkan LEVEL GRUP setelah
+        # agregasi supaya TOTAL grup tak terpangkas diam-diam.
+        df = self._anomali_source_df()
         if df is None:
             self._table.set_dataframe(None)
             self._lbl_count.setText("Belum ada data — buka tab Pipeline, pilih workbook, jalankan.")
@@ -2151,7 +2288,6 @@ class AnomaliView(FollowupTableMixin, QWidget):
                 "'Banding Periode')")
         self._table.model().set_header_map(aliases or None)
         self._table.model().set_tooltip_map(tips or None)
-        cols = [c for c in TABLE_COLS if c in df.columns]
         # v2.7.0 (V26-C1): model memegang df PENUH (bukan irisan TABLE_COLS
         # lagi) — kolom non-tabel disembunyikan via visible_cols. Record
         # terpilih / double-klik tetap membawa SEMUA kolom (12 sinyal,
@@ -2174,6 +2310,28 @@ class AnomaliView(FollowupTableMixin, QWidget):
         if cat and "PERUBAHAN" in shown.columns:
             sel = shown[shown["PERUBAHAN"] == cat]
             shown = sel.copy() if len(sel) else sel
+        # v2.19.1 (audit bug B+C) — filter KETERANGAN/ANOMALY STATUS di
+        # LEVEL GRUP. Funnel LOKAL kolom ini sudah di-apply _mask_local
+        # di atas (isin nilai grup persis — nilai menu = nilai kolom).
+        # Filter GLOBAL dim itu (dipasang dari tab Hari; df sumber sudah
+        # dibangun tanpa keduanya oleh _anomali_source_df) diterapkan di
+        # sini: KETERANGAN = keanggotaan alasan dalam join, STATUS =
+        # worst-of-group — TOTAL grup tak perpangkas.
+        grp_paint: dict[str, list] = {}
+        for gcol in sorted(self._GRP_FILTER_COLS):
+            if gcol not in shown.columns:
+                continue
+            mask = self._grp_global_mask(shown, gcol)
+            if mask is not None:
+                sel = shown[mask]
+                shown = sel.copy() if len(sel) else sel
+            # cache lukisan funnel: nilai kolom yg TAMPIL pasca-filter
+            # (menu membuka dgn centangan benar saat global aktif).
+            try:
+                grp_paint[gcol] = [str(v) for v in pd.unique(shown[gcol])]
+            except Exception:  # noqa: BLE001 — nilai eksotis: skip cache
+                pass
+        self._grp_paint_vals = grp_paint
         # v2.18.7 — combo "Tampilkan:" ✓ Sudah masuk Follow Up: hanya
         # baris ber-✓ (filter LOKAL view — KPI/daftar Follow Up tak
         # tersentuh). .copy() eksplisit: hasil slice membawa _is_copy —
@@ -2182,11 +2340,16 @@ class AnomaliView(FollowupTableMixin, QWidget):
         if fu_only and CHECK_COL in shown.columns:
             sel = shown[shown[CHECK_COL].astype(bool)]
             shown = sel.copy() if len(sel) else sel
-        # Alias judul WAJIB ikut visible_cols (set_dataframe mencocokkan
-        # nama JUDUL/alias — pola view_followup v2.12.3) tanpa merusak
-        # SortControl (entri non-kanonik dibuang sejak v2.19.0).
-        visible = [CHECK_COL] + cols + [
-            _TABLE_ALIASES[c] for c in cols if c in _TABLE_ALIASES]
+        # v2.19.1 (audit bug A): visible_cols dihitung dari df GRUP FINAL
+        # (shown) — dulu dari df BARIS awal, yang tak pernah punya kolom
+        # khusus grup (SOURCE DATA GABUNGAN, TOTAL BULAN LALU & % Selisih,
+        # Selisih Bulan Lalu) → kolom2 inti redesain TERSEMBUNYI selamanya.
+        # Alias judul WAJIB ikut (set_dataframe mencocokkan nama JUDUL/
+        # alias — pola view_followup v2.12.3) tanpa merusak SortControl
+        # (entri non-kanonik dibuang sejak v2.19.0).
+        visible = [CHECK_COL] + [c for c in TABLE_COLS if c in shown.columns] + [
+            _TABLE_ALIASES[c] for c in TABLE_COLS
+            if c in shown.columns and c in _TABLE_ALIASES]
         self._table.set_dataframe(shown, sort_desc="ANOMALY SCORE",
                                   narrow_hide=[SRC_GAB_COL, "PERUBAHAN"],
                                   visible_cols=visible)

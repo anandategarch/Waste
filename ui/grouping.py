@@ -151,7 +151,15 @@ def group_anomali_display(
         agg[c] = "sum"
     if "BULAN LALU" in df.columns:
         agg["BULAN LALU"] = "sum"
-    out = g.agg(agg).reset_index()
+    # v2.19.1 (audit bug D): agg KOSONG (df tanpa TOTAL/hari/BULAN LALU —
+    # fixture sintetis / df parsial) membuat g.agg({}) melempar
+    # ValueError "No objects to concatenate" — pelanggaran kontrak
+    # defensif docstring ini sendiri. Kerangka grup dibangun via
+    # g.size() (jumlah anggota per grup) lalu kolom hitungannya dibuang.
+    if agg:
+        out = g.agg(agg).reset_index()
+    else:
+        out = g.size().to_frame("__n").reset_index().drop(columns="__n")
 
     # ---------- 2) join teks unik (merge on keys — tahan NaN) ----------
     for col, sep in (("SOURCE DATA", ", "), ("KETERANGAN", " | "),

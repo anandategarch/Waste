@@ -59,17 +59,20 @@ class TestMixinKonsolidasi:
         assert issubclass(HariView, FollowupTableMixin)
         # v2.19.0 — AnomaliView MEN-OVERRIDE beberapa metode mixin utk
         # tampilan GRUP per item×cabang (sampel user). Override: _display_df,
-        # _refresh_check_col, _on_check_toggled, _on_check_all. Metode LAIN
-        # tetap di-share via mixin (HariView sepenuhnya pakai mixin).
+        # _refresh_check_col, _on_check_toggled, _on_check_all.
+        # v2.19.1 (audit bug B+C): + _on_header_filter & _hf_state —
+        # KETERANGAN/ANOMALY STATUS jadi filter LOKAL level-grup (nilai
+        # join/worst; filter global level-baris memangkas TOTAL / 0 baris).
+        # Metode LAIN tetap di-share via mixin (HariView sepenuhnya pakai
+        # mixin).
         shared = ("_mask_local", "_on_followup_changed",
-                  "_on_header_filter", "_hf_state", "_on_clear_filters",
-                  "_fps_for", "_on_selection")
+                  "_on_clear_filters", "_fps_for", "_on_selection")
         for m in shared:
             assert getattr(AnomaliView, m) is getattr(FollowupTableMixin, m)
             assert getattr(HariView, m) is getattr(FollowupTableMixin, m)
         # Override AnomaliView (grup) — bukan mixin lagi.
         for m in ("_display_df", "_on_check_toggled", "_on_check_all",
-                  "_refresh_check_col"):
+                  "_refresh_check_col", "_on_header_filter", "_hf_state"):
             assert getattr(AnomaliView, m) is not getattr(
                 FollowupTableMixin, m), f"{m} harus di-override AnomaliView"
             assert getattr(HariView, m) is getattr(
@@ -110,7 +113,9 @@ class TestMixinKonsolidasi:
                          if isinstance(node, ast.FunctionDef)
                          for n in [node]}
         # metode PURE-MIXIN (tak boleh di-override) tetap tak didefinisikan
-        for m in ("_fps_for", "_mask_local", "_hf_state"):
+        # (v2.19.1: _hf_state/_on_header_filter kini override SAH utk
+        # filter level-grup KETERANGAN/STATUS — lihat test_v2191 [B][C]).
+        for m in ("_fps_for", "_mask_local"):
             assert m not in anomali_names, (
                 f"{m} masih didefinisikan di view_anomali.py "
                 "(harus di-share via mixin)")
