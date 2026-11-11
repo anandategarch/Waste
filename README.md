@@ -2,7 +2,7 @@
 
 **Anomaly workbench** Python + PySide6 (Qt) untuk deteksi anomali waste di cabang resto — replika 1:1 pipeline Power Query M code. Membaca rekap waste bulanan (Excel), menjalankan 14-stage pipeline in-memory, men-skor setiap baris dengan **12 sinyal anomali**, dan menyajikan hasilnya di UI 5 tab interaktif + export Excel 10 sheet.
 
-> Versi **v2.18.5** · 1.197 test (pytest) · CI GitHub Actions (matrix Python × OS) · MIT License
+> Versi **v2.18.6** · 1.210 test (pytest) · CI GitHub Actions (matrix Python × OS) · MIT License
 
 ## Fitur Utama
 
@@ -10,7 +10,7 @@
 - **Proses dari Folder** — pindai seluruh folder `.xlsx` (format BJMHAS, nama resto dari nama file), gabung jadi satu dataset
 - **12 sinyal anomali** (S1–S12) + composite score → status Prioritas Tinggi / Potensi Anomali / Perlu Review / Normal
 - **5 tab analisa**: Pipeline · Anomali · Hari Mencurigakan · Banding Periode · Follow Up
-- **Drill-down interaktif** — klik baris = pop-up detail (ringkasan, chip sinyal, peta nilai per hari 1–31, tombol fokus cabang/item/alasan)
+- **Drill-down interaktif** — klik-ganda baris (atau Enter) = pop-up detail (ringkasan, chip sinyal, peta nilai per hari 1–31, tombol fokus cabang/item/alasan)
 - **Filter funnel di judul semua kolom tabel** — daftar nilai bercentang + pencarian + Pilih Semua + **klik-ganda nilai = pilih hanya itu** + tombol ◉ Hanya Ini (hasil cari)
 - **Banding multi-bulan** (1 file = 1 bulan; mode 📊 Tipikal = median gabungan ≥2 bulan) — hanya cabang yang ada di **kedua** bulan (resto baru/tutup disembunyikan, jumlahnya dilaporkan)
 - **Follow Up** — centang ✓ baris mencurigakan → shortlist rekap + ekspor + impor hasil tindak lanjut
@@ -131,7 +131,7 @@ Waste/
 │   ├── exporter.py                         ← xlsx writer + mode streaming
 │   ├── schema.py / loader.py / logging_setup.py / frozen.py / utils.py
 │   └── config.json                         ← thresholds + nama sheet (editable)
-├── tests/                                  ← 54 file, 1.197 test pytest
+├── tests/                                  ← 54 file, 1.210 test pytest
 ├── .github/workflows/ci.yml                ← CI matrix Python × OS
 ├── sample_workbook.xlsx                    ← fixture test in-repo
 └── requirements.txt · LICENSE · waste_anomaly.spec
@@ -178,6 +178,8 @@ Edit `waste_anomaly/config.json` → section `thresholds` (mis. `TH_SPIKE`, `STA
 | `pip install PySide6` gagal (path panjang Windows) | Pakai `SETUP.bat` versi terbaru (otomatis `.venv`); atau pindahkan folder ke path pendek |
 
 ## Changelog
+
+**v2.18.6** — UX pop-up detail (2 permintaan user): (1) **pop-up hanya terbuka lewat klik-ganda atau Enter** — dulu klik 1× langsung membuka pop-up sehingga klik tak sengaja sering memunculkannya; kini klik tunggal tak memicu apa pun (saat pop-up sudah terbuka, klik/panah tetap mengganti isinya), sel ✓ tetap murni aksi centang; (2) **pop-up Banding Periode (rincian resto/item) kini punya kolom ✓ Follow Up** — satu centang = semua baris anomali resto/item terkait masuk ke daftar Follow Up (sidik jari diagregasi lintas jenis; level per-hari tanpa ✓); ✓ pop-up ikut bersinkron saat follow-up berubah di mana pun. Bantuan F1 & banner ikut disegarkan.
 
 **v2.18.5** — UX Banding Periode + pembersihan (permintaan user): (1) **hanya cabang yang ada di kedua bulan** yang tampil — resto yang hanya ada bulan ini (belum ada pembanding) atau hanya di pembanding (tutup/ganti nama) disembunyikan dari semua tabel banding, jumlahnya dilaporkan di baris status; (2) **tombol sort dibalik** sesuai intuisi user — *Urut Naik* = nilai **terbesar** dulu, *Urut Turun* = terkecil dulu (dulu mengikuti konvensi Excel yang terasa kebalik; label kini eksplisit); (3) **pilih 1 nilai cepat** di menu filter funnel: klik-ganda nilai = tampilkan hanya itu + tombol ◉ *Hanya Ini* (centang hanya hasil pencarian) — tanpa uncek satu per satu; (4) **tab Scorecard Cabang dihapus** bersama dead code-nya (`ui/view_scorecard.py`, `waste_anomaly/insights.py`, alias `PEER_KEYS`).
 **v2.18.4** — Fix Banding Periode lintas sumber: pencocokan cabang kini memakai *stem* kode resto di semua join (`BJMHAS` dari alur “Proses dari Folder” = `1216.BJMHAS` / `B.1001.MLGPAR` dari file pembanding DBS/Power Query) — dulu join exact 0-cocok → SELURUH item tampil BARU/HILANG palsu (v2.18.1 hanya memberi peringatan). Tercakup: Ringkasan/Cabang/Item/Baru/Hilang, drill-down (`compare_level` + `drill_day_detail`), kolom BULAN LALU di tab Anomali (`change_vs_history`) & NILAI BULAN LALU di tab Hari (`day_evidence_vs_history`); kolom tampil tetap nama asli sumber; nama wajar bertitik (`V.20`, `NO.1`) tak distrip; +23 test regresi.

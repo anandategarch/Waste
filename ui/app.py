@@ -136,23 +136,23 @@ potensi, jumlah cabang/item, dst. — hasil siap di tab lain.</li>
 <h3>Tab Anomali (pemburu anomali)</h3>
 <ul>
 <li>Tabel anomali ter-ranking (skor tertinggi di atas; klik header kolom untuk sort).</li>
-<li>Klik baris → <b>pop-up detail ringkas</b>: <b>Ringkasan</b> (total sebulan, puncak sehari + tanggalnya, vs penjualan, vs cabang lain, vs bulan lalu, peringkat) → <b>sinyal yang terpicu saja</b> (chip merah) → alasan → <b>peta nilai per hari 1–31</b> → tombol tindak lanjut. Seluruh kolom data tetap tersedia lewat tombol <b>▸ Tampilkan semua kolom data</b> di bawah.</li>
+<li><b>Klik-ganda baris (atau Enter)</b> → <b>pop-up detail ringkas</b>: <b>Ringkasan</b> (total sebulan, puncak sehari + tanggalnya, vs penjualan, vs cabang lain, vs bulan lalu, peringkat) → <b>sinyal yang terpicu saja</b> (chip merah) → alasan → <b>peta nilai per hari 1–31</b> → tombol tindak lanjut. Seluruh kolom data tetap tersedia lewat tombol <b>▸ Tampilkan semua kolom data</b> di bawah.</li>
 <li>Tombol drill-down di pop-up: fokus cabang / item / alasan dari baris terpilih; tombol <b>☑ Masuk Follow Up</b> mengumpulkan baris ke daftar tindak lanjut.</li>
-<li><b>Klik 2× baris TIDAK memfilter</b> — fokus cabang/item hanya lewat tombol di pop-up, supaya klik 1× selalu membuka pop-up detail.</li>
+<li><b>Klik 1× TIDAK membuka apa pun</b> — pop-up detail hanya terbuka lewat <b>klik-ganda</b> atau <b>Enter</b> (klik tak sengaja tak lagi memunculkan pop-up). Saat pop-up sudah terbuka, klik/panah cukup mengganti isinya; klik-ganda TIDAK memfilter — fokus cabang/item hanya lewat tombol di pop-up.</li>
 <li>"Skor ≥" menyembunyikan anomali ber-skor rendah (skor maksimum = 19).</li>
 </ul>
 <h3>Tab Hari Mencurigakan</h3>
 <ul>
 <li>Jawaban untuk: "potensi salah angka terjadi di <b>tanggal berapa</b> (1–31)?"</li>
 <li>Bukti hari = angka jauh di atas cabang lain di hari sama (mis. 404×), atau ≥ {share_warn}% waste sebulan di satu hari, atau pola 10× (salah ketik), atau waste cuma 1 hari.</li>
-<li>Kolom ALASAN HARI merangkum buktinya dalam satu kalimat; klik baris = pop-up dengan peta hari.</li>
+<li>Kolom ALASAN HARI merangkum buktinya dalam satu kalimat; <b>klik-ganda baris</b> (atau Enter) = pop-up dengan peta hari.</li>
 <li><b>Centang ✓ di kolom pertama</b> atau tombol <b>☑ Masuk Follow Up</b> di pop-up detail = kumpulkan baris ini ke daftar Follow Up; tombol <b>☑ Centang yang tampil</b> = centang massal hasil filter.</li>
 <li><b>Bila ada file bulan lalu</b> (tab Banding Periode): muncul kolom <b>NILAI BULAN LALU</b> — nilai tanggal yang sama bulan sebelumnya + berapa kali lipatnya.</li>
 </ul>
 <h3>Tab Follow Up</h3>
 <ul>
 <li><b>Centang baris mencurigakan</b> (kolom ✓ di tab Anomali <b>atau tab Hari Mencurigakan</b>, atau tombol ☑ di pop-up detail) → baris terkumpul di tab <b>Follow Up</b> dalam format rekap: TOTAL · AVG · MAX · SOURCE DATA · JENIS · KETERANGAN · NAMA BARANG · NAMA RESTO · SATUAN · hari 1–31.</li>
-<li>Tombol <b>☑ Centang yang tampil</b> (tab Anomali &amp; Hari Mencurigakan): centang massal hasil filter saat ini; <b>lepas centang ✓</b> (di semua tab) = keluarkan baris. Centang <b>✓ juga ada di tab Banding Periode</b> (halaman Cabang/Item/Baru): satu centang = semua baris anomali resto/item terkait masuk ke daftar Follow Up yang sama.</li>
+<li>Tombol <b>☑ Centang yang tampil</b> (tab Anomali &amp; Hari Mencurigakan): centang massal hasil filter saat ini; <b>lepas centang ✓</b> (di semua tab) = keluarkan baris. Centang <b>✓ juga ada di tab Banding Periode</b> (halaman Cabang/Item/Baru <b>dan pop-up rincian resto/item-nya</b>): satu centang = semua baris anomali resto/item terkait masuk ke daftar Follow Up yang sama.</li>
 <li><b>Hari mencurigakan diberi warna</b>: 🔴 merah = hari tersangka (puncak) · 🟠 amber = ≥ 2× rata-rata hari aktif.</li>
 <li>Daftar <b>menetap terhadap filter</b> dan <b>tersimpan otomatis</b> (followup.json) — aman walau aplikasi ditutup; baris yang tak ada lagi di data baru otomatis dipangkas.</li>
 <li><b>💾 Ekspor Excel</b>: format rekap + kolom kosong PIC/KATEGORI/PENYEBAB utk diisi petugas (konvensi REKAP MENTAH) — hari mencurigakan ikut berwarna.</li>
@@ -178,7 +178,9 @@ cabang/item bergerak, item baru/hilang — semua murni kuantiti.</li>
 (ciyutkan daftar file) &amp; <b>⛶ Layar Penuh</b> (tabel tab aktif satu monitor; Esc
 kembali). <b>Klik 2× baris</b> di semua tab banding = pop-up rantai rincian
 <b>Total → resto → item → per hari</b> ("total naik — resto mana — item apa —
-hari berapa").</li>
+hari berapa") — dan pop-up rincian <b>resto/item punya kolom
+✓ follow-up</b> (satu centang = semua baris anomali resto/item terkait
+masuk Follow Up).</li>
 <li><b>Kolom perubahan di tab Anomali</b> — bila ada pembanding:
 kolom <b>BULAN LALU</b>, <b>PERUBAHAN %</b> (+35,5% / BARU) &amp; kategori
 <b>PERUBAHAN</b> (filter "Perubahan:") — memisahkan <b>lonjakan baru</b>

@@ -164,7 +164,11 @@ class FollowUpView(QWidget):
         # v2.13.5: klik baris SAMA saat pop-up sempat ditutup → pop-up
         # muncul lagi (sinyal clicked memicu di SETIAP klik; guard
         # idempoten DetailDialog mencegah rebuild ganda).
+        # v2.18.6: klik 1× kini hanya MEfollow pop-up yang SUDAH terbuka
+        # (guard _on_selection) — pop-up dibuka lewat klik-ganda/Enter
+        # (permintaan user: klik tak sengaja sering memunculkan pop-up).
         self._table.row_clicked.connect(lambda *_: self._on_selection())
+        self._table.double_clicked.connect(self._open_popup_row)
         cl.addWidget(self._table, 1)
 
         lay.addWidget(card, 1)
@@ -424,12 +428,27 @@ class FollowUpView(QWidget):
              else "✓ Baris dikeluarkan dari Follow Up"), "done")
 
     def _on_selection(self) -> None:
-        """Klik baris (atau navigasi keyboard) → pop-up detail (v2.8.1).
+        """Klik 1×/navigasi baris → ikuti pop-up HANYA bila sudah TERBUKA
+        (v2.18.6 — pop-up dibuka lewat klik-ganda/Enter; klik 1× tak
+        sengaja tak lagi memicu apa pun — permintaan user).
         v2.13.5: tekanan di sel ✓ → pop-up TIDAK dibuka (aksi centang
         murni — flag window mousePressEvent, lihat suppress_row_popup)."""
         if self._table.suppress_row_popup():
             return
+        if not self._popup.isVisible():
+            return  # pop-up tertutup → klik 1× tak sengaja: no-op
         rec = self._table.selected_record()
+        if rec is not None:
+            self._popup.show_record(rec)
+
+    def _open_popup_row(self, rec=None) -> None:
+        """KLIK-GANDA baris / Enter → buka pop-up detail (v2.18.6 —
+        pengganti klik-1×; FollowUpView tak memakai FollowupTableMixin
+        sehingga punya salinan sendiri, pola _on_selection)."""
+        if self._table.suppress_row_popup():
+            return
+        if rec is None:
+            rec = self._table.selected_record()
         if rec is not None:
             self._popup.show_record(rec)
 

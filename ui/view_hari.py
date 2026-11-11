@@ -214,7 +214,12 @@ class HariView(FollowupTableMixin, QWidget):
         # berubah (keluhan user "pop-up kadang tidak muncul"); sinyal
         # clicked memicu di SETIAP klik. Guard idempoten DetailDialog
         # mencegah rebuild ganda (currentRowChanged + clicked).
+        # v2.18.6: klik 1× kini hanya MEfollow pop-up yang SUDAH terbuka
+        # (guard _on_selection) — pop-up dibuka lewat KLIK-GANDA/Enter
+        # (_open_popup_row; permintaan user: klik tak sengaja sering
+        # memunculkan pop-up).
         self._table.row_clicked.connect(lambda *_: self._on_selection())
+        self._table.double_clicked.connect(self._open_popup_row)
         cl.addWidget(self._table, 1)
         self._tcl = cl  # v2.12.3: reparent ⛶ (pulihkan index layout tabel)
         lay.addWidget(card, 1)

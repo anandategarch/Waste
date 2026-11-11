@@ -47,12 +47,31 @@ class FollowupTableMixin:
     # INTERAKSI BARIS
     # ------------------------------------------------------------
     def _on_selection(self) -> None:
-        """Klik baris (atau navigasi keyboard) → pop-up detail (v2.8.1).
+        """Klik 1×/navigasi baris → ikuti pop-up HANYA bila sudah TERBUKA
+        (v2.18.6 — permintaan user: "klik sekali aja pop up langsung
+        muncul… kadang bikin klik yang gak sengaja ketriger munculin
+        pop up"). Pop-up kini dibuka lewat KLIK-GANDA / Enter
+        (_open_popup_row); klik 1× saat pop-up tertutup = tanpa efek.
         v2.13.5: tekanan di sel ✓ → pop-up TIDAK dibuka (aksi centang
         murni — flag window mousePressEvent, lihat suppress_row_popup)."""
         if self._table.suppress_row_popup():
             return
+        if not self._popup.isVisible():
+            return  # pop-up tertutup → klik 1× tak sengaja: no-op
         rec = self._table.selected_record()
+        if rec is not None:
+            self._popup.show_record(rec)
+
+    def _open_popup_row(self, rec=None) -> None:
+        """KLIK-GANDA baris (sinyal double_clicked) / Enter → buka pop-up
+        detail (v2.18.6). rec = record dari sinyal (fallback: baris
+        terpilih). Ini SATU-SATUNYA jalur membuka pop-up — klik 1× tak
+        lagi memicu apa pun (permintaan user; dulu v2.8.1-v2.18.5:
+        klik 1× langsung buka pop-up)."""
+        if self._table.suppress_row_popup():
+            return
+        if rec is None:
+            rec = self._table.selected_record()
         if rec is not None:
             self._popup.show_record(rec)
 

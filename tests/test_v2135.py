@@ -117,14 +117,17 @@ def _make_hari_view(df=None):
 class TestKlikGandaTakLagiFilter:
 
     def test_on_double_dihapus_kedua_view(self):
-        """Handler + guard coalesce dihapus bersama perilakunya."""
+        """Handler FILTER klik-2× dihapus; v2.18.6: double_clicked kini
+        tersambung ke _open_popup_row (pop-up dibuka lewat klik-ganda —
+        klik 1× tak sengaja tak lagi memicu, permintaan user)."""
         src_a = (UI / "view_anomali.py").read_text(encoding="utf-8")
         src_h = (UI / "view_hari.py").read_text(encoding="utf-8")
         for src in (src_a, src_h):
             assert "def _on_double" not in src
             # atribut instance (kode) — komentar sejarah tak dihitung
             assert "self._batch_filters" not in src
-            assert "self._table.double_clicked.connect" not in src
+            # v2.18.6 — sambungan BARU: klik-ganda = buka pop-up detail
+            assert "self._table.double_clicked.connect(self._open_popup_row)" in src
 
     def test_emit_double_clicked_tanpa_efek_anomali(self):
         view, ctx = _make_view()

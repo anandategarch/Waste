@@ -91,6 +91,11 @@ def _labels(panel) -> list[str]:
     return [l.text() for l in panel._content.findChildren(QLabel)]
 
 
+def QTest_qWait(ms: int) -> None:
+    from PySide6.QtTest import QTest
+    QTest.qWait(ms)
+
+
 def _click_row(view, row: int) -> None:
     """Klik NYATA (QTest) pada baris tabel — jalur event penuh Qt."""
     from PySide6.QtCore import QPoint, Qt
@@ -140,28 +145,42 @@ class TestGuardTekanTunggal:
             "tekan#1 replay harus ditelan (baris tak terseleksi)")
 
     def test_klik_sah_setelah_guard_popup_terbuka(self):
-        """Kontrol dua arah: jendela guard lewat → klik baris = fitur
-        inti (pop-up terbuka — 'klik 1× selalu membuka pop-up' v2.13.5
-        tetap utuh)."""
-        from PySide6.QtTest import QTest
+        """Kontrol dua arah: jendela guard lewat → klik baris SAH
+        (seleksi jalan — guard tak menelan klik). v2.18.6: klik 1× tak
+        lagi membuka pop-up (permintaan user); pop-up dibuka klik-ganda
+        dan jalur itu juga bekerja pasca-guard."""
+        from PySide6.QtWidgets import QApplication
         view, _ = _make_view()
         app = _qapp()
         view._table.setCurrentIndex(view._table.model().index(0, 1))
         app.processEvents()
         view._popup.hide()
         app.processEvents()
-        QTest.qWait(50)
+        QTest_qWait(50)
         view._table._hf_hide = (view._table._hf_hide[0] - 10.0, None)
         _click_row(view, 1)
-        assert view._popup.isVisible(), "klik normal harus membuka pop-up"
+        # klik SAH: baris terseleksi (guard tak menelan)
+        assert view._table.currentIndex().row() == 1
+        assert not view._popup.isVisible(), (
+            "klik 1× tak membuka pop-up (v2.18.6)")
+        # klik-ganda pasca-guard → pop-up terbuka
+        view._table.double_clicked.emit(view._table._model.record(1))
+        QApplication.processEvents()
+        assert view._popup.isVisible(), (
+            "klik-ganda harus membuka pop-up pasca-guard")
         assert "RESTO 1" in view._popup._panel._title.text()
 
     def test_guard_hanya_setelah_menu_riil(self):
         """Tabel tanpa riwayat menu (_hf_hide awal -1e9) → klik pertama
-        langsung bekerja (guard tak aktif dari konstruksi)."""
+        langsung bekerja (guard tak aktif dari konstruksi). v2.18.6:
+        'bekerja' = baris terseleksi (pop-up dibuka lewat klik-ganda)."""
+        from PySide6.QtWidgets import QApplication
         view, _ = _make_view()
         assert view._table._hf_hide[0] < 0
         _click_row(view, 1)
+        assert view._table.currentIndex().row() == 1
+        view._table.double_clicked.emit(view._table._model.record(1))
+        QApplication.processEvents()
         assert view._popup.isVisible()
 
     def test_guard_tidak_mematikan_sel_centang(self):
@@ -388,4 +407,4 @@ class TestVersi:
         from waste_anomaly.utils import load_config
         from ui.shared import APP_VERSION
         cfg = load_config()
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.18.5"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.18.6"

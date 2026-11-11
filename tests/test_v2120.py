@@ -610,10 +610,12 @@ class TestV2120FollowUpView:
         _qapp().processEvents()
         fv.show(); fv.refresh(); _qapp().processEvents()
         m = fv._table.model()
-        # pilih baris pertama (kolom TOTAL — bukan ✓) → pop-up terbuka
+        # v2.18.6: pop-up dibuka lewat KLIK-GANDA (klik 1× tak lagi
+        # membuka pop-up — permintaan user); pilih + emit double_clicked.
         fv._table.selectionModel().setCurrentIndex(
             m.index(0, 1),
             QItemSelectionModel.SelectionFlag.SelectCurrent)
+        fv._table.double_clicked.emit(m.record(0))
         _qapp().processEvents()
         assert fv._popup.isVisible()
         # lepas centang baris yang sedang ditampilkan pop-up → refresh →

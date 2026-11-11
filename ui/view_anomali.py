@@ -370,10 +370,10 @@ class DetailPanel(Card):
     # di sini" dibuang (panel poped-out sejak v2.8.1 — "di sini" menipu:
     # detailnya bukan di panel ini melainkan di pop-up) → deskripsi jujur
     # isi pop-up + footer aksi yang selalu terlihat (gel-1 V1).
-    _PROMPT = ("Klik baris di tabel untuk membuka pop-up detail: ringkasan "
-               "angka kunci, sinyal terpicu, peta nilai per hari, dan "
-               "tombol tindak lanjut (drill fokus + masuk Follow Up) di "
-               "footer yang selalu terlihat.")
+    _PROMPT = ("Klik-ganda baris di tabel (atau tekan Enter) untuk membuka "
+               "pop-up detail: ringkasan angka kunci, sinyal terpicu, peta "
+               "nilai per hari, dan tombol tindak lanjut (drill fokus + "
+               "masuk Follow Up) di footer yang selalu terlihat.")
 
     def __init__(self, ctx: AppContext, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1400,10 +1400,15 @@ class DetailDialog(QDialog):
     """Pop-up detail baris anomali (v2.8.1) — pengganti panel inline.
 
     Non-modal: tabel tetap bisa diklik / di-sort / di-scroll saat pop-up
-    terbuka. Satu instance dipakai ulang — setiap klik baris memperbarui
-    isi pop-up yang sama (bukan menumpuk jendela baru). Tutup lewat X
-    kapan saja; klik baris lain membukanya kembali.
+    terbuka. Satu instance dipakai ulang — setiap klik-ganda baris (atau
+    Enter) memperbarui isi pop-up yang sama (bukan menumpuk jendela
+    baru). Tutup lewat X kapan saja; klik-ganda baris lain membukanya
+    kembali. Saat pop-up TERBUKA, klik-1×/panah cukup mengganti isinya.
 
+    v2.18.6 (permintaan user: "klik sekali aja pop up langsung muncul…
+    kadang bikin klik yang gak sengaja ketriger"): pop-up HANYA terbuka
+    lewat klik-ganda / Enter — klik 1× saat pop-up tertutup tak lagi
+    memicu apa pun (dulu v2.8.1: klik 1× langsung buka pop-up).
     v2.13.5: klik baris YANG SAMA (pop-up sempat ditutup X / refresh)
     membuka pop-up kembali — dulu currentRowChanged tak memicu karena
     index tak berubah. Guard idempoten: show_record dipanggil dua kali
@@ -1645,9 +1650,14 @@ class AnomaliView(FollowupTableMixin, QWidget):
         # TIDAK muncul lagi (keluhan user "klik 1× pop-up kadang tidak
         # muncul"). Guard idempoten DetailDialog membuat pemanggilan ganda
         # (currentRowChanged + clicked utk satu klik) tetap membangun sekali.
-        # v2.13.5: klik-2× → filter DIHAPUS (permintaan user) — sinyal
-        # double_clicked tabel ini TIDAK lagi punya subscriber.
+        # v2.18.6 (permintaan user: "klik sekali aja pop up langsung muncul
+        # … kadang bikin klik yang gak sengaja ketriger"): klik 1× kini
+        # hanya MEfollow pop-up yang SUDAH terbuka (guard isVisible di
+        # _on_selection) — membuka pop-up = KLIK-GANDA / Enter
+        # (_open_popup_row). v2.13.5: klik-2× → filter DIHAPUS (permintaan
+        # user) — double_clicked kini berlangganan _open_popup_row.
         self._table.row_clicked.connect(lambda *_: self._on_selection())
+        self._table.double_clicked.connect(self._open_popup_row)
         tcl.addWidget(self._table, 1)
         lay.addWidget(table_card, 1)
 

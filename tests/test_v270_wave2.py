@@ -123,9 +123,11 @@ class TestV270FullRecord:
     def test_panel_detail_menampilkan_sinyal_terpicu(self):
         """Inti V26-C1: 12 chip sinyal HIDUP (sebelumnya selalu abu-abu).
         v2.8.1: panel detail kini hidup di dalam pop-up (view._popup)."""
-        from PySide6.QtWidgets import QLabel
+        from PySide6.QtWidgets import QApplication, QLabel
         view, _ = _make_view()
-        view._table.setCurrentIndex(view._table.model().index(0, 0))
+        # v2.18.6: pop-up dibuka lewat klik-ganda (bukan setCurrentIndex)
+        view._table.double_clicked.emit(view._table._model.record(0))
+        QApplication.processEvents()
         # baris skor tertinggi memicu S1 + S6 → chip '✓' muncul
         panel = view._popup._panel
         texts = [l.text() for l in panel._content.findChildren(QLabel)]
@@ -354,9 +356,11 @@ class TestV270SectionResizedRefit:
 class TestV270DetailClear:
     def test_clear_mengembalikan_prompt_default(self):
         _qapp()
+        from PySide6.QtWidgets import QApplication
         from ui.view_anomali import DetailPanel
         view, _ = _make_view()
-        view._table.setCurrentIndex(view._table.model().index(0, 0))
+        view._table.double_clicked.emit(view._table._model.record(0))
+        QApplication.processEvents()
         panel = view._popup._panel
         assert "Skor" in panel._title.text()
         panel.clear()
@@ -366,9 +370,12 @@ class TestV270DetailClear:
 
     def test_refresh_table_membersihkan_panel_dan_seleksi(self):
         _qapp()
+        from PySide6.QtWidgets import QApplication
         from ui.view_anomali import DetailPanel
         view, _ = _make_view()
         view._table.setCurrentIndex(view._table.model().index(0, 0))
+        view._table.double_clicked.emit(view._table._model.record(0))
+        QApplication.processEvents()
         assert view._table.selected_record() is not None
         assert "Skor" in view._popup._panel._title.text()
         # filter berubah → render ulang → panel + seleksi tidak basi
@@ -387,8 +394,9 @@ class TestV270DoubleKlikCoalesce:
     def test_double_klik_tak_lagi_filter_satu_render_pun(self):
         """v2.13.5: klik-2× → filter DIHAPUS (permintaan user) — _on_double
         & guard coalesce _batch_filters ikut hilang bersama subjeknya.
-        Sinyal double_clicked tak punya subscriber: emit = 0 render, 0
-        filter (jalur fokus drill tinggal tombol eksplisit pop-up detail)."""
+        v2.18.6: double_clicked kini punya subscriber _open_popup_row
+        (pop-up via klik-ganda) — TETAP 0 render & 0 filter: membuka
+        pop-up bukan memfilter/meng-render tabel."""
         from ui.view_anomali import DetailPanel
         view, ctx = _make_view()
         calls: list[int] = []
@@ -407,13 +415,13 @@ class TestV270DoubleKlikCoalesce:
             view._table.double_clicked.emit(rec)
         finally:
             view._refresh_table = orig
-        # TANPA subscriber: tidak ada filter, tidak ada render — tabel
-        # & pop-up tak tersentuh (klik-2× kini murni klik-tunggal #2).
+        # v2.18.6: tanpa filter, tanpa render tabel — pop-up TERBUKA
+        # (subscriber _open_popup_row), panel memuat record tsb.
         assert calls == []
         assert not any(ctx.active_filters.values())
         assert view._table.model().rowCount() > 0
-        assert view._popup.isHidden()
-        assert view._popup._panel._title.text() == DetailPanel._PROMPT
+        assert view._popup.isVisible()
+        assert view._popup._panel._title.text() != DetailPanel._PROMPT
 
 
 class TestChipSinyalDariReasonsRiil:

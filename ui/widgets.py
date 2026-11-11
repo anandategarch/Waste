@@ -861,6 +861,19 @@ class DataTable(QTableView):
             self._copy_selection_to_clipboard()
             event.accept()
             return
+        # v2.18.6 — Enter/Return = padanan keyboard KLIK-GANDA: buka
+        # pop-up detail / drill (permintaan user: pop-up tak lagi terbuka
+        # oleh klik 1× — pengguna keyboard tetap punya jalur buka pop-up,
+        # pola a11y C7). Sel ✓ di-guard (Enter di sana = aksi centang,
+        # bukan pop-up).
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            idx = self.currentIndex()
+            if (idx.isValid() and self._relay_row_click_ok(idx)):
+                rec = self._model.record(idx.row())
+                if rec is not None:
+                    self.double_clicked.emit(rec)
+                event.accept()
+                return
         super().keyPressEvent(event)
 
     def _on_context_menu(self, pos: QPoint) -> None:
@@ -1132,16 +1145,20 @@ class DataTable(QTableView):
         return self._press_check
 
     def _on_double(self, index) -> None:
+        """Klik-2× baris → sinyal double_clicked (pop-up detail v2.18.6 /
+        drill banding) + relay row_clicked.
+
+        v2.18.6: sel ✓ di-guard — klik-2× sel centang = aksi centang
+        murni (dulu double_clicked tetap terpancar → pop-up/drill terbuka
+        di atas alur centang). v2.13.5: klik-2× TIDAK lagi dipakai utk
+        filter (dihapus dari view atas permintaan user) — diteruskan ke
+        row_clicked supaya pop-up yang SUDAH terbuka mengikuti baris pada
+        pasangan klik cepat (Qt hanya memancarkan clicked utk tekan#1;
+        tekan#2 = DblClick tanpa clicked — tanpa relay ini, klik-ulang-
+        cepat-baris-sama tidak membuka apa-apa)."""
         rec = self._model.record(index.row())
-        if rec is not None:
+        if rec is not None and self._relay_row_click_ok(index):
             self.double_clicked.emit(rec)
-        # v2.13.5: klik-2× TIDAK lagi dipakai utk filter (dihapus dari
-        # view atas permintaan user) — diteruskan ke row_clicked supaya
-        # pop-up detail TETAP terbuka pada pasangan klik cepat (Qt hanya
-        # memancarkan clicked utk tekan#1; tekan#2 = DblClick tanpa
-        # clicked — tanpa relay ini, klik-ulang-cepat-baris-sama tidak
-        # membuka apa-apa). Guard ✓ tetap: klik-2× sel centang = tetap
-        # murni aksi centang.
         if self._relay_row_click_ok(index):
             self.row_clicked.emit(index)
 

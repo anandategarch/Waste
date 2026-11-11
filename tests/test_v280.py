@@ -193,14 +193,23 @@ class TestTabelAnomaliPenuhDanPopup:
         finally:
             win.close()
 
-    def test_klik_baris_membuka_popup_detail(self):
-        """Klik (pilih) baris → DetailDialog muncul + judul berisi skor."""
+    def test_klik_ganda_membuka_popup_detail(self):
+        """v2.18.6: KLIK-GANDA baris → DetailDialog muncul + judul berisi
+        skor; memilih baris (klik 1×/setCurrentIndex) TIDAK lagi membuka
+        pop-up (permintaan user: klik tak sengaja sering memunculkannya)."""
         from PySide6.QtWidgets import QApplication
         view, _ = _make_view()
         QApplication.processEvents()
+        # klik 1× (pilih baris) — pop-up TETAP tertutup
         view._table.setCurrentIndex(view._table.model().index(0, 0))
+        QApplication.processEvents()
         popup = view._popup
-        assert popup.isVisible(), "pop-up detail harus terlihat saat baris diklik"
+        assert popup.isHidden(), (
+            "klik 1× tak sengaja tidak boleh membuka pop-up (v2.18.6)")
+        # klik-ganda → pop-up muncul
+        view._table.double_clicked.emit(view._table._model.record(0))
+        QApplication.processEvents()
+        assert popup.isVisible(), "pop-up harus terbuka via klik-ganda"
         assert not popup.isModal(), "pop-up harus non-modal (tabel tetap hidup)"
         assert "Skor" in popup._panel._title.text()
         # isi panel: chip sinyal ter-render
@@ -209,14 +218,16 @@ class TestTabelAnomaliPenuhDanPopup:
         assert any("S1" in t for t in texts), "chip 12 sinyal tidak ter-render"
 
     def test_popup_satu_instance_dipakai_ulang(self):
-        """Klik baris lain → pop-up yang SAMA diperbarui (tidak menumpuk)."""
+        """Pop-up TERBUKA → pilih baris lain → pop-up yang SAMA diperbarui
+        (tidak menumpuk; konten mengikuti navigasi saat pop-up terbuka)."""
         from PySide6.QtWidgets import QApplication
         view, _ = _make_view()
         QApplication.processEvents()
-        view._table.setCurrentIndex(view._table.model().index(0, 0))
+        view._table.double_clicked.emit(view._table._model.record(0))
         first = view._popup
         title1 = first._panel._title.text()
         view._table.setCurrentIndex(view._table.model().index(1, 0))
+        QApplication.processEvents()
         assert view._popup is first, "instance pop-up harus dipakai ulang"
         assert view._popup._panel._title.text() != title1, (
             "isi pop-up tidak diperbarui saat baris lain diklik")
@@ -228,7 +239,8 @@ class TestTabelAnomaliPenuhDanPopup:
         from ui.view_anomali import DetailPanel
         view, _ = _make_view()
         QApplication.processEvents()
-        view._table.setCurrentIndex(view._table.model().index(0, 0))
+        view._table.double_clicked.emit(view._table._model.record(0))
+        QApplication.processEvents()
         assert view._popup.isVisible()
         view._refresh_table()
         assert view._popup.isHidden(), "pop-up harus tertutup saat refresh"
@@ -237,9 +249,9 @@ class TestTabelAnomaliPenuhDanPopup:
     def test_double_klik_tak_lagi_filter(self):
         """v2.13.5 (permintaan user "hilangkan yang klik 2x"): klik-2×
         baris TIDAK lagi memasang filter cabang+item — _on_double dihapus
-        dari AnomaliView. Sinyal double_clicked tabel tak punya subscriber:
-        emit manual = tanpa efek pada state & render (jalur fokus drill
-        tinggal tombol eksplisit di pop-up detail)."""
+        dari AnomaliView. v2.18.6: double_clicked kini punya subscriber
+        (_open_popup_row — pop-up dibuka lewat klik-ganda), TETAP bukan
+        filter: state filter & jumlah baris tak tersentuh."""
         view, ctx = _make_view()
         assert not hasattr(view, "_on_double"), (
             "_on_double harus dihapus bersama perilaku filter klik-2×")
@@ -251,21 +263,32 @@ class TestTabelAnomaliPenuhDanPopup:
         assert view._table.model().rowCount() == n_before
 
     def test_popup_muncul_lagi_baris_sama(self):
-        """v2.13.5: pop-up ditutup → klik baris YANG SAMA → pop-up muncul
-        lagi (dulu currentRowChanged diam karena index tak berubah —
-        akar keluhan user "klik 1× pop-up kadang tidak muncul")."""
+        """v2.13.5 → v2.18.6 (permintaan user: "klik sekali aja pop up
+        langsung muncul… kadang bikin klik yang gak sengaja ketriger"):
+        klik 1× (row_clicked) saat pop-up TERTUTUP = TANPA efek; pop-up
+        dibuka lagi lewat KLIK-GANDA (double_clicked) — termasuk pada
+        baris yang sama."""
         from PySide6.QtWidgets import QApplication
         view, _ = _make_view()
         QApplication.processEvents()
-        view._table.setCurrentIndex(view._table.model().index(0, 0))
+        rec = view._table._model.record(0)
+        view._table.double_clicked.emit(rec)
+        QApplication.processEvents()
         assert view._popup.isVisible()
         view._popup.close()
         QApplication.processEvents()
         assert view._popup.isHidden()
-        # klik baris sama: index tak berubah → hanya jalur row_clicked
+        # klik tunggal baris sama (index tak berubah → hanya jalur
+        # row_clicked) — pop-up TETAP TERTUTUP (perilaku baru).
         view._table.row_clicked.emit(view._table.model().index(0, 0))
+        QApplication.processEvents()
+        assert view._popup.isHidden(), (
+            "klik 1× tak sengaja tidak boleh membuka pop-up (v2.18.6)")
+        # klik-ganda baris sama → pop-up muncul lagi.
+        view._table.double_clicked.emit(rec)
+        QApplication.processEvents()
         assert view._popup.isVisible(), (
-            "klik baris sama harus membuka pop-up lagi")
+            "klik-ganda harus membuka pop-up lagi")
 
     def test_hint_baru_menyebut_pop_up(self):
         """Hint menggambarkan perilaku baru: klik baris = pop-up detail."""

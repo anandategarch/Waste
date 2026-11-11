@@ -21,6 +21,10 @@ REM v2.18.5 - Banding Periode: hanya cabang yang ada di KEDUA bulan
 REM (resto baru/tutup disembunyikan); sort Naik = besar dulu;
 REM filter: klik-ganda nilai = pilih hanya itu; tab Scorecard
 REM Cabang dihapus (permintaan user).
+REM v2.18.6 - Pop-up detail hanya terbuka via KLIK-GANDA/Enter
+REM (klik tunggal tak sengaja tak lagi memunculkan pop-up);
+REM pop-up banding (resto/item) kini punya kolom centang
+REM Follow Up.
 
 if exist ".venv\Scripts\pythonw.exe" (
     start "" ".venv\Scripts\pythonw.exe" ui_app.pyw

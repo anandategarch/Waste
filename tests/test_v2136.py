@@ -166,15 +166,15 @@ class TestBannerBat:
 class TestVersi:
     def test_app_version(self):
         from ui.shared import APP_VERSION
-        assert APP_VERSION == "2.18.5"
+        assert APP_VERSION == "2.18.6"
 
     def test_engine_version_sinkron(self):
         from waste_anomaly import __version__
         cfg = json.loads(
             (REPO / "waste_anomaly" / "config.json").read_text(
                 encoding="utf-8"))
-        assert __version__ == "2.18.5"
-        assert cfg.get("version") == "2.18.5"
+        assert __version__ == "2.18.6"
+        assert cfg.get("version") == "2.18.6"
 
     def test_docstring_init_tidak_basi(self):
         src = (REPO / "waste_anomaly" / "__init__.py").read_text(
