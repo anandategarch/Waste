@@ -364,9 +364,14 @@ class TestKolomPctToBom:
         assert not t.isColumnHidden(pct), (
             "% to BOM harus tetap tampak di viewport sempit")
         j = list(dfm.columns).index("JENIS")
-        k = list(dfm.columns).index("KETERANGAN")
-        assert t.isColumnHidden(j), "JENIS harus narrow-hidden"
-        assert t.isColumnHidden(k), "KETERANGAN harus narrow-hidden"
+        # v2.18.7: JENIS keluar dari narrow_hide (permintaan user "kasih
+        # kolom tambahan itu jenis nya waste, susut atau trial" — jenis
+        # wajib terbaca di viewport sempit). Kolom skor juga keluar dari
+        # tabel — lebar bekas kolom skor membuat KETERANGAN umumnya MUAT
+        # di 740px kini (narrow_hide tetap terpasang utk viewport yang
+        # lebih sempit lagi; jaminan yang dipin: % to BOM + JENIS tampak).
+        assert not t.isColumnHidden(j), "JENIS kini selalu tampil (v2.18.7)"
+        assert "KETERANGAN" in (t._narrow_hide or [])
         # LANTAI HEADER (anti-terpotong): tiap kolom tampak ≥ lebar
         # teks judulnya (+26 padding, +20 funnel bila ber-funnel).
         fm = t.fontMetrics()

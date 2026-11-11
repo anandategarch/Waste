@@ -27,9 +27,7 @@ from .shared import LOG_RUN_LINES, _apply_filters
 from waste_anomaly.followup import (
     fingerprint_series,
     load_followup_keys,
-    load_resolved,
     save_followup_keys,
-    save_resolved,
     select_followup_rows,
 )
 from waste_anomaly.period_history import month_sort_key
@@ -113,12 +111,11 @@ class AppContext(QObject):
             if self._followup_path is not None else [])
         self._fp_series: pd.Series | None = None
         self._fp_version: int = -1
-        # v2.13.3 (⑯): status tindak lanjut hasil re-import sheet terisi
-        # ({fp: {PIC/KATEGORI/PENYEBAB/ts}}) — samping followup.json.
-        self.followup_resolved: dict = (
-            load_resolved(self._followup_path.with_name(
-                "followup_resolved.json"))
-            if self._followup_path is not None else {})
+        # v2.18.7: fitur "Impor Hasil TL" (followup_resolved.json +
+        # apply_followup_resolved) DIHAPUS atas permintaan user
+        # ("import ITL itu hapus aja belum kepakai") — penggantinya:
+        # impor file ekspor → auto-centang (read_followup_export_fps +
+        # add_followup_many), tanpa state tambahan.
 
     # ------------------------------------------------------------
     # DATA
@@ -311,30 +308,6 @@ class AppContext(QObject):
     def followup_set(self) -> set[str]:
         """Set sidik jari tercentang (lookup O(1))."""
         return set(self.followup_keys)
-
-    def apply_followup_resolved(self, resolved: dict) -> int:
-        """⑯ v2.13.3: gabungkan hasil tindak lanjut re-import
-        ({fp: info}) + persist + SATU broadcast followup_changed.
-
-        Return jumlah sidik jari yang benar-benar baru/diperbarui
-        (0 = tak ada perubahan — tanpa broadcast sia-sia).
-        """
-        changed = 0
-        for fp, info in (resolved or {}).items():
-            fp = str(fp)
-            if not fp or fp == "nan":
-                continue
-            cur = self.followup_resolved.get(fp)
-            if cur != info:
-                self.followup_resolved[fp] = info
-                changed += 1
-        if changed and self._followup_path is not None:
-            save_resolved(self.followup_resolved,
-                          self._followup_path.with_name(
-                              "followup_resolved.json"))
-        if changed:
-            self.followup_changed.emit()
-        return changed
 
     def toggle_followup(self, fp: str, checked: bool) -> bool:
         """Tambah/hapus SATU baris (centang/lepas) + broadcast + simpan.

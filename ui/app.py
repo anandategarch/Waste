@@ -67,13 +67,15 @@ def _build_help_html(config: dict | None = None) -> str:
 
     v2.13.12 (gel-3): (D8) seksi baru "Tab Pipeline (tempat semua
     dimulai)" — tab paling operasional dulunya TAK TERDOKUMENTASIKAN
-    (threshold/pratinjau/cancel/log); (D9) fitur 📥 Impor Hasil TL
-    (v2.13.3) kini terdokumentasi; (D19) 10 token versi (v2.9.0..
+    (threshold/pratinjau/cancel/log); (D19) 10 token versi (v2.9.0..
     v2.13.9) dibersihkan jadi teks fitur-deskriptif — Bantuan = panduan
     CARA PAKAI, bukan changelog mini; (C18) angka ambang dari config
     aktif (bukan hardcode). _HELP_HTML = snapshot import-time
     load_config() — kompatibilitas import lama; ctx aplikasi juga
     memuat config sekali di startup (angka startup == angka bantuan).
+    v2.18.7: bullet 📥 Impor File Ekspor (pengganti "Impor Hasil TL"
+    yang dihapus — memulihkan daftar dari file ekspor, auto-centang)
+    + combo "Tampilkan:" tab Anomali + kolom JENIS selalu tampil.
     """
     # v2.13.12 (gel-3 C18): angka ambang dari config AKTIF (fallback
     # default engine bila korup string/None — models._th), ×100 utk
@@ -135,7 +137,8 @@ potensi, jumlah cabang/item, dst. — hasil siap di tab lain.</li>
 </ul>
 <h3>Tab Anomali (pemburu anomali)</h3>
 <ul>
-<li>Tabel anomali ter-ranking (skor tertinggi di atas; klik header kolom untuk sort).</li>
+<li>Tabel anomali ter-ranking (skor tertinggi di atas; klik header kolom untuk sort). Kolom <b>JENIS</b> menampilkan jenis catatan tiap baris — <b>WASTE / SUSUT / TRIAL</b> (selalu tampil); skor anomali bukan lagi kolom tabel (tetap jadi dasar ranking, filter "Skor ≥", dan tampil di pop-up detail).</li>
+<li>Combo <b>"Tampilkan:"</b> — <b>Semua</b> (bawaan) atau <b>✓ Sudah masuk Follow Up</b>: menyaring tabel ke baris yang sudah terkumpul di daftar Follow Up (filter tampilan tabel ini saja; saat aktif, lepas centang ✓ = baris langsung hilang dari tabel).</li>
 <li><b>Klik-ganda baris (atau Enter)</b> → <b>pop-up detail ringkas</b>: <b>Ringkasan</b> (total sebulan, puncak sehari + tanggalnya, vs penjualan, vs cabang lain, vs bulan lalu, peringkat) → <b>sinyal yang terpicu saja</b> (chip merah) → alasan → <b>peta nilai per hari 1–31</b> → tombol tindak lanjut. Seluruh kolom data tetap tersedia lewat tombol <b>▸ Tampilkan semua kolom data</b> di bawah.</li>
 <li>Tombol drill-down di pop-up: fokus cabang / item / alasan dari baris terpilih; tombol <b>☑ Masuk Follow Up</b> mengumpulkan baris ke daftar tindak lanjut.</li>
 <li><b>Klik 1× TIDAK membuka apa pun</b> — pop-up detail hanya terbuka lewat <b>klik-ganda</b> atau <b>Enter</b> (klik tak sengaja tak lagi memunculkan pop-up). Saat pop-up sudah terbuka, klik/panah cukup mengganti isinya; klik-ganda TIDAK memfilter — fokus cabang/item hanya lewat tombol di pop-up.</li>
@@ -156,7 +159,7 @@ potensi, jumlah cabang/item, dst. — hasil siap di tab lain.</li>
 <li><b>Hari mencurigakan diberi warna</b>: 🔴 merah = hari tersangka (puncak) · 🟠 amber = ≥ 2× rata-rata hari aktif.</li>
 <li>Daftar <b>menetap terhadap filter</b> dan <b>tersimpan otomatis</b> (followup.json) — aman walau aplikasi ditutup; baris yang tak ada lagi di data baru otomatis dipangkas.</li>
 <li><b>💾 Ekspor Excel</b>: format rekap + kolom kosong PIC/KATEGORI/PENYEBAB utk diisi petugas (konvensi REKAP MENTAH) — hari mencurigakan ikut berwarna.</li>
-<li><b>📥 Impor Hasil TL</b>: baca kembali file ekspor yang <b>sudah diisi petugas</b> (kolom <b>PIC / KATEGORI / PENYEBAB</b> di sheet FOLLOW UP) → baris yang cocok diberi status <b>Selesai</b> + PIC-nya tampil (kolom STATUS TL &amp; PIC di daftar). Kecocokan memakai kolom kunci + nilai hari 1–31 — <b>aman walau sheet di-sort / di-filter / urutan barisnya diubah di Excel</b>. Hasil tersimpan otomatis (followup_resolved.json); baris terisi yang belum ada di daftar saat ini <b>tetap disimpan</b> — statusnya aktif otomatis bila barisnya dicentang lagi nanti.</li>
+<li><b>📥 Impor File Ekspor</b>: baca kembali file hasil <b>💾 Ekspor Excel</b> (format sama persis — pilih filenya apa adanya, boleh walau sheet di-sort / di-filter / urutan barisnya diubah di Excel) → <b>semua barisnya otomatis di-centang kembali</b> ke daftar Follow Up. Cocok utk melanjutkan daftar kemarin atau memindahkan daftar antar komputer; baris yang nilainya tak ada lagi di data yang sedang dimuat tak ditampilkan (dipangkas otomatis saat data berganti). Kecocokan memakai kolom kunci + nilai hari 1–31.</li>
 </ul>
 <h3>Filter (funnel di judul kolom tabel)</h3>
 <ul>

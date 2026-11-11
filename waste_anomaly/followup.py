@@ -27,6 +27,13 @@ Modul murni (tanpa Qt) — dipakai ui/state.py + view:
 - ``export_followup_xlsx`` — sheet "FOLLOW UP": kolom format rekap +
   3 kolom serah-terima kosong (PIC/KATEGORI/PENYEBAB — diisi petugas,
   konvensi REKAP MENTAH); hari mencurigakan diberi fill merah/amber.
+- ``read_followup_export_fps`` — v2.18.7 (permintaan user: "misal aku
+  export hasil follow up besok aku bisa import lagi atas hasil export
+  tersebut dengan format yang sama dan otomatis centang"): baca kembali
+  file ekspor APA ADANYA → daftar sidik jari barisnya (utk auto-centang
+  via ctx.add_followup_many). Pengganti fitur "Impor Hasil TL"
+  (import_followup_workbook + resolved.json) yang dihapus v2.18.7
+  atas permintaan user ("import ITL itu hapus aja belum kepakai").
 """
 from __future__ import annotations
 
@@ -286,65 +293,26 @@ def save_followup_keys(keys: list[str],
 
 
 # ============================================================
-# HASIL TINDAK LANJUT (re-import sheet terisi) — v2.13.3 ⑯
+# IMPOR FILE EKSPOR (auto-centang) — v2.18.7
 # ============================================================
 
-def resolved_path() -> Path:
-    """Jalur followup_resolved.json (samping followup.json)."""
-    return followup_path().with_name("followup_resolved.json")
+def read_followup_export_fps(path: str | os.PathLike) -> dict:
+    """Baca workbook hasil 💾 Ekspor (sheet 'FOLLOW UP', format sama
+    persis) → sidik jari per baris utk CENTANG OTOMATIS kembali.
 
+    → ``{"error": pesan}`` ATAU ``{"fps": [fp, ...], "n_rows": int,
+    "file": nama}`` (fps unik, urutan baris file dipertahankan).
 
-def load_resolved(path: Path | str | None = None) -> dict:
-    """Muat status tindak lanjut {fp: {PIC, KATEGORI, PENYEBAB..., ts}}.
-
-    File absen → {}. File korup → backup .bad + {} (pola load_followup_keys).
-    """
-    p = Path(path) if path else resolved_path()
-    if not p.exists():
-        return {}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        rows = data.get("rows", {})
-        return rows if isinstance(rows, dict) else {}
-    except Exception:  # noqa: BLE001 — korup dibackup, bukan crash
-        _LOG.warning("followup_resolved.json korup → backup .bad")
-        _backup_corrupt_file(p)
-        return {}
-
-
-def save_resolved(resolved: dict,
-                  path: Path | str | None = None) -> bool:
-    """Simpan status tindak lanjut (atomic — pola save_followup_keys)."""
-    p = Path(path) if path else resolved_path()
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"version": 1, "rows": dict(resolved)},
-                      f, ensure_ascii=False, indent=0)
-        tmp.replace(p)
-        return True
-    except Exception:  # noqa: BLE001 — gagal simpan ≠ crash app
-        _LOG.warning("gagal simpan followup_resolved.json")
-        try:
-            if tmp.exists():
-                tmp.unlink()
-        except OSError:
-            pass
-        return False
-
-
-def import_followup_workbook(path: str | os.PathLike,
-                             config: dict | None = None) -> dict:
-    """Baca workbook HASIL tindak lanjut (sheet 'FOLLOW UP' format ekspor)
-    → dict {"error": pesan} ATAU {"resolved": {fp: info}, "n_rows": int,
-    "n_filled": int, "file": nama}.
-
-    Baris dianggap TERISI bila minimal satu kolom serah-terima (PIC /
-    KATEGORI / PENYEBAB TERJADINYA WASTE) non-kosong. Kecocokan baris =
-    sidik jari nilai (fingerprint_series: 6 kolom kunci + nilai hari
-    non-nol — kolom hari int/float Excel dinormalisasi ke string nama).
-    Kolom '✓' hasil ekspor diabaikan. Defensif: gagal baca → "error"
-    (tidak pernah raise).
+    Permintaan user v2.18.7: "misal aku export hasil follow up besok
+    aku bisa import lagi atas hasil export tersebut dengan format yang
+    sama dan otomatis centang". Kecocokan = sidik jari nilai
+    (fingerprint_series: 6 kolom kunci + nilai hari non-nol) — baris
+    yang nilainya masih sama di dataset saat ini otomatis tercentang;
+    kolom serah-terima (PIC/KATEGORI/PENYEBAB) yang kebetulan terisi
+    diabaikan (murni identitas baris). Kolom '✓' + kolom tambahan
+    hasil edit Excel diabaikan. Defensif: gagal baca → "error"
+    (tidak pernah raise — pola import_followup_workbook v2.13.3 yang
+    digantikannya).
     """
     p = Path(path)
     base = {"file": p.name}
@@ -354,13 +322,12 @@ def import_followup_workbook(path: str | os.PathLike,
         df = pd.read_excel(p, sheet_name="FOLLOW UP")
         if df is None or df.empty:
             return {**base, "error": "Sheet 'FOLLOW UP' kosong / tidak ada "
-                                     "di file ini (pakai file hasil ekspor "
-                                     "tab Follow Up)."}
+                                     "di file ini (pakai file hasil 💾 "
+                                     "Ekspor Excel tab Follow Up)."}
         # normalisasi nama kolom (int/float 1..31 → '1'..'31'; strip teks).
-        # v2.18.0 audit (L-4): header hari numerik terbaca float ("1.0")
-        # dulu hanya di-str() — "1.0" DITOLAK day_cols() → SEMUA sidik
-        # jari beda dgn aplikasi → hasil tindak lanjut tak pernah match.
-        # Mirror _normalize_columns loader: float integral → int → str.
+        # Mirror _normalize_columns loader + audit L-4 v2.18.0: header hari
+        # numerik terbaca float ("1.0") — tanpa int() DITOLAK day_cols()
+        # → sidik jari tak pernah cocok.
         _ren = {}
         for c in df.columns:
             cn = c
@@ -377,30 +344,18 @@ def import_followup_workbook(path: str | os.PathLike,
             return {**base, "error": f"Kolom kunci hilang: {missing} — pakai "
                                      "file hasil ekspor tab Follow Up "
                                      "(jangan ubah kolomnya)."}
-        # buang kolom centang ekspor (tak ikut sidik jari)
+        # kolom lain hasil edit Excel (✓, PIC, kolom sisipan) tak ikut
+        # sidik jari — cukup dibuang kolom centang ekspor.
         df = df.drop(columns=[c for c in (CHECK_COL,) if c in df.columns])
         fps = fingerprint_series(df)
-        resolved: dict = {}
-        n_filled = 0
-        from datetime import datetime as _dt
-        ts = _dt.now().isoformat(timespec="seconds")  # noqa: DTZ005 — konvensi timestamp naif (pola state.py)
-        for i in range(len(df)):
-            fp = str(fps.iloc[i])
-            if not fp or fp == "nan":
-                continue
-            info = {}
-            for col in HANDOVER_COLS:
-                if col in df.columns:
-                    v = df.iat[i, df.columns.get_loc(col)]
-                    text = "" if pd.isna(v) else str(v).strip()
-                    if text:
-                        info[col] = text
-            if not info:
-                continue
-            n_filled += 1
-            resolved[fp] = {**info, "ts": ts, "file": p.name}
-        return {**base, "resolved": resolved, "n_rows": len(df),
-                "n_filled": n_filled}
+        keys: list[str] = []
+        seen: set[str] = set()
+        for v in fps.tolist():
+            s = str(v)
+            if s and s != "nan" and s not in seen:
+                seen.add(s)
+                keys.append(s)
+        return {**base, "fps": keys, "n_rows": len(df)}
     except Exception as e:  # noqa: BLE001 — defensif (sheet salah dsb.)
         return {**base, "error": f"{type(e).__name__}: {e}"}
 

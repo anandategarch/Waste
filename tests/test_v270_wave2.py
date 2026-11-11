@@ -101,8 +101,14 @@ class TestV270FullRecord:
         cols = list(dfm.columns)
         assert view._table.isColumnHidden(cols.index("_s1"))
         assert view._table.isColumnHidden(cols.index("ANOMALY REASONS"))
-        assert not view._table.isColumnHidden(cols.index("ANOMALY SCORE"))
+        # v2.18.7: ANOMALY SCORE keluar dari TABLE_COLS (permintaan user
+        # "kolom anomali score hapus aja") — kini disembunyikan seperti
+        # kolom non-tabel lain (skor tetap di df: ranking + pop-up).
+        assert view._table.isColumnHidden(cols.index("ANOMALY SCORE"))
         assert not view._table.isColumnHidden(cols.index("TOTAL"))
+        # v2.18.7: JENIS selalu tampak (permintaan user "kasih kolom
+        # jenis nya waste, susut atau trial")
+        assert not view._table.isColumnHidden(cols.index("JENIS"))
 
     def test_sort_desc_tetap_berlaku(self):
         view, _ = _make_view()

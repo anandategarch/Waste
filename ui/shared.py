@@ -43,7 +43,7 @@ def bundle_res_dir() -> Path:
     return _bundle_dir()
 
 
-APP_VERSION = "2.18.6"
+APP_VERSION = "2.18.7"
 APP_TITLE = "Waste Anomaly Detection"
 
 # v2.13.15 (gel-6 D11) — SATU AMBANG BARIS LOG RUN untuk SEMUA penampang

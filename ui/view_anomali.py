@@ -36,6 +36,19 @@ QScrollArea (audit V1: CTA dulunya di bawah lipatan gulir pop-up);
 hook _reset_view_controls + reset combo kategori PERUBAHAN di
 _on_clear_filters/refresh (audit A1/A2 — "Hapus SEMUA filter" kini
 benar-benar SEMUA, dataset baru tak mewarisi kategori run lama).
+
+v2.18.7 (3 permintaan user):
+- "kasih kolom tambahan itu jenis nya waste, susut atau trial" —
+  kolom JENIS kini SELALU tampil (keluar dari narrow_hide; pola tab
+  Hari Mencurigakan v2.12.3). "kolom anomali score hapus aja" —
+  ANOMALY SCORE keluar dari TABLE_COLS (skor tetap menjadi dasar
+  RANKING tabel + filter "Skor ≥" + tampil di pop-up detail).
+- "aku bisa pilih tampilkan yang sudah masuk follow up atau tampilkan
+  semua" — combo "Tampilkan:" (Semua / ✓ Sudah masuk Follow Up):
+  filter LOKAL view (pola combo Kategori PERUBAHAN — KPI & tab lain
+  tak tersentuh). Saat aktif, lepas centang ✓ = baris langsung
+  hilang dari tabel (hook mixin _followup_filter_active →
+  _on_followup_changed me-render ulang, bukan segarkan ✓ in-place).
 """
 from __future__ import annotations
 
@@ -104,8 +117,13 @@ from .widgets import (
 # v2.8.1: 7 → 8 — "% to BOM" (waste vs penjualan kuantiti) ditambahkan
 # setelah TOTAL sesuai permintaan user: rasio per-ranking terlihat langsung
 # di tabel. Nilai 'Cek' = item tanpa data penjualan (tak bisa dihitung).
+# v2.18.7 (2 permintaan user): "ANOMALY SCORE" DIHAPUS dari tabel
+# (skor tetap jadi dasar ranking/sort + filter "Skor ≥" + pop-up detail);
+# JENIS (WASTE/SUSUT/TRIAL) kini selalu tampil — dulu narrow_hide di
+# viewport sempit sehingga tak terlihat (keluhan user "kasih kolom
+# jenisnya").
 TABLE_COLS = [
-    "ANOMALY SCORE", "ANOMALY STATUS", "PROFIL", "NAMA RESTO",
+    "ANOMALY STATUS", "PROFIL", "NAMA RESTO",
     "NAMA BARANG", "TOTAL", "% to BOM", "JENIS", "KETERANGAN",
     # v2.10.2: muncul hanya bila pembanding bulan lalu tersedia (kolom
     # ditambahkan ADDITIF oleh change_vs_history — tanpa pembanding tabel
@@ -114,8 +132,10 @@ TABLE_COLS = [
 ]
 # v2.17.0 rombak P0: TOTAL + % to BOM ditarik ke depan (kanan NAMA BARANG)
 # — sebelumnya di posisi 8-9 setelah 7 kolom identitas. Sinyal magnitudo
-# wajib terbaca sebelum JENIS/KETERANGAN (yg narrow_hide di viewport sempit).
-# % to BOM tetap langsung setelah TOTAL (kontrak test_v280 index+1).
+# wajib terbaca sebelum JENIS/KETERANGAN. % to BOM tetap langsung setelah
+# TOTAL (kontrak test_v280 index+1).
+# v2.18.7: JENIS tetap di posisi ini tapi kini SELALU tampak (bukan
+# narrow_hide) — jenis catatan (WASTE/SUSUT/TRIAL) dibaca langsung.
 
 # v2.12.3: funnel filter di header tabel (permintaan user "daripada aku
 # harus pakai slicer"). Kolom → kunci filter ctx — STATE TETAP SATU di
@@ -1536,6 +1556,26 @@ class AnomaliView(FollowupTableMixin, QWidget):
             "Skor komposit maksimum = 19 (S1..S12).")
         self._spin_score.valueChanged.connect(self._on_score_changed)
         cl.addWidget(self._spin_score)
+        # v2.18.7 (permintaan user: "aku bisa pilih tampilkan yang sudah
+        # masuk follow up atau tampilkan semua") — combo Tampilkan: filter
+        # LOKAL view (pola combo Kategori PERUBAHAN): hanya menyaring
+        # tabel ini; KPI, daftar Follow Up & ekspor tak tersentuh.
+        lbl_fu = WLabel("Tampilkan:", ctrl)
+        lbl_fu.setToolTip(
+            "Saring tabel anomali menurut status follow-up:\n"
+            "• Semua = tampilkan semua anomali (bawaan);\n"
+            "• ✓ Sudah masuk Follow Up = hanya baris yang sudah\n"
+            "  terkumpul di daftar Follow Up (tercentang ✓).\n"
+            "Filter tampilan tabel ini saja — KPI, daftar Follow Up\n"
+            "dan ekspor tidak terpengaruh.")
+        cl.addWidget(lbl_fu)
+        self._cb_followup = QComboBox(ctrl)
+        self._cb_followup.addItem("Semua", None)
+        self._cb_followup.addItem("✓ Sudah masuk Follow Up", "fu")
+        self._cb_followup.setToolTip(lbl_fu.toolTip())
+        self._cb_followup.currentIndexChanged.connect(
+            lambda _i: self._on_fu_filter())
+        cl.addWidget(self._cb_followup)
         # v2.10.2 — filter kuadran perubahan vs bulan lalu (permintaan user:
         # "analisa dengan perubahan yang tinggi atau rendah"). Filter LOKAL
         # view (bukan state) — kolom PERUBAHAN hanya ada setelah enrich.
@@ -1580,8 +1620,8 @@ class AnomaliView(FollowupTableMixin, QWidget):
         self._btn_clear = QPushButton("✕ Hapus Filter", ctrl)
         self._btn_clear.setToolTip(
             "Hapus SEMUA filter yang sedang aktif — funnel kolom (global "
-            "maupun tampilan) dan ambang skor — kembali ke tampilan "
-            "anomali penuh.")
+            "maupun tampilan), ambang skor, dan combo Tampilkan:/Perubahan: "
+            "— kembali ke tampilan anomali penuh.")
         self._btn_clear.clicked.connect(self._on_clear_filters)
         cl.addWidget(self._btn_clear)
         lay.addWidget(ctrl)
@@ -1783,6 +1823,11 @@ class AnomaliView(FollowupTableMixin, QWidget):
         (Pola _on_score_changed — aksi kontrol = refresh langsung.)"""
         self._refresh_table()
 
+    def _on_fu_filter(self) -> None:
+        """v2.18.7 — combo "Tampilkan:" (Semua / ✓ Sudah masuk Follow Up)
+        → saring tabel (lokal view, tanpa state — pola _on_change_filter)."""
+        self._refresh_table()
+
     def _reset_view_controls(self) -> None:
         """v2.13.10 (gel-1 A1+A2) — override hook mixin: reset combo
         'Kategori PERUBAHAN' ke 'Semua' (index 0).
@@ -1794,10 +1839,16 @@ class AnomaliView(FollowupTableMixin, QWidget):
         blockSignals: index berganti memicu currentIndexChanged →
         _on_change_filter → render — pemanggil (_on_clear_filters /
         refresh) sudah me-render SETELAH ini; tanpa blok = render ganda
-        (pola _cb_mode HariView.refresh)."""
+        (pola _cb_mode HariView.refresh).
+        v2.18.7: combo "Tampilkan:" (follow-up) ikut direset — dua combo
+        filter lokal kini diperlakukan SAMA (tooltip Hapus Filter menjanjikan
+        SEMUA; dataset baru tak mewarisi pilihan run lama)."""
         self._cb_change.blockSignals(True)
         self._cb_change.setCurrentIndex(0)
         self._cb_change.blockSignals(False)
+        self._cb_followup.blockSignals(True)
+        self._cb_followup.setCurrentIndex(0)
+        self._cb_followup.blockSignals(False)
 
     def on_shown(self) -> None:
         """Kontrak lazy-render: view dibuka setelah data baru / filter basi."""
@@ -1822,6 +1873,14 @@ class AnomaliView(FollowupTableMixin, QWidget):
 
     def _on_score_changed(self, value: int) -> None:
         self._ctx.set_score_min(value)
+
+    def _followup_filter_active(self) -> bool:
+        """v2.18.7 — override hook mixin (pola _reset_view_controls):
+        combo "Tampilkan:" = ✓ Sudah masuk Follow Up → keanggotaan
+        follow-up = hasil filter tabel → _on_followup_changed mixin
+        me-render ulang (lepas centang ✓ = baris LANGSUNG hilang),
+        bukan sekadar menyegarkan kolom ✓ in-place."""
+        return self._cb_followup.currentData() == "fu"
 
     def _refresh_table(self) -> None:
         """v2.8.3 — titik tunggal SEMUA jalur render tabel (filter/search/
@@ -1917,12 +1976,13 @@ class AnomaliView(FollowupTableMixin, QWidget):
         # terpilih / double-klik tetap membawa SEMUA kolom (12 sinyal,
         # ANOMALY REASONS, peer, MAX, ...) ke pop-up detail + drill-down.
         # v2.8.1: 8 kolom + sidebar membuat lantai header melebihi viewport
-        # laptop (1024) — JENIS & KETERANGAN masuk narrow_hide (disembunyikan
-        # responsif saat sempit, muncul lagi saat melebar; alasan tetap ada
-        # di pop-up detail) supaya kolom inti + % to BOM tetap muat TANPA
-        # scrollbar horizontal.
-        # v2.10.2: kolom perubahan ikut narrow_hide — 11 kolom di laptop
-        # sempit; kolom PERUBAHAN % tetap prioritas tampak.
+        # laptop (1024) — JENIS & KETERANGAN dulu masuk narrow_hide
+        # (disembunyikan responsif saat sempit, muncul lagi saat melebar;
+        # alasan tetap ada di pop-up detail) supaya kolom inti + % to BOM
+        # tetap muat TANPA scrollbar horizontal.
+        # v2.18.7: JENIS keluar dari narrow_hide (permintaan user — kolom
+        # jenis waste/susut/trial wajib terbaca; pola tab Hari v2.12.3);
+        # skor bukan lagi kolom tabel (dihapus dari TABLE_COLS).
         # v2.12.0: df tampilan = SALINAN + ✓ + __FP (kontrak 'konsumen
         # hanya membaca' utk objek LRU/enriched tetap utuh; objek display
         # di-memo per objek df → cache fit DataTable tetap kena).
@@ -1931,8 +1991,16 @@ class AnomaliView(FollowupTableMixin, QWidget):
         # (memo per state; ✓ disegarkan tiap pemakaian). 'Perubahan:' combo
         # sudah di-apply di atas (df), funnel lokal di bawah (disp).
         shown = self._mask_local(disp)
+        # v2.18.7 — combo "Tampilkan:" ✓ Sudah masuk Follow Up: hanya
+        # baris ber-✓ (filter LOKAL view — KPI/daftar Follow Up tak
+        # tersentuh). .copy() eksplisit: hasil slice membawa _is_copy —
+        # mixin _on_followup_changed menulis kolom ✓ pada df model.
+        fu_only = self._cb_followup.currentData() == "fu"
+        if fu_only and CHECK_COL in shown.columns:
+            sel = shown[shown[CHECK_COL].astype(bool)]
+            shown = sel.copy() if len(sel) else sel
         self._table.set_dataframe(shown, sort_desc="ANOMALY SCORE",
-                                  narrow_hide=["JENIS", "KETERANGAN",
+                                  narrow_hide=["KETERANGAN",
                                                "BULAN LALU", "PERUBAHAN"],
                                   visible_cols=[CHECK_COL] + cols)
         # v2.16.1 — refresh pilihan kolom SortControl sesuai dataset baru
@@ -1940,7 +2008,17 @@ class AnomaliView(FollowupTableMixin, QWidget):
             self._sort.refresh_columns()
         full = len(self._ctx.df) if self._ctx.df is not None else 0
         if len(shown) == 0:
-            self._lbl_count.setText("0 anomali lolos filter — longgarkan filter atau ambang skor.")
+            # v2.18.7: pesan 0-baris dibedakan per penyebab — filter
+            # follow-up aktif tapi belum ada centangan vs filter/skor
+            # umum (pola D6/D24: pesan kontekstual, bukan generik).
+            if fu_only:
+                self._lbl_count.setText(
+                    "0 anomali lolos filter — belum ada baris yang masuk "
+                    "Follow Up (centang ✓ dulu, atau ganti Tampilkan: ke "
+                    "Semua).")
+            else:
+                self._lbl_count.setText("0 anomali lolos filter — longgarkan "
+                                        "filter atau ambang skor.")
         else:
             self._lbl_count.setText(
                 f"{fmt_id(len(shown))} anomali tampil (dari {fmt_id(full)} baris data)")

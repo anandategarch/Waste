@@ -144,13 +144,35 @@ class FollowupTableMixin:
     def _on_followup_changed(self) -> None:
         """State follow-up berubah (toggle di mana pun/bulk/prune) —
         segarkan kolom ✓ model IN-PLACE (dataChanged satu kolom) —
-        BUKAN render ulang (cache fit + ukuran baris tak tersentuh)."""
+        BUKAN render ulang (cache fit + ukuran baris tak tersentuh).
+        v2.18.7: hook ``_followup_filter_active()`` — view yang punya
+        filter tampilan berbasis keanggotaan follow-up (combo
+        "Tampilkan: ✓ Sudah masuk Follow Up" di AnomaliView) tak bisa
+        sekadar menyegarkan ✓: keanggotaan = hasil filter → lepas
+        centang harus LANGSUNG menghilangkan barisnya → render ulang
+        penuh (pola lazy H2 bila view tersembunyi)."""
+        if self._followup_filter_active():
+            if self.isVisible():
+                self._refresh_table()
+            else:
+                self._dirty = True
+            return
         m = self._table.model()
         mdf = m.dataframe
         if (mdf is not None and len(mdf) > 0
                 and CHECK_COL in mdf.columns and FP_COL in mdf.columns):
             mdf[CHECK_COL] = mdf[FP_COL].isin(self._ctx.followup_set())
             m.notify_column_changed(CHECK_COL)
+
+    def _followup_filter_active(self) -> bool:
+        """v2.18.7 hook — True bila view ini punya filter TAMPILAN yang
+        bergantung pada keanggotaan follow-up (→ _on_followup_changed
+        memilih render ulang, bukan segarkan ✓ in-place).
+
+        Default False; AnomaliView meng-override (combo "Tampilkan:" =
+        ✓ Sudah masuk Follow Up). Pola hook _reset_view_controls —
+        view kembar tak menyalin metode mixin (kontrak test_v2138)."""
+        return False
 
     def _on_check_all(self) -> None:
         """Tombol '☑ Centang yang tampil' — semua baris model saat ini

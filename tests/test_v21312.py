@@ -138,21 +138,24 @@ class TestBantuanPipeline:
         assert "gerbang antar-stage" in _HELP_HTML
 
 
-class TestBantuanImporTL:
-    def test_impor_hasil_tl_terdokumentasi(self):
-        """D9: fitur 📥 Impor Hasil TL (loop penutup tindak lanjut)
-        terdokumentasi — kapan dipakai, format, efek, mekanisme
-        kecocokan, persistensi (dulu fitur hidup tanpa satu baris pun
-        di Bantuan)."""
+class TestBantuanImporFileEkspor:
+    def test_impor_file_ekspor_terdokumentasi(self):
+        """D9 (diperbarui v2.18.7): fitur 📥 Impor File Ekspor —
+        pengganti "Impor Hasil TL" yang DIHAPUS atas permintaan user
+        ("import ITL itu hapus aja belum kepakai"). Bantuan kini
+        mendokumentasikan: memulihkan daftar dari file ekspor, format
+        sama persis, otomatis di-centang kembali."""
         from ui.app import _HELP_HTML
-        assert "Impor Hasil TL" in _HELP_HTML
-        assert "PIC / KATEGORI / PENYEBAB" in _HELP_HTML
-        assert "Selesai" in _HELP_HTML
-        # kecocokan aman walau di-sort/di-filter di Excel
+        assert "Impor File Ekspor" in _HELP_HTML
+        # efek: baris otomatis di-centang kembali
+        assert "otomatis di-centang kembali" in _HELP_HTML
+        # format sama persis + aman walau di-sort/di-filter di Excel
+        assert "format sama persis" in _HELP_HTML
         assert "di-sort" in _HELP_HTML and "di-filter" in _HELP_HTML
-        assert "followup_resolved.json" in _HELP_HTML
-        # baris terisi yang belum ada di daftar tetap disimpan
-        assert "tetap disimpan" in _HELP_HTML
+        # jejak fitur LAMA (Impor Hasil TL) bersih total
+        assert "Impor Hasil TL" not in _HELP_HTML
+        assert "followup_resolved.json" not in _HELP_HTML
+        assert "STATUS TL" not in _HELP_HTML
 
 
 class TestBantuanTanpaTokenVersi:

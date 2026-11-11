@@ -632,7 +632,7 @@ class TestManifestBantuanVersi:
         from waste_anomaly import __version__
         from waste_anomaly.utils import load_config
         cfg = load_config()
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.18.6"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.18.7"
         init_src = (REPO / "waste_anomaly" / "__init__.py").read_text(
             encoding="utf-8")
         assert "Versi: 2.18.4" in init_src
