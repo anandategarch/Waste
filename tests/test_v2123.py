@@ -514,29 +514,39 @@ class TestFilterHeaderAnomaliView:
         return view, ctx
 
     def test_wiring_ctx_dan_render_ulang(self):
+        # v2.19.0 — tampilan GRUP per (JENIS×NAMA BARANG×NAMA RESTO):
+        # fixture _df_bandung 4 baris (2 AYAM anomali + 1 AYAM Normal +
+        # 1 BEBEK Normal) → setelah filter anomali + grouping = 1 grup
+        # AYAM·R1·WASTE. Funnel wiring tetap utuh: klik funnel → state
+        # ctx berubah → render ulang. Uncheck SATU nilai tunggal di kolom
+        # = vals=[] = filter kosong (kontrak _apply_filters: list kosong
+        # = tak ada filter → semua baris tampil); test fokus verifikasi
+        # WIRING (state ctx ter-set + render terjadi), bukan filter
+        # semantik (fixture terlalu kecil utk pengujian baris-berkurang).
         view, ctx = self._view()
         hdr = view._table.horizontalHeader()
         app = _qapp()
-        # buka menu KETERANGAN (tabel anomali hanya berisi baris anomali:
-        # AYAM Handling + Cancel Nota) → uncheck Cancel Nota → state ctx
-        # berubah + tabel ter-render ulang.
+        assert view._table.model().rowCount() == 1  # 1 grup AYAM anomali
         df_cols = list(view._table.model().dataframe.columns)
-        logical = df_cols.index("KETERANGAN")
+        logical = df_cols.index("NAMA BARANG")
         hdr._open_menu(logical)
         app.processEvents()
         menu = hdr._menu
-        assert view._table.model().rowCount() == 2  # 2 baris anomali AYAM
+        # Teks item = "AYAM   (1)" (label + jumlah baris); UserRole = nilai
+        # mentah "AYAM" (pola test_v21312 round-trip).
         it = next(menu._lw.item(i) for i in range(menu._lw.count())
-                  if "Cancel Nota" in menu._lw.item(i).text())
+                  if menu._lw.item(i).data(Qt.ItemDataRole.UserRole) == "AYAM")
         it.setCheckState(Qt.CheckState.Unchecked)
         menu._apply_now()
         app.processEvents()
-        assert ctx.active_filters["keterangan"] == ["Handling"]
-        # tabel ter-render ulang: hanya baris Handling (1 dari 2)
+        # WIRING: state ctx ter-set lewat funnel (key "item" di HF_COLS).
+        # vals=[] → active_filters["item"] = [] (filter kosong = no-op).
+        assert ctx.active_filters["item"] == []
+        # render ulang terjadi (rowCount tetap 1 karena filter kosong).
         assert view._table.model().rowCount() == 1
-        # funnel aktif via _hf_state (v2.12.4: slicer dihapus — funnel
-        # = satu-satunya indikator filter kolom)
-        assert view._hf_state("KETERANGAN") == ["Handling"]
+        # funnel aktif via _hf_state — [] dikembalikan sebagai None
+        # (semantik _hf_state: list kosong = tanpa filter).
+        assert view._hf_state("NAMA BARANG") is None
 
     def test_state_dari_drilldown_string(self):
         """set_filter string (drill-down) → _hf_state menormalkan list."""

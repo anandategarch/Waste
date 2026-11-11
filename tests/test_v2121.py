@@ -208,6 +208,10 @@ class TestDisplayLru:
         view.close()
 
     def test_nilai_centang_disegarkan_saat_objek_dipakai_ulang(self):
+        # v2.19.0 — tampilan GRUP: kolom kunci = __FPS (tuple sidik jari
+        # anggota grup), bukan __FP baris-tunggal. Centang semua grup =
+        # masukkan SEMUA fp anggota semua grup (SATU broadcast).
+        from ui.grouping import FPS_COL
         ctx, view = self._view()
         view.show()
         ctx.set_dataset(_df_synth(40), {"key_akhir": 31})
@@ -215,8 +219,11 @@ class TestDisplayLru:
         _qapp().processEvents()
         m = view._table.model()
         disp = m.dataframe
-        # centang semua → kolom ✓ semua True (in-place, tanpa reset)
-        ctx.add_followup_many(disp[FP_COL].astype(str).tolist())
+        all_fps: list[str] = []
+        for fps in disp[FPS_COL]:
+            if isinstance(fps, tuple):
+                all_fps.extend(str(f) for f in fps)
+        ctx.add_followup_many(all_fps)
         _qapp().processEvents()
         assert m.dataframe is disp
         assert bool(disp[CHECK_COL].all())

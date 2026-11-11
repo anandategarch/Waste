@@ -1810,6 +1810,12 @@ class SortControl(QWidget):
         # Sembunyikan kolom internal (__FP, __SRC_ROW, ✓)
         cols = [c for c in cols if not str(c).startswith("__")
                 and c not in ("✓",)]
+        # v2.19.0: buang entri NON-KANONIK (alias judul yang ikut daftar
+        # visible_cols supaya kolom tak tersembunyi — set_dataframe
+        # mencocokkan nama JUDUL/alias; entri alias tak ada di df.columns
+        # → sort-nya no-op senyap = duplikat menyesatkan di combo).
+        canonical = set(map(str, df.columns))
+        cols = [c for c in cols if c in canonical]
         # v2.16.2: ambil header_map (canonical → alias display) dari model.
         header_map = getattr(model, "_header_map", None) or {}
         cur = self._cb.currentData()  # canonical name (data, bukan display)

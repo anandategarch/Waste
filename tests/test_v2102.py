@@ -638,12 +638,21 @@ class TestAnomaliViewChange:
     def test_kolom_perubahan_muncul(self, tmp_path):
         view, _, _ = self._view(tmp_path)
         cols = view._table._model.dataframe.columns
-        for c in ("BULAN LALU", "PERUBAHAN %", "PERUBAHAN"):
+        for c in ("BULAN LALU", "PERUBAHAN %", "PERUBAHAN",
+                  "TOTAL BULAN LALU & % Selisih", "Selisih Bulan Lalu"):
             assert c in cols
         mie = view._table._model.dataframe
-        h = mie[mie["KETERANGAN"] == "Handling"].iloc[0]
-        assert abs(h["BULAN LALU"] - 160.0) < 0.01
-        assert h["PERUBAHAN"] == "Naik Tinggi"
+        # v2.19.0: tampilan GRUP — kedua baris fixture = SATU grup
+        # (WASTE·MIE·KWGGAL): TOTAL 580+94=674 vs BULAN LALU 160+94=254
+        # → naik +165% = Naik Tinggi; kolom gabungan = total bulan lalu.
+        assert len(mie) == 1
+        g = mie.iloc[0]
+        assert abs(g["BULAN LALU"] - 254.0) < 0.01
+        assert abs(g["TOTAL"] - 674.0) < 0.01
+        assert g["PERUBAHAN"] == "Naik Tinggi"
+        assert abs(g["Selisih Bulan Lalu"] - 420.0) < 0.01
+        assert abs(g["TOTAL BULAN LALU & % Selisih"] - 254.0) < 0.01
+        assert "Handling" in str(g["KETERANGAN"])  # join alasan grup
 
     def test_tanpa_pembanding_kolom_tak_ada(self):
         _qapp()
@@ -665,16 +674,26 @@ class TestAnomaliViewChange:
         assert view._cb_change.isEnabled()
         assert view._cb_change.count() == 7  # Semua + 6 kategori
         n_all = len(view._table._model.dataframe)
-        # Pilih 'Stabil' → hanya baris Cancel Nota (94 vs 94).
+        # v2.19.0: filter kategori kini LEVEL GRUP — 'Naik Tinggi' memilih
+        # grup dgn kategori itu TANPA memangkas anggotanya (TOTAL tetap
+        # 674 penuh; dulu level-baris memangkas TOTAL diam-diah).
         # (Sinyal combo mengandung guard isVisible — view offscreen tak
         # terlihat → panggil handler langsung, meniru kondisi terlihat.)
+        idx = [i for i in range(view._cb_change.count())
+               if view._cb_change.itemData(i) == "Naik Tinggi"][0]
+        view._cb_change.setCurrentIndex(idx)
+        view._on_change_filter()
+        df = view._table._model.dataframe
+        # Fixture = SATU grup ber-kategori Naik Tinggi → tetap tampil utuh.
+        assert len(df) == 1
+        assert (df["PERUBAHAN"] == "Naik Tinggi").all()
+        assert abs(df["TOTAL"].iloc[0] - 674.0) < 0.01  # TOTAL utuh grup
+        # Kategori yang tak cocok (Stabil) → 0 grup tampil.
         idx = [i for i in range(view._cb_change.count())
                if view._cb_change.itemData(i) == "Stabil"][0]
         view._cb_change.setCurrentIndex(idx)
         view._on_change_filter()
-        df = view._table._model.dataframe
-        assert len(df) < n_all
-        assert (df["PERUBAHAN"] == "Stabil").all()
+        assert len(view._table._model.dataframe) == 0
         # Kembali ke Semua.
         view._cb_change.setCurrentIndex(0)
         view._on_change_filter()
@@ -685,8 +704,11 @@ class TestAnomaliViewChange:
         assert "BULAN LALU" not in ctx.anomali_df().columns
 
     def test_table_cols_kontrak(self):
+        # v2.19.0 — layout sampel user: BULAN LALU + PERUBAHAN % digabung
+        # jadi 'TOTAL BULAN LALU & % Selisih' + kolom 'Selisih Bulan Lalu'.
         from ui.view_anomali import TABLE_COLS
-        for col in ("BULAN LALU", "PERUBAHAN %", "PERUBAHAN"):
+        for col in ("PERUBAHAN", "TOTAL BULAN LALU & % Selisih",
+                    "Selisih Bulan Lalu"):
             assert col in TABLE_COLS
 
     def test_detail_cols_kontrak(self):

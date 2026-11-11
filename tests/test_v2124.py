@@ -283,59 +283,66 @@ class TestAnomaliFunnelLokal:
 
     def test_funnel_kolom_numerik_lokal(self):
         """TOTAL (non-mapping) → mask isin lokal: tabel menyusut, state
-        ctx TIDAK tersentuh (KPI/global tetap), daftar follow-up utuh."""
+        ctx TIDAK tersentuh (KPI/global tetap), daftar follow-up utuh.
+        v2.19.0 — tampilan GRUP: TOTAL grup AYAM = 100+40 = 140 (sum).
+        Filter TOTAL=[140] → 1 grup tampil; TOTAL=[40] → 0 grup."""
         view, ctx = self._view()
         app = _qapp()
-        assert view._table.model().rowCount() == 2  # 2 anomali AYAM
-        view._on_header_filter("TOTAL", "TOTAL", [100.0])
+        assert view._table.model().rowCount() == 1  # 1 grup AYAM (dulu 2 baris)
+        view._on_header_filter("TOTAL", "TOTAL", [140.0])
         app.processEvents()
         m = view._table.model()
         assert m.rowCount() == 1
-        assert float(m.record(0)["TOTAL"]) == 100.0
+        assert float(m.record(0)["TOTAL"]) == 140.0  # TOTAL grup (sum anggota)
         # state global tak tersentuh
         assert not any(ctx.active_filters.values()), (
             "filter lokal menulis ke state ctx (harusnya tampilan saja)")
-        assert view._hf_state("TOTAL") == [100.0]
-        # lepas (None) → kembali 2
+        assert view._hf_state("TOTAL") == [140.0]
+        # lepas (None) → kembali 1 grup
         view._on_header_filter("TOTAL", "TOTAL", None)
         app.processEvents()
-        assert view._table.model().rowCount() == 2
+        assert view._table.model().rowCount() == 1
 
     def test_mask_memo_objek_stabil(self):
-        """A→B→A: objek hasil mask A dipakai ulang (kunci cache fit)."""
+        """A→B→A: objek hasil mask A dipakai ulang (kunci cache fit).
+        v2.19.0 — TOTAL grup = 140; filter [140]=A, [40]=B (0 grup)."""
         view, _ = self._view()
         app = _qapp()
-        view._on_header_filter("TOTAL", "TOTAL", [100.0])
+        view._on_header_filter("TOTAL", "TOTAL", [140.0])
         app.processEvents()
         a1 = view._table._src_df
         view._on_header_filter("TOTAL", "TOTAL", [40.0])
         app.processEvents()
         b = view._table._src_df
         assert b is not a1
-        view._on_header_filter("TOTAL", "TOTAL", [100.0])
+        view._on_header_filter("TOTAL", "TOTAL", [140.0])
         app.processEvents()
         a2 = view._table._src_df
         assert a2 is a1, "objek mask A harus dipakai ulang (LRU memo)"
 
     def test_centang_yang_tampil_hanya_yang_tampil(self):
-        """Mask lokal ikut menyempitkan '☑ Centang yang tampil'."""
+        """Mask lokal ikut menyempitkan '☑ Centang yang tampil'.
+        v2.19.0 — tampilan GRUP: filter TOTAL=[140] → 1 grup AYAM tampil
+        (2 anggota). _on_check_all = masukkan SEMUA fp anggota grup yg
+        tampil (fps anomali AYAM = fps[0], fps[1])."""
         from waste_anomaly.followup import fingerprint_series
         view, ctx = self._view()
         app = _qapp()
         df = ctx.anomali_df()
         fps = fingerprint_series(df).astype(str).tolist()
-        view._on_header_filter("TOTAL", "TOTAL", [100.0])
+        view._on_header_filter("TOTAL", "TOTAL", [140.0])  # grup AYAM tampil
         app.processEvents()
         view._on_check_all()
         app.processEvents()
-        assert ctx.followup_keys == [f for f, t in
-                                     zip(fps, df["TOTAL"].tolist()) if t == 100.0]
+        # fps anomali AYAM (rows 0,1 di _df_bandung) → kedua anggota grup
+        assert sorted(ctx.followup_keys) == sorted(fps)
 
     def test_tombol_hapus_filter(self):
-        """✕ Hapus Filter: lepas global + lokal + skor sekaligus."""
+        """✕ Hapus Filter: lepas global + lokal + skor sekaligus.
+        v2.19.0 — tampilan GRUP: 1 grup AYAM (TOTAL=140) di dataset ini."""
         view, ctx = self._view()
         app = _qapp()
-        view._on_header_filter("TOTAL", "TOTAL", [100.0])   # lokal
+        view._on_header_filter("TOTAL", "TOTAL", [140.0])   # lokal
         app.processEvents()
         ctx.set_filter("jenis", ["WASTE"])                    # global
         app.processEvents()
@@ -344,7 +351,7 @@ class TestAnomaliFunnelLokal:
         app.processEvents()
         assert not view._hfilters
         assert not any(ctx.active_filters.values())
-        assert view._table.model().rowCount() == 2
+        assert view._table.model().rowCount() == 1  # 1 grup AYAM (dulu 2 baris)
         assert view._spin_score.value() == 0
 
     def test_dataset_baru_reset_filter_lokal(self):

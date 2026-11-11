@@ -399,28 +399,32 @@ class TestPopupTombolFollowup:
         return ctx, dlg
 
     def test_tombol_ada_dan_fp_sesuai(self):
+        # v2.19.0 — pop-up grup: _cur_fps (plural list) menggantikan
+        # _cur_fp (singular); record tunggal = list 1 elemen.
         _ctx, dlg = self._popup()
         rec = _anomali_df().iloc[0]
         dlg.show_record(rec)
         assert dlg._panel._fu_btn is not None
-        assert dlg._panel._cur_fp
+        assert dlg._panel._cur_fps, "_cur_fps harus terisi (list sidik jari)"
         assert "Masuk Follow Up" in dlg._panel._fu_btn.text()
 
     def test_toggle_dari_pop_up_update_state_dan_teks(self):
+        # v2.19.0 — _cur_fps (plural) menggantikan _cur_fp; toggle grup
+        # = masukkan SEMUA anggota fps.
         ctx, dlg = self._popup()
         rec = _anomali_df().iloc[0]
         dlg.show_record(rec)
-        fp = dlg._panel._cur_fp
+        fps = dlg._panel._cur_fps
         dlg._panel._on_fu_toggle()
         _qapp().processEvents()
-        assert fp in ctx.followup_set()
+        assert fps[0] in ctx.followup_set()
         assert "Sudah" in dlg._panel._fu_btn.text()
         # toggle eksternal → teks tombol ikut TANPA rebuild
         calls = []
         orig = dlg._panel.show_record
         dlg._panel.show_record = lambda r: (calls.append(1), orig(r))
         try:
-            ctx.toggle_followup(fp, False)
+            ctx.toggle_followup(fps[0], False)
             _qapp().processEvents()
             assert "Masuk" in dlg._panel._fu_btn.text()
             assert calls == [], "update teks harus in-place"
@@ -440,13 +444,14 @@ class TestPopupTombolFollowup:
 
     def test_clear_reset_ref_tombol(self):
         """clear() (dataset berubah) → ref tombol/fp di-reset — handler
-        followup_changed tak menyentuh widget yang sudah dihapus."""
+        followup_changed tak menyentuh widget yang sudah dihapus.
+        v2.19.0 — _cur_fps (plural) menggantikan _cur_fp."""
         ctx, dlg = self._popup()
         dlg.show_record(_anomali_df().iloc[0])
         assert dlg._panel._fu_btn is not None
         dlg._panel.clear()
         assert dlg._panel._fu_btn is None
-        assert dlg._panel._cur_fp is None
+        assert dlg._panel._cur_fps is None
         # broadcast setelah clear → tak boleh meledak
         ctx.toggle_followup("x" * 32, True)
         ctx.clear_followup()

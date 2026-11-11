@@ -4,12 +4,17 @@ app.py::_build_help_html
 app.py::_qt_excepthook
 app.py::main
 followup_table.py::FollowupTableMixin
+grouping.py::_day_columns
+grouping.py::_join_unique
+grouping.py::_safe_div
+grouping.py::group_anomali_display
 models.py::PandasTableModel
 models.py::_fmt_th
 models.py::_th
 models.py::build_column_tooltips
 models.py::fmt_cell
 models.py::fmt_delta_pct
+models.py::fmt_lastmonth_combined
 models.py::fmt_pct
 models.py::fmt_ratio_x
 shared.py::_apply_filters

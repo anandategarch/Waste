@@ -57,13 +57,23 @@ class TestMixinKonsolidasi:
         from ui.view_hari import HariView
         assert issubclass(AnomaliView, FollowupTableMixin)
         assert issubclass(HariView, FollowupTableMixin)
-        # metode resolve ke MILIK mixin (bukan salinan per-view)
-        for m in ("_display_df", "_mask_local", "_on_check_toggled",
-                  "_on_followup_changed", "_on_check_all",
+        # v2.19.0 — AnomaliView MEN-OVERRIDE beberapa metode mixin utk
+        # tampilan GRUP per item×cabang (sampel user). Override: _display_df,
+        # _refresh_check_col, _on_check_toggled, _on_check_all. Metode LAIN
+        # tetap di-share via mixin (HariView sepenuhnya pakai mixin).
+        shared = ("_mask_local", "_on_followup_changed",
                   "_on_header_filter", "_hf_state", "_on_clear_filters",
-                  "_fps_for", "_on_selection"):
+                  "_fps_for", "_on_selection")
+        for m in shared:
             assert getattr(AnomaliView, m) is getattr(FollowupTableMixin, m)
             assert getattr(HariView, m) is getattr(FollowupTableMixin, m)
+        # Override AnomaliView (grup) — bukan mixin lagi.
+        for m in ("_display_df", "_on_check_toggled", "_on_check_all",
+                  "_refresh_check_col"):
+            assert getattr(AnomaliView, m) is not getattr(
+                FollowupTableMixin, m), f"{m} harus di-override AnomaliView"
+            assert getattr(HariView, m) is getattr(
+                FollowupTableMixin, m), f"{m} tetap di-share utk HariView"
 
     def test_lru_per_view(self):
         _qapp()
@@ -81,15 +91,29 @@ class TestMixinKonsolidasi:
         assert hari_cols is ft.HF_COLS
 
     def test_duplikasi_hilang(self):
-        """Metode kembar TIDAK lagi didefinisikan di kedua file view."""
-        for f in ("ui/view_anomali.py", "ui/view_hari.py"):
-            tree = ast.parse(_src(f))
-            names = {n.name for node in ast.walk(tree)
-                     if isinstance(node, ast.FunctionDef)
-                     for n in [node]}
-            for m in ("_fps_for", "_display_df", "_mask_local",
-                      "_on_check_all", "_hf_state"):
-                assert m not in names, f"{m} masih didefinisikan di {f}"
+        """Metode kembar TIDAK lagi didefinisikan di kedua file view.
+        v2.19.0 — AnomaliView MEN-OVERRIDE beberapa metode utk tampilan
+        GRUP (sampel user); override ini BUKAN duplikasi mati, melainkan
+        perilaku grup yg berbeda dari mixin baris-tunggal."""
+        # HariView tak boleh mendefinisikan ulang metode mixin (pure consumer).
+        tree = ast.parse(_src("ui/view_hari.py"))
+        hari_names = {n.name for node in ast.walk(tree)
+                      if isinstance(node, ast.FunctionDef)
+                      for n in [node]}
+        for m in ("_fps_for", "_display_df", "_mask_local",
+                  "_on_check_all", "_hf_state"):
+            assert m not in hari_names, f"{m} masih didefinisikan di view_hari.py"
+        # AnomaliView boleh override _display_df, _on_check_all, dll utk grup
+        # (bukan duplikasi mati — semantik berbeda).
+        tree_a = ast.parse(_src("ui/view_anomali.py"))
+        anomali_names = {n.name for node in ast.walk(tree_a)
+                         if isinstance(node, ast.FunctionDef)
+                         for n in [node]}
+        # metode PURE-MIXIN (tak boleh di-override) tetap tak didefinisikan
+        for m in ("_fps_for", "_mask_local", "_hf_state"):
+            assert m not in anomali_names, (
+                f"{m} masih didefinisikan di view_anomali.py "
+                "(harus di-share via mixin)")
 
 
 # ============================================================

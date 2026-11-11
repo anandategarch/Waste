@@ -190,7 +190,9 @@ class TestGuardTekanTunggal:
         event jendela asli — di lingkungan offscreen test suite selalu
         memverifikasi toggle secara programatik via _on_check_toggled,
         kontrak yang sama sejak test_v2135 [C]; guard baru TIDAK aktif
-        tanpa riwayat menu funnel → jalur super() tak tersentuh.)"""
+        tanpa riwayat menu funnel → jalur super() tak tersentuh.)
+        v2.19.0 — tampilan GRUP: record ber-__FPS (tuple sidik jari
+        anggota grup); centang grup = masukkan SEMUA anggota."""
         from PySide6.QtCore import QEvent, QPointF, Qt
         from PySide6.QtGui import QMouseEvent
         from waste_anomaly.followup import CHECK_COL
@@ -202,8 +204,9 @@ class TestGuardTekanTunggal:
         assert m.dataframe.columns[0] == CHECK_COL
         # toggle programatik (kontrak suite) — jalur setData/model
         view._on_check_toggled(1, True)
-        fp = str(m.record(1)["__FP"])
-        assert fp in ctx.followup_set()
+        fps = m.record(1)["__FPS"]
+        fp0 = str(fps[0]) if isinstance(fps, tuple) else str(fps)
+        assert fp0 in ctx.followup_set()
         # tekan mouse pada sel ✓ → seleksi hidup + pop-up ditekan
         idx = m.index(2, 0)
         rect = view._table.visualRect(idx)

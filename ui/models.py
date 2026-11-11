@@ -19,6 +19,7 @@ from PySide6.QtGui import QColor, QFont
 
 from waste_anomaly.utils import load_config
 
+from .grouping import LASTMONTH_COMBINED_COL
 from .shared import fmt_id
 from .theme import STATUS_COLORS
 
@@ -42,7 +43,10 @@ _NUM_COLS = {"ANOMALY SCORE", "TOTAL", "MAX", "AVG", "HARI MAX", "RANK",
              "NILAI BULAN LALU", "TIPIKAL BEBERAPA BULAN", "HARI AKTIF",
              "Total Waste", "Waste per Hari", "Perubahan %",
              # v2.10.2: kolom perubahan tabel Anomali + drill hari
-             "BULAN LALU", "PERUBAHAN %", "HARI", "Selisih"}
+             "BULAN LALU", "PERUBAHAN %", "HARI", "Selisih",
+             # v2.19.0: kolom tampilan grup tab Anomali (sampel user —
+             # nilai numerik: total bulan lalu & selisih absolut)
+             LASTMONTH_COMBINED_COL, "Selisih Bulan Lalu"}
 
 # Kolom rasio (nilai 0..1) yang ditampilkan sebagai PERSEN — v2.8.1.
 # '% to BOM' = waste dibanding penjualan kuantiti (BOM = qty terjual);
@@ -68,6 +72,43 @@ RATIO_X_COLS = frozenset({"RASIO VS CABANG LAIN", "RASIO VS BULAN LALU"})
 # ('PERUBAHAN %') — sebelumnya fmt_cell menampilkan '35,5' polos tanpa
 # tanda/persen (permintaan user v2.10.2: persen perubahan jelas terbaca).
 DELTA_PCT_COLS = frozenset({"Perubahan %", "PERUBAHAN %", "Delta %"})
+
+# v2.19.0 — kolom GABUNGAN sampel user: nilai sel = total bulan lalu
+# (NUMERIK — sort klik-header/SortControl tetap benar), teks tampilan
+# "1.969,1 (-30%)" digabung dari companion kolom 'PERUBAHAN %'.
+LASTMONTH_DELTA_COL = "PERUBAHAN %"
+
+
+def fmt_lastmonth_combined(value, delta_pct, ndigits: int = 1) -> str:
+    """Format kolom 'TOTAL BULAN LALU & % Selisih' (v2.19.0 — sampel user
+    'SAMPEL TAMPILAN BARU.xlsx': '1.969,1 (-30%)').
+
+    value      = total bulan lalu (numerik; NaN/None → '' — grup BARU).
+    delta_pct  = PERUBAHAN % skala 0-100 (NaN → tanpa kurung persen).
+    """
+    if (value is None or value is pd.NA or value is pd.NaT
+            or (isinstance(value, (float, np.floating))
+                and math.isnan(float(value)))):
+        return ""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if f != f:  # NaN
+        return ""
+    base = fmt_id(f, ndigits)
+    if delta_pct is None or delta_pct is pd.NA:
+        return base
+    try:
+        d = float(delta_pct)
+    except (TypeError, ValueError):
+        return base
+    if d != d:  # NaN = tanpa riwayat → tampil angka polos
+        return base
+    if d == 0:
+        return f"{base} (0%)"
+    sign = "+" if d > 0 else "-"
+    return f"{base} ({sign}{abs(d):.0f}%)"
 
 # ============================================================
 # v2.12.0 — FOLLOW UP: konstanta bersama model (kolom ✓ + kunci baris)
@@ -259,6 +300,20 @@ def build_column_tooltips(config: dict | None = None) -> dict[str, str]:
                   "(TH_CHANGE_HIGH / STABLE / MIN_ABS)."),
     "HARI": ("Tanggal 1-31 (pop-up rincian per hari).\n"
              "Selisih = bulan ini − pembanding tanggal sama."),
+    # --- v2.19.0: tampilan grup tab Anomali (sampel user) ---
+    "SOURCE DATA GABUNGAN": ("Semua asal data baris gabungan ini (satu baris "
+                             "per item×cabang — semua alasan/KETERANGAN "
+                             "digabung; klik-ganda utk rincian per baris di "
+                             "pop-up detail)."),
+    LASTMONTH_COMBINED_COL: ("Total bulan lalu + persen selisih vs bulan ini "
+                             "dalam satu sel — '1.969,1 (-30%)' = bulan lalu "
+                             "1.969,1 dan bulan ini turun 30%.\nKosong = "
+                             "grup belum ada di bulan pembanding (BARU).\n"
+                             "Sumber pembanding mengikuti combo tab 'Banding "
+                             "Periode'."),
+    "Selisih Bulan Lalu": ("TOTAL bulan ini dikurangi total bulan lalu "
+                           "(grup item×cabang yang sama).\nPlus = naik, "
+                           "minus = turun."),
     }
 
 
@@ -401,6 +456,8 @@ class PandasTableModel(QAbstractTableModel):
         # / setData ✓). Fallback iat bila snapshot gagal dibangun.
         self._arr: np.ndarray | None = None
         self._status_idx: int | None = None
+        # v2.19.0: posisi kolom companion formatter gabungan (malas).
+        self._companion_idx: dict[str, int] = {}
         self._rebuild_snapshot()
         # v2.12.0: konfigurasi follow-up (opt-in).
         self._check_col: str | None = None
@@ -471,6 +528,7 @@ class PandasTableModel(QAbstractTableModel):
         self._texts = {}
         self._fp_idx = None  # v2.12.0: posisi kolom kunci bisa bergeser
         self._status_idx = None  # v2.12.1
+        self._companion_idx = {}  # v2.19.0: posisi companion ikut bergeser
         self._rebuild_snapshot()
         self.endResetModel()
 
@@ -603,7 +661,13 @@ class PandasTableModel(QAbstractTableModel):
         key = (row, col)
         text = self._texts.get(key)
         if text is None:
-            if col_name in PCT_COLS:
+            if col_name == LASTMONTH_COMBINED_COL:
+                # v2.19.0 — kolom gabungan sampel user: nilai numerik =
+                # total bulan lalu, teks = '1.969,1 (-30%)' dari companion
+                # PERUBAHAN % baris yang sama (sort tetap numerik).
+                text = fmt_lastmonth_combined(
+                    value, self._companion_value(row, LASTMONTH_DELTA_COL))
+            elif col_name in PCT_COLS:
                 text = fmt_pct(value)
             elif col_name in DELTA_PCT_COLS:
                 text = fmt_delta_pct(value)
@@ -613,6 +677,27 @@ class PandasTableModel(QAbstractTableModel):
                 text = fmt_cell(value, self._ndigits)
             self._texts[key] = text
         return text
+
+    def _companion_value(self, row: int, col_name: str):
+        """Nilai kolom pendamping pada baris tampilan row (v2.19.0).
+
+        Dipakai formatter kolom gabungan TOTAL BULAN LALU & % Selisih —
+        membaca PERUBAHAN % baris yang sama. Posisi kolom dicari malas
+        + diverifikasi (pola _status_idx); kolom absen → None."""
+        if col_name not in self._df.columns or not (0 <= row < len(self._df)):
+            return None
+        idx = self._companion_idx.get(col_name)
+        if (idx is None or idx >= len(self._df.columns)
+                or self._df.columns[idx] != col_name):
+            try:
+                idx = self._df.columns.get_loc(col_name)
+            except KeyError:
+                return None
+            self._companion_idx[col_name] = idx
+        try:
+            return self._df.iat[row, idx]
+        except Exception:  # noqa: BLE001 — di luar bentuk
+            return None
 
     def data(self, index: QModelIndex, role=Qt.DisplayRole):
         if (not index.isValid() or not (0 <= index.row() < len(self._df))

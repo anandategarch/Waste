@@ -694,10 +694,14 @@ class TestC15LabelBulanLalu:
         """C15: judul kolom + tooltip BULAN LALU (Anomali — sumber combo
         Banding Periode) dan NILAI BULAN LALU (Hari — sumber bulan
         TERBARU termuat) memuat NAMA BULAN — dulu label polos di kedua
-        tab padahal 'bulan lalu' beda sumber (tak terbandingkan)."""
+        tab padahal 'bulan lalu' beda sumber (tak terbandingkan).
+        v2.19.0 — tampilan GRUP: kolom 'BULAN LALU' diganti 'TOTAL
+        BULAN LALU & % Selisih' (nilai gabungan); nama bulan aktif
+        kini termuat di TOOLTIP kolom baru (bukan judul kolom)."""
         from PySide6.QtCore import Qt
         from ui.state import AppContext
         from ui.view_anomali import AnomaliView
+        from ui.grouping import LASTMONTH_COMBINED_COL
         app = _qapp()
         ctx = AppContext({})
         view = AnomaliView(ctx)
@@ -707,22 +711,24 @@ class TestC15LabelBulanLalu:
         app.processEvents()
         m = view._table.model()
         mdf = m.dataframe
-        assert "BULAN LALU" in mdf.columns
-        col = mdf.columns.get_loc("BULAN LALU")
-        hdr = m.headerData(col, Qt.Orientation.Horizontal,
-                           Qt.ItemDataRole.DisplayRole)
-        assert "Juli 2026" in hdr, (
-            f"judul kolom harus menyebut bulan aktif (C15): {hdr!r}")
+        # v2.19.0: kolom gabungan 'TOTAL BULAN LALU & % Selisih' (bukan
+        # 'BULAN LALU' lagi — tetap di df tapi tersembunyi, bukan kolom
+        # tampilan sampel user).
+        assert LASTMONTH_COMBINED_COL in mdf.columns
+        col = mdf.columns.get_loc(LASTMONTH_COMBINED_COL)
+        # TOOLTIP memuat nama bulan aktif (C15 — sumber combo Banding).
         tip = m.headerData(col, Qt.Orientation.Horizontal,
                            Qt.ItemDataRole.ToolTipRole)
-        assert "Juli 2026" in tip and "Sumber" in tip
-        # baseline hilang → alias dibersihkan (label kembali polos)
+        assert "Juli 2026" in tip and "Sumber saat ini" in tip, (
+            f"tooltip kolom harus menyebut bulan aktif (C15): {tip!r}")
+        # baseline hilang → tooltip kembali polos (tanpa 'Sumber saat ini')
         ctx.set_banding_baseline(None)
         view._refresh_table()
         app.processEvents()
-        hdr2 = view._table.model().headerData(
-            col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
-        assert hdr2 == "BULAN LALU", "tanpa baseline → label polos (C15)"
+        tip2 = view._table.model().headerData(
+            col, Qt.Orientation.Horizontal, Qt.ItemDataRole.ToolTipRole)
+        assert "Sumber saat ini" not in tip2, (
+            "tanpa baseline → tooltip polos (C15)")
 
     def test_hari_nilai_bulan_lalu_memuat_bulan_terbaru(self):
         """C15 (tab Hari): sumber NILAI BULAN LALU = bulan pembanding

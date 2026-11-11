@@ -88,7 +88,18 @@ from waste_anomaly.signals import SIGNAL_PARTS
 # (SaveEditsWorker import sendiri secara lazy di run(); UI tak panggil langsung).
 from .workers import SaveEditsWorker
 
-from .followup_table import FollowupTableMixin, HF_COLS as _HF_COLS
+from .followup_table import (
+    FPS_LIST_COL,
+    FollowupTableMixin,
+    HF_COLS as _HF_COLS,
+)
+from .grouping import (
+    FPS_COL as _GRP_FPS_COL,
+    LASTMONTH_COMBINED_COL,
+    SELISIH_COL,
+    SRC_GAB_COL,
+    group_anomali_display,
+)
 from .models import (
     COLUMN_TOOLTIPS,
     DELTA_PCT_COLS,
@@ -112,31 +123,33 @@ from .widgets import (
     status_chip_for,
 )
 
-# Kolom tabel anomali — ramping (detail lengkap ada di pop-up detail).
-# v2.6.1: 10 → 7 kolom (MAX / HARI MAX / RANGKING WASTE duplikatif).
-# v2.8.1: 7 → 8 — "% to BOM" (waste vs penjualan kuantiti) ditambahkan
-# setelah TOTAL sesuai permintaan user: rasio per-ranking terlihat langsung
-# di tabel. Nilai 'Cek' = item tanpa data penjualan (tak bisa dihitung).
-# v2.18.7 (2 permintaan user): "ANOMALY SCORE" DIHAPUS dari tabel
-# (skor tetap jadi dasar ranking/sort + filter "Skor ≥" + pop-up detail);
-# JENIS (WASTE/SUSUT/TRIAL) kini selalu tampil — dulu narrow_hide di
-# viewport sempit sehingga tak terlihat (keluhan user "kasih kolom
-# jenisnya").
+# Kolom tabel anomali — LAYOUT SAMPEL USER v2.19.0 ("SAMPEL TAMPILAN
+# BARU.xlsx"): SATU BARIS per (JENIS × NAMA BARANG × NAMA RESTO) — semua
+# alasan/KETERANGAN & SOURCE DATA digabung (kolom SOURCE DATA GABUNGAN),
+# urutan 11 kolom persis sampel:
+#   JENIS · NAMA BARANG · NAMA RESTO · SOURCE DATA GABUNGAN · [TOTAL] ·
+#   [% to BOM] · TOTAL BULAN LALU & % Selisih · Selisih Bulan Lalu ·
+#   PERUBAHAN · ANOMALY STATUS · PROFIL
+# [TOTAL]/[% to BOM] = ALIAS judul (nama kanonik df tetap TOTAL/% to BOM
+# — kontrak test_v280 index+1 utuh). 'TOTAL BULAN LALU & % Selisih' =
+# kolom NUMERIK berisi total bulan lalu; teks sel "1.969,1 (-30%)"
+# digabung formatter model (fmt_lastmonth_combined) dari companion
+# PERUBAHAN % — sort numerik tetap benar. Kolom banding muncul hanya bila
+# pembanding bulan lalu tersedia (pola v2.10.2 — kolom ditambahkan
+# ADDITIF oleh change_vs_history + agregasi grup).
+# v2.6.1→v2.18.7 riwayat: 10→7 kolom, +"% to BOM", skor dihapus dari
+# tabel (tetap dasar ranking/sort/filter), JENIS selalu tampil.
 TABLE_COLS = [
-    "ANOMALY STATUS", "PROFIL", "NAMA RESTO",
-    "NAMA BARANG", "TOTAL", "% to BOM", "JENIS", "KETERANGAN",
-    # v2.10.2: muncul hanya bila pembanding bulan lalu tersedia (kolom
-    # ditambahkan ADDITIF oleh change_vs_history — tanpa pembanding tabel
-    # identik v2.10.1, pola view Hari Mencurigakan).
-    "BULAN LALU", "PERUBAHAN %", "PERUBAHAN",
+    "JENIS", "NAMA BARANG", "NAMA RESTO", SRC_GAB_COL,
+    "TOTAL", "% to BOM",
+    LASTMONTH_COMBINED_COL, SELISIH_COL, "PERUBAHAN",
+    "ANOMALY STATUS", "PROFIL",
 ]
-# v2.17.0 rombak P0: TOTAL + % to BOM ditarik ke depan (kanan NAMA BARANG)
-# — sebelumnya di posisi 8-9 setelah 7 kolom identitas. Sinyal magnitudo
-# wajib terbaca sebelum JENIS/KETERANGAN. % to BOM tetap langsung setelah
-# TOTAL (kontrak test_v280 index+1).
-# v2.18.7: JENIS tetap di posisi ini tapi kini SELALU tampak (bukan
-# narrow_hide) — jenis catatan (WASTE/SUSUT/TRIAL) dibaca langsung.
-
+# Alias judul tampilan sampel user ([TOTAL] / [% to BOM]) — dipasang di
+# _refresh_table_impl via model.set_header_map (data/sort/record tetap
+# nama kanonik; alias WAJIB ikut visible_cols supaya kolom tak tersembunyi
+# — set_dataframe mencocokkan nama JUDUL, lihat view_followup v2.12.3).
+_TABLE_ALIASES = {"TOTAL": "[TOTAL]", "% to BOM": "[% to BOM]"}
 # v2.12.3: funnel filter di header tabel (permintaan user "daripada aku
 # harus pakai slicer"). Kolom → kunci filter ctx — STATE TETAP SATU di
 # ctx.active_filters.
@@ -402,6 +415,7 @@ class DetailPanel(Card):
         # toggle dari mana pun memperbarui teksnya tanpa rebuild).
         self._fu_btn: QPushButton | None = None
         self._cur_fp: str | None = None
+        self._cur_fps: list[str] | None = None  # v2.19.0: plural (grup)
         # v2.13.9: wadah + tombol kolom-lengkap (diisi show_record).
         self._full_box: QWidget | None = None
         self._more_btn: QPushButton | None = None
@@ -467,6 +481,7 @@ class DetailPanel(Card):
         _content — widget mayat tak tersisa)."""
         self._fu_btn = None
         self._cur_fp = None
+        self._cur_fps = None
         self._full_box = None
         self._more_btn = None
         # v2.16.0: reset state editable hari (spinbox widget dihapus bersama
@@ -514,6 +529,7 @@ class DetailPanel(Card):
         # tombol lama dideleteLater; nilai baru dipasang di bawah).
         self._fu_btn = None
         self._cur_fp = None
+        self._cur_fps = None
         self._full_box = None   # v2.13.9: ref wadah kolom lengkap
         self._more_btn = None   # v2.13.9: ref tombol pembuka kolom lengkap
         # v2.16.0: reset state editable hari (spinbox lama dibuang bersama
@@ -746,11 +762,24 @@ class DetailPanel(Card):
             except (TypeError, ValueError):
                 src_row = None
         self._cur_src_row = src_row
-        lay.addWidget(self._section(
-            f"Nilai per hari ({day_rng}) — EDITABLE: ubah angka lalu klik "
-            "“Simpan koreksi” di bawah (tulis ke file Excel sumber); "
-            "sel merah = hari tersangka"))
-        lay.addWidget(self._editable_day_map(rec, day_names))
+        # v2.19.0 — record GRUP (tampilan item×cabang, ada __FPS): peta
+        # hari READ-ONLY (nilai = JUMLAH semua alasan/KETERANGAN grup —
+        # edit nilai per-baris tak bisa dipetakan balik; edit tetap
+        # tersedia via pop-up baris detail di tab Hari Mencurigakan /
+        # Follow Up). Record baris tunggal: peta hari editable seperti
+        # biasa (v2.16.0).
+        is_group = isinstance(rec.get(_GRP_FPS_COL), tuple)
+        if is_group:
+            lay.addWidget(self._section(
+                f"Nilai per hari ({day_rng}) — GABUNGAN semua alasan grup "
+                "ini (jumlah per hari); sel merah = hari tersangka"))
+            lay.addWidget(self._day_map(rec))
+        else:
+            lay.addWidget(self._section(
+                f"Nilai per hari ({day_rng}) — EDITABLE: ubah angka lalu klik "
+                "“Simpan koreksi” di bawah (tulis ke file Excel sumber); "
+                "sel merah = hari tersangka"))
+            lay.addWidget(self._editable_day_map(rec, day_names))
 
         # v2.13.10 (gel-1 V1): kolom lengkap = item KONTEN GULIR TERAKHIR
         # (setelah peta hari — data mentah opsional, tak menghalangi CTA).
@@ -768,15 +797,23 @@ class DetailPanel(Card):
         # CTA tak terlihat tanpa menggulir; audit V1).
         # ----------------------------------------------------------
         alay.addWidget(self._section("Tindak lanjut & drill-down dari baris ini"))
-        fp = self._row_fingerprint(rec)
-        if fp is not None:
-            self._cur_fp = str(fp)
-            in_list = self._cur_fp in self._ctx.followup_set()
-            self._fu_btn = QPushButton(self._fu_btn_text(in_list))
+        # v2.19.0 — sidik jari PLURAL: record grup membawa __FPS (semua
+        # anggota); tombol follow-up grup = masukkan/keluarkan SEMUA
+        # anggota sekaligus. Record baris tunggal: satu fp (v2.12.0).
+        fps = self._row_fingerprints(rec)
+        if fps:
+            self._cur_fps = fps
+            in_list = any(f in self._ctx.followup_set() for f in fps)
+            self._fu_btn = QPushButton(self._fu_btn_text(in_list, is_group))
             self._fu_btn.setToolTip(
-                "Tambahkan / keluarkan baris ini dari daftar Follow Up\n"
-                "(tab Follow Up — format rekap siap serah terima petugas).\n"
-                "Sama seperti mencentang kolom ✓ di tabel.")
+                ("Tambahkan / keluarkan SEMUA baris gabungan ini (grup "
+                 "item×cabang) dari daftar Follow Up — tab Follow Up "
+                 "menampilkan tiap barisnya.\nSama seperti mencentang "
+                 "kolom ✓ di tabel."
+                 if is_group else
+                 "Tambahkan / keluarkan baris ini dari daftar Follow Up\n"
+                 "(tab Follow Up — format rekap siap serah terima petugas).\n"
+                 "Sama seperti mencentang kolom ✓ di tabel."))
             self._fu_btn.clicked.connect(self._on_fu_toggle)
             alay.addWidget(self._fu_btn)
 
@@ -817,8 +854,13 @@ class DetailPanel(Card):
                 f"TOTAL dihitung ulang = sum hari 1-31 (konsisten).")
         else:
             save.setEnabled(False)
-            why = ("__SRC_ROW tidak ada di record" if self._cur_src_row is None
-                   else "workbook_path tidak ada di summary")
+            if is_group:
+                why = ("baris GRUP item×cabang (gabungan banyak baris) — "
+                       "tak bisa dipetakan ke satu baris Excel")
+            else:
+                why = ("__SRC_ROW tidak ada di record"
+                       if self._cur_src_row is None
+                       else "workbook_path tidak ada di summary")
             save.setToolTip(
                 f"Nonaktif — {why}.\n"
                 "Jalankan ulang pipeline (tab Pipeline → pilih file REKAP "
@@ -836,12 +878,16 @@ class DetailPanel(Card):
             b.clicked.connect(lambda _=False, v=rec.get("NAMA RESTO"):
                               self._ctx.set_filter("cabang", v))
             bl.addWidget(b)
-        if rec.get("NAMA BARANG") is not None:
+        if (rec.get("NAMA BARANG") is not None):
             b = QPushButton("📦 Fokus item ini")
             b.clicked.connect(lambda _=False, v=rec.get("NAMA BARANG"):
                               self._ctx.set_filter("item", v))
             bl.addWidget(b)
-        if rec.get("KETERANGAN") is not None and str(rec.get("KETERANGAN")) not in ("", "nan"):
+        # v2.19.0: 'Fokus alasan' disembunyikan utk record GRUP —
+        # KETERANGAN grup = JOIN banyak alasan ("A | B"), nilainya tak
+        # pernah cocok dgn filter keterangan baris-detail.
+        if (not is_group and rec.get("KETERANGAN") is not None
+                and str(rec.get("KETERANGAN")) not in ("", "nan")):
             b = QPushButton("🏷 Fokus alasan ini")
             b.clicked.connect(lambda _=False, v=str(rec.get("KETERANGAN")).strip():
                               self._ctx.set_filter("keterangan", v))
@@ -930,17 +976,41 @@ class DetailPanel(Card):
             pass
         return None
 
-    def _fu_btn_text(self, in_list: bool) -> str:
+    def _row_fingerprints(self, rec: pd.Series) -> list[str]:
+        """v2.19.0 — sidik jari PLURAL utk follow-up pop-up.
+
+        Record GRUP (tampilan item×cabang) membawa __FPS (tuple sidik
+        jari semua anggota) → kembalikan semuanya. Record baris tunggal
+        → satu sidik jari via _row_fingerprint (fallback lama)."""
+        v = rec.get(_GRP_FPS_COL)
+        if isinstance(v, tuple) and len(v):
+            return [str(x) for x in v if str(x) not in ("", "nan", "None")]
+        fp = self._row_fingerprint(rec)
+        return [fp] if fp else []
+
+    def _fu_btn_text(self, in_list: bool, is_group: bool = False) -> str:
+        if is_group:
+            return ("☑ Masuk Follow Up (semua baris grup ini)" if not in_list
+                    else "✅ Semua baris grup di Follow Up — klik utk "
+                         "keluarkan")
         return ("☑ Masuk Follow Up" if not in_list
                 else "✅ Sudah di Follow Up — klik utk keluarkan")
 
     def _on_fu_toggle(self) -> None:
         """Klik tombol → toggle state ctx (broadcast → badge tab + tabel
-        kolom ✓ semua view + tombol ini sendiri via _on_fu_state_changed)."""
-        if self._cur_fp is None:
+        kolom ✓ semua view + tombol ini sendiri via _on_fu_state_changed).
+        v2.19.0: record grup = toggle SEMUA anggota (satu broadcast —
+        pola add/remove_followup_many)."""
+        fps = getattr(self, "_cur_fps", None)
+        if not fps:
             return
-        self._ctx.toggle_followup(
-            self._cur_fp, self._cur_fp not in self._ctx.followup_set())
+        fset = self._ctx.followup_set()
+        if len(fps) == 1:
+            self._ctx.toggle_followup(fps[0], fps[0] not in fset)
+        elif any(f not in fset for f in fps):
+            self._ctx.add_followup_many(fps)
+        else:
+            self._ctx.remove_followup_many(fps)
         n = len(self._ctx.followup_keys)
         self._ctx.set_status(
             f"✓ Daftar follow-up kini {fmt_id(n)} baris (dari pop-up "
@@ -948,12 +1018,16 @@ class DetailPanel(Card):
 
     def _on_fu_state_changed(self) -> None:
         """followup_changed (toggle/bulk dari mana pun) → perbarui teks
-        tombol pop-up IN-PLACE bila pop-up sedang menampilkan baris."""
-        if self._fu_btn is not None and self._cur_fp is not None:
+        tombol pop-up IN-PLACE bila pop-up sedang menampilkan baris.
+        v2.19.0: plural — grup di Follow Up bila ADA anggota tercentang."""
+        fps = getattr(self, "_cur_fps", None)
+        if self._fu_btn is not None and fps:
             try:
+                is_group = len(fps) > 1
                 self._fu_btn.setText(
-                    self._fu_btn_text(self._cur_fp
-                                      in self._ctx.followup_set()))
+                    self._fu_btn_text(
+                        any(f in self._ctx.followup_set() for f in fps),
+                        is_group))
             except RuntimeError:  # widget sudah dihancurkan Qt (clear)
                 self._fu_btn = None
 
@@ -1679,9 +1753,12 @@ class AnomaliView(FollowupTableMixin, QWidget):
         # v2.12.3: funnel filter + opsi sort di header tabel.
         # v2.12.4: SEMUA kolom ber-funnel (skip kolom ✓ + identitas __FP);
         # kolom mapping = state global ctx, lainnya = filter lokal view.
+        # v2.19.0: + skip __FPS (daftar sidik jari anggota grup — kolom
+        # internal tampilan grup, bukan nilai yang layak difilter).
         self._table.setup_header_filters(
             _HF_COLS, self._on_header_filter, self._hf_state,
-            all_cols=True, skip=(CHECK_COL, FP_COL, SRC_ROW_COL))
+            all_cols=True,
+            skip=(CHECK_COL, FP_COL, SRC_ROW_COL, FPS_LIST_COL))
         self._table.selectionModel().currentRowChanged.connect(
             lambda *_: self._on_selection())
         # v2.13.5: sinyal QTableView.clicked memicu di SETIAP klik — termasuk
@@ -1882,6 +1959,110 @@ class AnomaliView(FollowupTableMixin, QWidget):
         bukan sekadar menyegarkan kolom ✓ in-place."""
         return self._cb_followup.currentData() == "fu"
 
+    # ------------------------------------------------------------
+    # v2.19.0 — TAMPILAN GRUP per (JENIS × NAMA BARANG × NAMA RESTO)
+    # (sampel user "SAMPEL TAMPILAN BARU.xlsx"). Override mixin baris-
+    # tunggal: ✓ grup = SEMUA sidik jari anggota sekaligus.
+    # ------------------------------------------------------------
+    def _key_akhir(self) -> int:
+        """Hari terakhir periode run (penyebut AVG grup; fallback 31)."""
+        try:
+            return int((self._ctx.summary or {}).get("key_akhir", 31))
+        except (TypeError, ValueError):
+            return 31
+
+    def _display_df(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Override mixin — df tampilan = AGRAGASI GRUP per item×cabang.
+
+        Memo LRU per objek df (pola mixin — objek stabil → cache fit
+        DataTable kena antar-state); ✓ grup disegarkan tiap pemakaian.
+        Bila df TAK punya kunci grup (fixture minimal), fallback jalur
+        mixin baris-tunggal supaya tabel tetap tampil (defensif)."""
+        if df is None or df.empty or not all(
+                k in df.columns for k in ("JENIS", "NAMA BARANG",
+                                          "NAMA RESTO")):
+            return FollowupTableMixin._display_df(self, df)
+        key = id(df)
+        entry = self._disp_cache.get(key)
+        if entry is not None and entry[0]() is df and entry[1] is not None:
+            self._disp_cache.move_to_end(key)
+            disp = entry[1]
+            self._refresh_check_col(disp)
+            return disp
+        baseline = self._ctx.banding_baseline_effective()
+        fps = self._fps_for(df)
+        disp = group_anomali_display(
+            df, fps, self._ctx.config,
+            key_akhir=self._key_akhir(),
+            has_baseline=baseline is not None)
+        disp.insert(0, CHECK_COL, False)
+        self._refresh_check_col(disp)
+        self._disp_cache[key] = (weakref.ref(df), disp)
+        while len(self._disp_cache) > self._DISP_LRU:
+            self._disp_cache.popitem(last=False)
+        return disp
+
+    def _refresh_check_col(self, d: pd.DataFrame) -> None:
+        """Override hook mixin — ✓ GRUP = ADA anggota yang tercentang."""
+        if (CHECK_COL in d.columns and _GRP_FPS_COL in d.columns):
+            fset = self._ctx.followup_set()
+            d[CHECK_COL] = [
+                any(str(f) in fset for f in fps)
+                if isinstance(fps, tuple) else False
+                for fps in d[_GRP_FPS_COL]]
+        elif CHECK_COL in d.columns and FP_COL in d.columns:
+            d[CHECK_COL] = d[FP_COL].isin(self._ctx.followup_set())
+
+    def _on_check_toggled(self, row: int, checked: bool) -> None:
+        """Override mixin — klik ✓ GRUP = masukkan/keluarkan SEMUA baris
+        anggota grup (satu broadcast, pola add/remove_followup_many)."""
+        rec = self._table.model().record(row)
+        fps = rec.get(_GRP_FPS_COL) if rec is not None else None
+        if not isinstance(fps, tuple) or not fps:
+            return FollowupTableMixin._on_check_toggled(self, row, checked)
+        members = [str(f) for f in fps if str(f) not in ("", "nan")]
+        if checked:
+            self._ctx.add_followup_many(members)
+        else:
+            self._ctx.remove_followup_many(members)
+        n = len(self._ctx.followup_keys)
+        self._ctx.set_status(
+            (f"✓ {fmt_id(len(members))} baris grup masuk Follow Up"
+             if checked else
+             f"✓ {fmt_id(len(members))} baris grup dikeluarkan")
+            + f" — total {fmt_id(n)} baris", "done")
+
+    def _on_check_all(self) -> None:
+        """Override mixin — '☑ Centang yang tampil': semua baris ANGGOTA
+        semua grup yang tampil masuk follow-up (SATU broadcast)."""
+        mdf = self._table.model().dataframe
+        if (mdf is None or len(mdf) == 0
+                or _GRP_FPS_COL not in mdf.columns):
+            return FollowupTableMixin._on_check_all(self)
+        all_fps: list[str] = []
+        seen: set[str] = set()
+        for fps in mdf[_GRP_FPS_COL]:
+            if isinstance(fps, tuple):
+                for f in fps:
+                    s = str(f)
+                    if s and s != "nan" and s not in seen:
+                        seen.add(s)
+                        all_fps.append(s)
+        if not all_fps:
+            self._ctx.set_status("Tidak ada baris yang tampil — longgarkan "
+                                 "filter dulu.", "error")
+            return
+        added = self._ctx.add_followup_many(all_fps)
+        total = len(self._ctx.followup_keys)
+        if added:
+            self._ctx.set_status(
+                f"✓ {fmt_id(added)} baris masuk Follow Up — total "
+                f"{fmt_id(total)}", "done")
+        else:
+            self._ctx.set_status(
+                f"Semua baris yang tampil sudah tercentang (total "
+                f"{fmt_id(total)})", "done")
+
     def _refresh_table(self) -> None:
         """v2.8.3 — titik tunggal SEMUA jalur render tabel (filter/search/
         rentang hari/Hapus Filter/drill-down/dataset baru) dibungkus
@@ -1947,50 +2128,52 @@ class AnomaliView(FollowupTableMixin, QWidget):
                     self._change_cache.popitem(last=False)
         # Filter kategori perubahan (LOKAL view — bukan state): hanya
         # menyaring tampilan, KPI/label lain tidak terpengaruh.
+        # v2.19.0: filter kini LEVEL GRUP (dijalankan SETELAH agregasi —
+        # lihat bawah); dulu level baris sebelum grouping, yang membuat
+        # TOTAL grup terpangkas diam-diah saat kategori aktif.
         cat = self._cb_change.currentData() if self._cb_change.isEnabled() \
             else None
         self._cb_change.setEnabled(baseline is not None)
-        if cat and "PERUBAHAN" in df.columns:
-            df = df[df["PERUBAHAN"] == cat]
-        # v2.13.14 (gel-5 C15): judul kolom BULAN LALU + tooltip menyebut
+        # v2.13.14 (gel-5 C15) → v2.19.0: tooltip kolom banding menyebut
         # SUMBER pembandingnya (bulan pilihan combo Banding Periode /
         # Tipikal) — dulu label polos di SEMUA tab padahal "bulan lalu"
-        # beda sumber antar tab (Anomali = combo; Hari = bulan terbaru
-        # termuat) — dua angka tak terbandingkan tanpa konteks (audit
-        # C15). Alias headerData saja (pola 'Pembanding' → nama bulan di
-        # view_periode): data/sort/record tetap nama kanonik.
+        # beda sumber antar tab. Alias judul sampel user ([TOTAL]/[% to
+        # BOM]) dipasang bersamaan; kolom gabungan TOTAL BULAN LALU & %
+        # Selisih menerima tooltip sumber pembanding (judulnya tetap nama
+        # sampel — data/sort/record nama kanonik).
         lbl_b = baseline_label(baseline)
+        aliases = dict(_TABLE_ALIASES)
+        tips: dict[str, str] = {}
         if lbl_b:
-            self._table.model().set_header_map(
-                {"BULAN LALU": f"BULAN LALU ({lbl_b})"})
-            self._table.model().set_tooltip_map({
-                "BULAN LALU": COLUMN_TOOLTIPS.get("BULAN LALU", "")
+            tips[LASTMONTH_COMBINED_COL] = (
+                COLUMN_TOOLTIPS.get(LASTMONTH_COMBINED_COL, "")
                 + f"\nSumber saat ini: {lbl_b} (mengikuti combo tab "
-                "'Banding Periode')"})
-        else:
-            self._table.model().set_header_map(None)
-            self._table.model().set_tooltip_map(None)
+                "'Banding Periode')")
+        self._table.model().set_header_map(aliases or None)
+        self._table.model().set_tooltip_map(tips or None)
         cols = [c for c in TABLE_COLS if c in df.columns]
         # v2.7.0 (V26-C1): model memegang df PENUH (bukan irisan TABLE_COLS
         # lagi) — kolom non-tabel disembunyikan via visible_cols. Record
         # terpilih / double-klik tetap membawa SEMUA kolom (12 sinyal,
         # ANOMALY REASONS, peer, MAX, ...) ke pop-up detail + drill-down.
-        # v2.8.1: 8 kolom + sidebar membuat lantai header melebihi viewport
-        # laptop (1024) — JENIS & KETERANGAN dulu masuk narrow_hide
-        # (disembunyikan responsif saat sempit, muncul lagi saat melebar;
-        # alasan tetap ada di pop-up detail) supaya kolom inti + % to BOM
-        # tetap muat TANPA scrollbar horizontal.
-        # v2.18.7: JENIS keluar dari narrow_hide (permintaan user — kolom
-        # jenis waste/susut/trial wajib terbaca; pola tab Hari v2.12.3);
-        # skor bukan lagi kolom tabel (dihapus dari TABLE_COLS).
-        # v2.12.0: df tampilan = SALINAN + ✓ + __FP (kontrak 'konsumen
-        # hanya membaca' utk objek LRU/enriched tetap utuh; objek display
-        # di-memo per objek df → cache fit DataTable tetap kena).
+        # v2.19.0: df tampilan = AGRAGASI GRUP per (JENIS×NAMA BARANG×NAMA
+        # RESTO) — sampel user "SAMPEL TAMPILAN BARU.xlsx" (lihat
+        # _display_df override + ui/grouping.py).
+        # v2.12.0: objek display di-memo per objek df → cache fit DataTable
+        # tetap kena (kontrak 'konsumen hanya membaca' utk objek LRU/enriched
+        # tetap utuh — grup dibangun dari salinan).
         disp = self._display_df(df)
         # v2.12.4: funnel LOKAL kolom non-ctx — mask isin di atas display
         # (memo per state; ✓ disegarkan tiap pemakaian). 'Perubahan:' combo
-        # sudah di-apply di atas (df), funnel lokal di bawah (disp).
+        # dulu di sini — v2.19.0 dipindah SETELAH agregasi grup (lihat
+        # bawah) supaya TOTAL grup tak terpangkas.
         shown = self._mask_local(disp)
+        # v2.19.0 — filter kategori PERUBAHAN di level GRUP: kategori
+        # dihitung dari TOTAL grup vs bulan lalu grup (bukan memangkas
+        # anggota grup — TOTAL yang tampil selalu utuh).
+        if cat and "PERUBAHAN" in shown.columns:
+            sel = shown[shown["PERUBAHAN"] == cat]
+            shown = sel.copy() if len(sel) else sel
         # v2.18.7 — combo "Tampilkan:" ✓ Sudah masuk Follow Up: hanya
         # baris ber-✓ (filter LOKAL view — KPI/daftar Follow Up tak
         # tersentuh). .copy() eksplisit: hasil slice membawa _is_copy —
@@ -1999,10 +2182,14 @@ class AnomaliView(FollowupTableMixin, QWidget):
         if fu_only and CHECK_COL in shown.columns:
             sel = shown[shown[CHECK_COL].astype(bool)]
             shown = sel.copy() if len(sel) else sel
+        # Alias judul WAJIB ikut visible_cols (set_dataframe mencocokkan
+        # nama JUDUL/alias — pola view_followup v2.12.3) tanpa merusak
+        # SortControl (entri non-kanonik dibuang sejak v2.19.0).
+        visible = [CHECK_COL] + cols + [
+            _TABLE_ALIASES[c] for c in cols if c in _TABLE_ALIASES]
         self._table.set_dataframe(shown, sort_desc="ANOMALY SCORE",
-                                  narrow_hide=["KETERANGAN",
-                                               "BULAN LALU", "PERUBAHAN"],
-                                  visible_cols=[CHECK_COL] + cols)
+                                  narrow_hide=[SRC_GAB_COL, "PERUBAHAN"],
+                                  visible_cols=visible)
         # v2.16.1 — refresh pilihan kolom SortControl sesuai dataset baru
         if self._sort is not None:
             self._sort.refresh_columns()
@@ -2021,7 +2208,8 @@ class AnomaliView(FollowupTableMixin, QWidget):
                                         "filter atau ambang skor.")
         else:
             self._lbl_count.setText(
-                f"{fmt_id(len(shown))} anomali tampil (dari {fmt_id(full)} baris data)")
+                f"{fmt_id(len(shown))} grup item×cabang tampil (dari "
+                f"{fmt_id(full)} baris data)")
         self._refresh_kpi()
 
     def _refresh_kpi(self) -> None:

@@ -469,8 +469,17 @@ class TestV2120AnomaliView:
         return ctx, view
 
     def test_klik_mouse_centang(self):
+        # v2.19.0 — tampilan GRUP: klik ✓ grup = masukkan SEMUA anggota.
+        # Fixture _df_fu (5 baris) → 3 grup setelah grouping:
+        #   grup-0 AYAM·R1·WASTE (3 anggota: rows 0,1,2; fp unik = 2 krn
+        #     rows 0/1 kembar identik);
+        #   grup-1 BEBEK·R2·SUSUT (1 anggota: row 3);
+        #   grup-2 CUMI·R3·TRIAL  (1 anggota: row 4).
+        # Klik grup-1 (1 anggota) → 1 fp masuk follow-up (mirip semantik
+        # lama); klik grup-0 → 2 fp (kembar menyatu).
         from PySide6.QtCore import Qt, QPoint
         from PySide6.QtTest import QTest
+        from ui.grouping import FPS_COL
         ctx, view = self._view()
         view.show()
         ctx.set_dataset(_df_fu(), {"key_akhir": 31})
@@ -478,7 +487,8 @@ class TestV2120AnomaliView:
         _qapp().processEvents()
         m = view._table.model()
         assert m.dataframe.columns[0] == CHECK_COL
-        assert FP_COL in m.dataframe.columns
+        assert FPS_COL in m.dataframe.columns  # v2.19.0: grup → __FPS
+        # grup-1 = BEBEK (1 anggota) → klik = 1 fp masuk follow-up
         rect = view._table.visualRect(m.index(1, 0))
         QTest.mouseClick(view._table.viewport(), Qt.MouseButton.LeftButton,
                          Qt.KeyboardModifier.NoModifier,
@@ -495,6 +505,11 @@ class TestV2120AnomaliView:
         view.close()
 
     def test_tombol_centang_semua_yang_tampil(self):
+        # v2.19.0 — tampilan GRUP: 'Centang yang tampil' = masukkan SEMUA
+        # anggota SEMUA grup yang tampil (SATU broadcast). Fixture _df_fu
+        # 5 baris → 3 grup (AYAM 3-anggota/2-fp-unik + BEBEK + CUMI) →
+        # 4 fp unik total (kembar identik AYAM 0/1 menyatu).
+        from ui.grouping import FPS_COL
         ctx, view = self._view()
         view.show()
         ctx.set_dataset(_df_fu(), {"key_akhir": 31})
@@ -504,14 +519,20 @@ class TestV2120AnomaliView:
         _qapp().processEvents()
         # kembar identik → fp sama → 4 fp unik (0/1 menyatu)
         assert len(ctx.followup_keys) == 4
-        # klik ulang = 0 baru (idempoten)
-        assert ctx.add_followup_many(
-            [v for v in view._table.model().dataframe[FP_COL]]) == 0
+        # klik ulang = 0 baru (idempoten) — kumpulkan SEMUA fp anggota grup
+        all_fps: list[str] = []
+        for fps in view._table.model().dataframe[FPS_COL]:
+            if isinstance(fps, tuple):
+                all_fps.extend(str(f) for f in fps)
+        assert ctx.add_followup_many(all_fps) == 0
         view.close()
 
     def test_sinkron_inplace_bukan_reset(self):
         """Perubahan dari luar (mis. bulk) → kolom ✓ diperbarui TANPA
-        reset model (objek df model tetap — cache fit tak tersentuh)."""
+        reset model (objek df model tetap — cache fit tak tersentuh).
+        v2.19.0 — tampilan GRUP: ✓ grup = ADA anggota tercentang.
+        fps.iloc[0] = AYAM row-0 (grup-0 → ✓ True); fps.iloc[3] = BEBEK
+        (grup-1 → ✓ True). Grup-2 (CUMI) tak terkena → ✓ False."""
         ctx, view = self._view()
         view.show()
         ctx.set_dataset(_df_fu(), {"key_akhir": 31})
@@ -523,8 +544,10 @@ class TestV2120AnomaliView:
         ctx.add_followup_many([fps.iloc[0], fps.iloc[3]])
         _qapp().processEvents()
         assert m.dataframe is df_obj  # TAK di-reset
+        # grup-0 (AYAM) & grup-1 (BEBEK) ber-✓ True; grup-2 (CUMI) False
         assert bool(m.dataframe.iloc[0][CHECK_COL]) is True
-        assert bool(m.dataframe.iloc[3][CHECK_COL]) is True
+        assert bool(m.dataframe.iloc[1][CHECK_COL]) is True
+        assert bool(m.dataframe.iloc[2][CHECK_COL]) is False
         view.close()
 
     def test_display_memo_objek_stabil(self):

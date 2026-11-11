@@ -371,7 +371,10 @@ class TestKolomPctToBom:
         # di 740px kini (narrow_hide tetap terpasang utk viewport yang
         # lebih sempit lagi; jaminan yang dipin: % to BOM + JENIS tampak).
         assert not t.isColumnHidden(j), "JENIS kini selalu tampil (v2.18.7)"
-        assert "KETERANGAN" in (t._narrow_hide or [])
+        # v2.19.0: layout sampel user — KETERANGAN bukan lagi kolom tabel
+        # (digabung per grup item×cabang); narrow_hide kini SOURCE DATA
+        # GABUNGAN (kolom teks terpanjang) + PERUBAHAN.
+        assert "SOURCE DATA GABUNGAN" in (t._narrow_hide or [])
         # LANTAI HEADER (anti-terpotong): tiap kolom tampak ≥ lebar
         # teks judulnya (+26 padding, +20 funnel bila ber-funnel).
         fm = t.fontMetrics()

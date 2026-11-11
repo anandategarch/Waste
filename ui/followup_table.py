@@ -35,6 +35,10 @@ HF_COLS = {
     "KETERANGAN": "keterangan", "ANOMALY STATUS": "status",
 }
 
+# v2.19.0: kolom sidik jari BANYAK (tampilan grup tab Anomali) — di-skip
+# funnel header bersama kolom internal lain (setup_header_filters).
+FPS_LIST_COL = "__FPS"
+
 
 class FollowupTableMixin:
     """Perilaku tabel ✓-follow-up + funnel lokal — dipakai Anomali &
@@ -103,6 +107,17 @@ class FollowupTableMixin:
             self._fps_src = df
         return self._fps
 
+    def _refresh_check_col(self, d: pd.DataFrame) -> None:
+        """v2.19.0 — segarkan kolom ✓ df tampilan dari state follow-up.
+
+        Hook POLIMORFIK: default = baris tunggal (isit __FP — AnomaliView
+        LAMA & HariView); AnomaliView baru (tampilan GRUP per item×cabang)
+        meng-override: ✓ grup = ADA anggota yang tercentang. Dipanggil
+        _display_df (jalur cache) + _mask_local + _on_followup_changed
+        supaya SEMUA jalur menyegarkan ✓ dengan semantik view-nya."""
+        if CHECK_COL in d.columns and FP_COL in d.columns:
+            d[CHECK_COL] = d[FP_COL].isin(self._ctx.followup_set())
+
     def _display_df(self, df: pd.DataFrame) -> pd.DataFrame:
         """Salinan df + kolom ✓ (bool) + __FP — OBJEK STABIL per objek df
         (LRU + weakref, v2.12.1) supaya cache fit DataTable tetap kena
@@ -111,14 +126,16 @@ class FollowupTableMixin:
         state saat dipakai.
 
         Kontrak 'konsumen hanya membaca' utk objek LRU anomali / enriched
-        tetap utuh: mutasi centang hanya menyentuh salinan view ini."""
+        tetap utuh: mutasi centang hanya menyentuh salinan view ini.
+        v2.19.0: AnomaliView MENG-OVERRIDE metode ini (tampilan grup per
+        item×cabang — sampel user); implementasi baris-tunggal ini kini
+        hanya dipakai HariView."""
         key = id(df)
         entry = self._disp_cache.get(key)
         if entry is not None and entry[0]() is df and entry[1] is not None:
             self._disp_cache.move_to_end(key)
             disp = entry[1]
-            disp[CHECK_COL] = disp[FP_COL].isin(
-                self._ctx.followup_set())
+            self._refresh_check_col(disp)
             return disp
         fps = self._fps_for(df)
         disp = df.copy()
@@ -160,8 +177,10 @@ class FollowupTableMixin:
         m = self._table.model()
         mdf = m.dataframe
         if (mdf is not None and len(mdf) > 0
-                and CHECK_COL in mdf.columns and FP_COL in mdf.columns):
-            mdf[CHECK_COL] = mdf[FP_COL].isin(self._ctx.followup_set())
+                and CHECK_COL in mdf.columns):
+            # v2.19.0: segarkan ✓ lewat hook polimorfik (baris tunggal
+            # via __FP — grup tab Anomali via __FPS).
+            self._refresh_check_col(mdf)
             m.notify_column_changed(CHECK_COL)
 
     def _followup_filter_active(self) -> bool:
@@ -263,8 +282,8 @@ class FollowupTableMixin:
             self._mask_cache[key] = (weakref.ref(disp), out)
             while len(self._mask_cache) > 4:
                 self._mask_cache.popitem(last=False)
-        if CHECK_COL in out.columns and FP_COL in out.columns:
-            out[CHECK_COL] = out[FP_COL].isin(self._ctx.followup_set())
+        # v2.19.0: ✓ disegarkan lewat hook polimorfik (baris vs grup).
+        self._refresh_check_col(out)
         return out
 
     def _on_clear_filters(self) -> None:

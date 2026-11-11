@@ -95,13 +95,21 @@ def _fps():
 class TestJenisTampilSkorDihapus:
 
     def test_table_cols_kontrak(self):
-        """ANOMALY SCORE keluar dari TABLE_COLS; kolom inti + JENIS
-        tetap (permintaan user: jenis waste/susut/trial + hapus skor)."""
+        """v2.19.0 — layout sampel user 'SAMPEL TAMPILAN BARU.xlsx':
+        ANOMALY SCORE tetap keluar; 11 kolom sampel lengkap; KETERANGAN
+        & BULAN LALU/PERUBAHAN % digabung (SOURCE DATA GABUNGAN + kolom
+        gabungan total bulan lalu & selisih)."""
         from ui.view_anomali import TABLE_COLS
         assert "ANOMALY SCORE" not in TABLE_COLS
-        for col in ("ANOMALY STATUS", "PROFIL", "NAMA RESTO", "NAMA BARANG",
-                    "TOTAL", "% to BOM", "JENIS", "KETERANGAN"):
+        for col in ("JENIS", "NAMA BARANG", "NAMA RESTO",
+                    "SOURCE DATA GABUNGAN", "TOTAL", "% to BOM",
+                    "TOTAL BULAN LALU & % Selisih", "Selisih Bulan Lalu",
+                    "PERUBAHAN", "ANOMALY STATUS", "PROFIL"):
             assert col in TABLE_COLS, col
+        # kolom layout lama yang diganti/digabung
+        assert "KETERANGAN" not in TABLE_COLS
+        assert "BULAN LALU" not in TABLE_COLS
+        assert "PERUBAHAN %" not in TABLE_COLS
 
     def test_jenis_selalu_tampil_skor_disembunyikan(self):
         """JENIS tampak di tabel (bukan lagi narrow_hide); skor disembunyikan
@@ -116,7 +124,9 @@ class TestJenisTampilSkorDihapus:
             "kolom JENIS harus selalu tampak")
         assert "JENIS" not in (view._table._narrow_hide or []), (
             "JENIS tak boleh masuk narrow_hide lagi")
-        assert "KETERANGAN" in view._table._narrow_hide  # sisanya tetap
+        # v2.19.0: narrow_hide kini SOURCE DATA GABUNGAN + PERUBAHAN
+        # (KETERANGAN bukan lagi kolom tabel — digabung per grup).
+        assert "SOURCE DATA GABUNGAN" in view._table._narrow_hide
         view.close()
 
     def test_nilai_jenis_terbaca_waste_susut_trial(self):
@@ -161,7 +171,8 @@ class TestComboTampilkan:
         dfm = view._table.model().dataframe
         assert len(dfm) == 1
         assert dfm.iloc[0]["NAMA BARANG"] == "MIE"
-        assert "1 anomali tampil" in view._lbl_count.text()
+        # v2.19.0: label menyebut GRUP (tampilan item×cabang).
+        assert "1 grup" in view._lbl_count.text()
         # kembali ke Semua
         view._cb_followup.setCurrentIndex(0)
         assert len(view._table.model().dataframe) == 3

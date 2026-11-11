@@ -504,7 +504,10 @@ class TestA4ZonaCentang:
         TEPAT SATU sinyal check_toggled per klik (anti-dobel: state
         pra-super == state pasca-super → toggle manual; beda → delegate
         sudah men-toggle, jangan dobel). Klik indikator (x 10) juga
-        tepat satu — semua jalur satu toggle."""
+        tepat satu — semua jalur satu toggle.
+        v2.19.0 — tampilan GRUP: record ber-__FPS (tuple sidik jari
+        anggota grup); centang grup = masukkan SEMUA anggota. Cek
+        keanggotaan follow-up via anggota pertama grup."""
         from PySide6.QtCore import QEvent, QPointF, Qt
         from PySide6.QtGui import QMouseEvent
         from waste_anomaly.followup import CHECK_COL
@@ -542,8 +545,12 @@ class TestA4ZonaCentang:
             after = m.data(m.index(row, 0), Qt.ItemDataRole.CheckStateRole)
             assert after != before, (
                 f"klik {label} sel ✓ harus men-toggle (zona mati — A4)")
-            fp = str(m.record(row)["__FP"])
-            assert (fp in ctx.followup_set()) == (
+            # v2.19.0: record grup ber-__FPS (tuple); ambil anggota pertama
+            # utk cek keanggotaan follow-up (grup = 1 anggota di fixture ini
+            # krn tiap row punya NAMA RESTO/BARANG unik).
+            fps = m.record(row)["__FPS"]
+            fp0 = str(fps[0]) if isinstance(fps, tuple) else str(fps)
+            assert (fp0 in ctx.followup_set()) == (
                 after == Qt.CheckState.Checked)
         # tepat 3 toggle utk 3 klik (anti-dobel — jalur mana pun)
         assert len(sig) == 3, sig
