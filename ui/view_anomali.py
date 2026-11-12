@@ -98,6 +98,7 @@ from .grouping import (
     LASTMONTH_COMBINED_COL,
     SELISIH_COL,
     SRC_GAB_COL,
+    SRC_ROWS_COL as _GRP_SRC_ROWS_COL,
     group_anomali_display,
 )
 from .models import (
@@ -355,7 +356,7 @@ class _NoWheelFilter(QObject):
 
 
 # v2.17.3 — deteksi workbook = file sementara folder-flow (rekap_folder_*).
-# Edit nilai HANYA utk file asli (mode "Pilih File Sendiri" / format TEGAR).
+# Edit nilai HANYA utk file asli (mode "Pilih REKAP MENTAH" / format TEGAR).
 # File folder-flow = temp gabungan — edit akan tulis ke temp (bukan asli),
 # jadi tombol Simpan di-DISABLE + pesan jujur arahkan ke mode Pilih File.
 _FOLDER_TEMP_PREFIX = "rekap_folder_"
@@ -432,6 +433,10 @@ class DetailPanel(Card):
         self._day_edits: dict[str, QDoubleSpinBox] = {}
         self._day_orig: dict[str, float] = {}
         self._cur_src_row: int | None = None
+        # v2.19.2 — daftar semua baris Excel anggota grup (utk tulis-balik
+        # multi-anggota). [] = tak ada mapping; [n] = grup 1-anggota / baris
+        # tunggal; [n, m, ...] = grup multi-anggota (tulis ke SEMUA).
+        self._cur_src_rows: list[int] = []
         self._save_btn: QPushButton | None = None
         # v2.16.1 — no-wheel filter (blok scroll di spinbox) + save worker
         # (background thread supaya UI tak "Not Responding" saat tulis Excel).
@@ -490,6 +495,7 @@ class DetailPanel(Card):
         self._day_edits = {}
         self._day_orig = {}
         self._cur_src_row = None
+        self._cur_src_rows = []
         self._save_btn = None
         self._title.setText(self._PROMPT)
         old = self._content.layout()
@@ -537,6 +543,7 @@ class DetailPanel(Card):
         self._day_edits = {}
         self._day_orig = {}
         self._cur_src_row = None
+        self._cur_src_rows = []
         self._save_btn = None
         # Buang konten lama
         old = self._content.layout()
@@ -753,27 +760,45 @@ class DetailPanel(Card):
         # v2.16.0: peta hari kini EDITABLE — QDoubleSpinBox per hari (bukan
         # QLabel read-only). User ubah nilai → klik "Simpan koreksi" di
         # footer → tulis balik ke file Excel sumber (source_writer).
-        src_row_val = rec.get(SRC_ROW_COL)
-        src_row: int | None = None
-        if src_row_val is not None and not (
-                isinstance(src_row_val, float) and src_row_val != src_row_val):
-            try:
-                src_row = int(src_row_val)
-            except (TypeError, ValueError):
-                src_row = None
-        self._cur_src_row = src_row
-        # v2.19.0 — record GRUP (tampilan item×cabang, ada __FPS): peta
-        # hari READ-ONLY (nilai = JUMLAH semua alasan/KETERANGAN grup —
-        # edit nilai per-baris tak bisa dipetakan balik; edit tetap
-        # tersedia via pop-up baris detail di tab Hari Mencurigakan /
-        # Follow Up). Record baris tunggal: peta hari editable seperti
-        # biasa (v2.16.0).
-        is_group = isinstance(rec.get(_GRP_FPS_COL), tuple)
-        if is_group:
+        # v2.19.2 — PULIHKAN jalur edit v2.16.0 yg ter-regresi v2.19.0:
+        # grouping selalu membentuk __FPS tuple (bahkan 1 anggota) sehingga
+        # `is_group` selalu True → edit DISABLED total di tab Anomali.
+        # Sekarang dipakai __SRC_ROWS (tuple nomor baris Excel anggota):
+        #   • 1 anggota  → editable (jalur v2.16.0 pulih)
+        #   • >1 anggota → editable; koreksi ditulis ke SEMUA anggota grup
+        #     (konfirmasi daftar baris diberikan sebelum tulis). Nilai yg
+        #     tampil = JUMLAH anggota; ubah salah satu hari = tulis nilai
+        #     BARU yg sama ke tiap anggota (bukan distribusi — pilihan
+        #     sengaja: user mengoreksi satu nilai spesifik, semua alasan
+        #     grup menerima koreksi itu).
+        src_rows: list[int] = []
+        sr_val = rec.get(_GRP_SRC_ROWS_COL)
+        if isinstance(sr_val, tuple):
+            for v in sr_val:
+                try:
+                    src_rows.append(int(v))
+                except (TypeError, ValueError):
+                    pass
+        # Fallback bila __SRC_ROWS tak ada (dataset pra-v2.19.2 / fixture):
+        # pakai __SRC_ROW tunggal dari record (jalur lama).
+        if not src_rows:
+            src_row_val = rec.get(SRC_ROW_COL)
+            if src_row_val is not None and not (
+                    isinstance(src_row_val, float) and src_row_val != src_row_val):
+                try:
+                    src_rows = [int(src_row_val)]
+                except (TypeError, ValueError):
+                    src_rows = []
+        self._cur_src_rows = src_rows
+        self._cur_src_row = src_rows[0] if len(src_rows) == 1 else None
+        is_multi = len(src_rows) > 1
+        if is_multi:
             lay.addWidget(self._section(
-                f"Nilai per hari ({day_rng}) — GABUNGAN semua alasan grup "
-                "ini (jumlah per hari); sel merah = hari tersangka"))
-            lay.addWidget(self._day_map(rec))
+                f"Nilai per hari ({day_rng}) — GABUNGAN {len(src_rows)} baris "
+                f"alasan grup ini (jumlah per hari). EDITABLE: ubah angka → "
+                f"“Simpan koreksi” menulis nilai ke SEMUA {len(src_rows)} "
+                f"baris Excel anggota; sel merah = hari tersangka"))
+            lay.addWidget(self._editable_day_map(rec, day_names))
         else:
             lay.addWidget(self._section(
                 f"Nilai per hari ({day_rng}) — EDITABLE: ubah angka lalu klik "
@@ -800,10 +825,14 @@ class DetailPanel(Card):
         # v2.19.0 — sidik jari PLURAL: record grup membawa __FPS (semua
         # anggota); tombol follow-up grup = masukkan/keluarkan SEMUA
         # anggota sekaligus. Record baris tunggal: satu fp (v2.12.0).
+        # v2.19.2 — is_group = >1 anggota (bukan sekadar punya __FPS tuple,
+        # yg selalu True pasca-grouping). Follow-up plural hanya bila grup
+        # benar-benar multi-anggota.
         fps = self._row_fingerprints(rec)
         if fps:
             self._cur_fps = fps
             in_list = any(f in self._ctx.followup_set() for f in fps)
+            is_group = len(fps) > 1
             self._fu_btn = QPushButton(self._fu_btn_text(in_list, is_group))
             self._fu_btn.setToolTip(
                 ("Tambahkan / keluarkan SEMUA baris gabungan ini (grup "
@@ -821,6 +850,9 @@ class DetailPanel(Card):
         # Hanya aktif bila record punya __SRC_ROW (dipasang pipeline v2.16
         # via ensure_rekap_header). Tanpa itu, tulis-balik tidak tahu baris
         # Excel mana yang dituju → tombol di-disabled + pesan jujur.
+        # v2.19.2 — PULIHKAN edit grup: __SRC_ROWS (tuple anggota) dipakai,
+        # grup 1-anggota editable seperti biasa, grup multi-anggota editable
+        # dgn tulis ke SEMUA anggota (konfirmasi daftar baris diberikan).
         src_path = self._ctx.summary.get("workbook_path") if self._ctx.summary else None
         save = QPushButton("💾 Simpan koreksi hari ke file Excel")
         save.setStyleSheet(
@@ -830,8 +862,9 @@ class DetailPanel(Card):
             "QPushButton:hover { background:#b91c1c; }"
             "QPushButton:disabled { background:#cbd5e1; color:#94a3b8; }")
         # v2.17.3 — edit DISABLED utk file folder-flow (temp gabungan).
-        # Edit nilai HANYA utk file asli (mode Pilih File Sendiri / TEGAR).
+        # Edit nilai HANYA utk file asli (mode Pilih REKAP MENTAH / TEGAR).
         is_temp = _workbook_is_folder_temp(src_path)
+        src_rows = getattr(self, "_cur_src_rows", []) or []
         if is_temp:
             save.setEnabled(False)
             save.setToolTip(
@@ -841,30 +874,38 @@ class DetailPanel(Card):
                 "asli di folder (file asli utuh — tapi edit tidak permanen).\n\n"
                 "Untuk edit nilai permanen ke file asli:\n"
                 "  1. Tutup pop-up ini.\n"
-                "  2. Tab Pipeline → 🧮 Pilih File Sendiri (format REKAP "
+                "  2. Tab Pipeline → 🧮 Pilih REKAP MENTAH (format REKAP "
                 "MENTAH_..._TEGAR dgn kolom NAMA RESTO).\n"
                 "  3. Pilih file asli → Mulai Pipeline → edit via pop-up.")
-        elif self._cur_src_row is not None and src_path:
+        elif src_rows and src_path:
             save.setEnabled(True)
-            save.setToolTip(
-                f"Tulis nilai hari yang diubah ke file Excel sumber:\n"
-                f"  {src_path}\n"
-                f"  baris Excel #{self._cur_src_row} (sheet REKAP MENTAH)\n"
-                f"Backup otomatis dibuat sebelum tulis (.bak-*.xlsx).\n"
-                f"TOTAL dihitung ulang = sum hari 1-31 (konsisten).")
+            if len(src_rows) == 1:
+                save.setToolTip(
+                    f"Tulis nilai hari yang diubah ke file Excel sumber:\n"
+                    f"  {src_path}\n"
+                    f"  baris Excel #{src_rows[0]} (sheet REKAP MENTAH)\n"
+                    f"Backup otomatis dibuat sebelum tulis (.bak-*.xlsx).\n"
+                    f"TOTAL dihitung ulang = sum hari 1-31 (konsisten).")
+            else:
+                rows_txt = ", ".join(f"#{r}" for r in src_rows)
+                save.setToolTip(
+                    f"Tulis nilai hari yg diubah ke SEMUA {len(src_rows)} "
+                    f"baris Excel anggota grup (alasan berbeda, item+cabang "
+                    f"sama):\n"
+                    f"  {src_path}\n"
+                    f"  baris Excel: {rows_txt}\n"
+                    f"Nilai baru ditulis SAMA ke tiap anggota (bukan "
+                    f"distribusi). Konfirmasi daftar baris diberikan sebelum tulis.\n"
+                    f"TOTAL tiap anggota dihitung ulang = sum hari 1-31.")
         else:
             save.setEnabled(False)
-            if is_group:
-                why = ("baris GRUP item×cabang (gabungan banyak baris) — "
-                       "tak bisa dipetakan ke satu baris Excel")
-            else:
-                why = ("__SRC_ROW tidak ada di record"
-                       if self._cur_src_row is None
-                       else "workbook_path tidak ada di summary")
+            why = ("__SRC_ROW tidak ada di record"
+                   if not src_rows
+                   else "workbook_path tidak ada di summary")
             save.setToolTip(
                 f"Nonaktif — {why}.\n"
-                "Jalankan ulang pipeline (tab Pipeline → pilih file REKAP "
-                "MENTAH → Mulai) supaya mapping baris Excel terpasang.")
+                "Jalankan ulang pipeline (tab Pipeline → 🧮 Pilih REKAP "
+                "Mentah → Mulai) supaya mapping baris Excel terpasang.")
         save.clicked.connect(self._on_save_edits)
         self._save_btn = save
         alay.addWidget(save)
@@ -1247,7 +1288,7 @@ class DetailPanel(Card):
                 "sementara INI, BUKAN file asli di folder (file asli utuh, "
                 "tapi edit tidak permanen).\n\n"
                 "Untuk edit nilai permanen ke file asli:\n"
-                "  Tab Pipeline → 🧮 Pilih File Sendiri → pilih file format "
+                "  Tab Pipeline → 🧮 Pilih REKAP MENTAH → pilih file format "
                 "REKAP MENTAH_..._TEGAR (dgn kolom NAMA RESTO) → edit via "
                 "pop-up.")
             return
@@ -1265,13 +1306,18 @@ class DetailPanel(Card):
                 "Pop-up belum memuat grid hari. Klik baris tabel lain "
                 "untuk membuka detail.")
             return
-        src_row = self._cur_src_row
-        if src_row is None:
+        # v2.19.2 — src_rows (list, dukungan grup multi-anggota). Fallback
+        # ke _cur_src_row tunggal utk jalur lama (dataset pra-v2.19.2).
+        src_rows = list(getattr(self, "_cur_src_rows", []) or [])
+        if not src_rows and self._cur_src_row is not None:
+            src_rows = [int(self._cur_src_row)]
+        if not src_rows:
             QMessageBox.warning(
                 self, "Tidak bisa simpan",
-                "Record ini tidak punya mapping baris Excel (__SRC_ROW).\n"
-                "Jalankan ulang pipeline (tab Pipeline → pilih file REKAP "
-                "MENTAH → Mulai) supaya mapping terpasang.\n\n"
+                "Record ini tidak punya mapping baris Excel (__SRC_ROW / "
+                "__SRC_ROWS).\n"
+                "Jalankan ulang pipeline (tab Pipeline → 🧮 Pilih REKAP "
+                "Mentah → Mulai) supaya mapping terpasang.\n\n"
                 "Kemungkinan sebab: record dari dataset lama yang dimuat "
                 "sebelum fitur edit pop-up aktif.")
             return
@@ -1308,6 +1354,15 @@ class DetailPanel(Card):
             f"{fmt_color_styled_write_day_value(day_edits[d])}"
             for d in sorted(day_edits, key=int))
         from pathlib import Path
+        is_multi = len(src_rows) > 1
+        if is_multi:
+            rows_txt = ", ".join(f"#{r}" for r in src_rows)
+            baris_line = (f"  Baris Excel ({len(src_rows)} anggota grup): "
+                          f"{rows_txt}\n"
+                          f"  Nilai baru ditulis SAMA ke SEMUA anggota "
+                          f"(alasan berbeda, item+cabang sama).\n")
+        else:
+            baris_line = f"  Baris Excel: #{src_rows[0]}\n"
         confirm = QMessageBox(self)
         confirm.setIcon(QMessageBox.Icon.Question)
         confirm.setWindowTitle("Konfirmasi Simpan Koreksi")
@@ -1315,7 +1370,7 @@ class DetailPanel(Card):
             f"Akan menulis {len(day_edits)} koreksi hari ke file Excel "
             f"sumber:\n\n"
             f"  File: {Path(src_path).name}\n"
-            f"  Baris Excel: #{src_row}\n\n"
+            f"{baris_line}\n"
             f"Perubahan:\n{changes_txt}\n\n"
             f"TOTAL akan dihitung ulang = sum hari 1-31.\n"
             f"Tanpa backup (langsung tulis — cepat).\n\n"
@@ -1331,9 +1386,13 @@ class DetailPanel(Card):
         confirm.deleteLater()
 
         # 3. Start worker (background thread — UI tak membeku)
+        # v2.19.2 — src_rows (list) utk grup multi-anggota; worker tulis ke
+        # SEMUA anggota (lihat SaveEditsWorker.run).
         self._pending_edits = dict(day_edits)
-        self._save_worker = SaveEditsWorker(src_path, src_row, day_edits,
-                                            parent=self)
+        self._pending_src_rows = list(src_rows)
+        self._save_worker = SaveEditsWorker(
+            src_path, src_rows[0], day_edits, parent=self,
+            src_rows=src_rows if is_multi else None)
         self._save_worker.done.connect(self._on_save_done)
         self._save_worker.failed.connect(self._on_save_failed)
         # v2.16.2: safety net — finished→deleteLater supaya worker di-cleanup
@@ -1351,11 +1410,13 @@ class DetailPanel(Card):
                 sp.setEnabled(False)
             except RuntimeError:
                 pass
+        rows_lbl = (f"{len(src_rows)} baris grup ({rows_txt})"
+                    if is_multi else f"baris #{src_rows[0]}")
         self._ctx.set_status(
             f"Menyimpan {len(day_edits)} koreksi ke '{Path(src_path).name}' "
-            f"baris #{src_row} (background)…", "info")
+            f"{rows_lbl} (background)…", "info")
         self._ctx.log(f"[edit-pop-up] mulai simpan (background): "
-                      f"{len(day_edits)} hari ke baris #{src_row}")
+                      f"{len(day_edits)} hari ke {rows_lbl}")
         self._save_worker.start()
 
     def _on_save_done(self, result: dict) -> None:
@@ -1363,44 +1424,61 @@ class DetailPanel(Card):
 
         Dipanggil di UI thread (signal Qt cross-thread). result = dict dari
         write_day_edits (ok/sheet/src_row/cells_written/total_new/...).
+        v2.19.2 — result["src_rows"] (list) utk grup multi-anggota: ctx.df
+        disinkron utk SEMUA anggota + day_edited dipancar per-anggota.
         """
         if self._save_worker is not None:
             self._save_worker.deleteLater()
             self._save_worker = None
         src_row = result.get("src_row")
+        # v2.19.2 — daftar semua baris anggota grup (multi) atau [src_row].
+        result_rows = list(result.get("src_rows") or ([src_row] if src_row else []))
         day_edits = self._pending_edits or {}
         self._pending_edits = None
         n_written = result.get("cells_written", 0)
         total_new = result.get("total_new")
+        # total per-anggota (utk sinkron ctx.df akurat — tiap anggota punya
+        # TOTAL sendiri = sum hari setelah koreksi).
+        per_row_results = result.get("results") or [result]
         src_path = (self._ctx.summary.get("workbook_path")
                     if self._ctx.summary else "")
         from pathlib import Path
         # Re-enable tombol + spinbox
         self._reset_save_ui()
-        # Update ctx.df utk baris ini
+        # Update ctx.df utk SEMUA baris anggota grup (v2.19.2)
         ctx_df = self._ctx.df
-        if src_row is not None:
-            ctx_label = self._find_df_label_by_src_row(ctx_df, src_row)
-            if ctx_label is not None and ctx_df is not None:
+        synced: list[int] = []
+        skipped_sync: list[int] = []
+        if ctx_df is not None and SRC_ROW_COL in ctx_df.columns:
+            for r, pres in zip(result_rows, per_row_results):
+                lbl = self._find_df_label_by_src_row(ctx_df, r)
+                if lbl is None:
+                    skipped_sync.append(r)
+                    continue
                 for day, val in day_edits.items():
                     if day in ctx_df.columns:
-                        ctx_df.at[ctx_label, day] = val
-                if total_new is not None and "TOTAL" in ctx_df.columns:
-                    ctx_df.at[ctx_label, "TOTAL"] = total_new
-            else:
-                self._ctx.log(
-                    f"[edit-pop-up] WARNING: baris __SRC_ROW={src_row} tak "
-                    f"ketemu di ctx.df — update tabel dilewati. File Excel "
-                    f"SUDAH tersimpan; re-run pipeline utk sinkron.")
-        # Pancar signal — view pemilik update model df + emit dataChanged
-        if src_row is not None:
-            self.day_edited.emit(src_row, dict(day_edits), total_new)
+                        ctx_df.at[lbl, day] = val
+                t_new = pres.get("total_new")
+                if t_new is not None and "TOTAL" in ctx_df.columns:
+                    ctx_df.at[lbl, "TOTAL"] = t_new
+                synced.append(r)
+        elif result_rows:
+            skipped_sync = list(result_rows)
+        for r in skipped_sync:
+            self._ctx.log(
+                f"[edit-pop-up] WARNING: baris __SRC_ROW={r} tak ketemu di "
+                f"ctx.df — update tabel dilewati. File Excel SUDAH tersimpan; "
+                f"re-run pipeline utk sinkron.")
+        # Pancar signal per-anggota — view pemilik update model df +
+        # emit dataChanged (memberi tahu tiap baris berubah).
+        for r, pres in zip(result_rows, per_row_results):
+            self.day_edited.emit(r, dict(day_edits), pres.get("total_new"))
         # Update spinbox "original" HANYA bila pop-up masih tampilkan record
         # yg sama (user tak klik baris lain saat worker jalan). Bila record
         # berganti, spinbox sekarang = record baru — jangan sentuh style-nya.
-        same_record = (self._cur_src_row is not None
-                       and src_row is not None
-                       and self._cur_src_row == src_row)
+        cur_rows = getattr(self, "_cur_src_rows", None) or (
+            [self._cur_src_row] if self._cur_src_row is not None else [])
+        same_record = bool(cur_rows) and set(cur_rows) == set(result_rows)
         if same_record:
             for day, val in day_edits.items():
                 self._day_orig[day] = float(val)
@@ -1414,25 +1492,26 @@ class DetailPanel(Card):
                     except RuntimeError:
                         pass
         # Status + log transparan
+        is_multi = result.get("multi", False)
+        rows_lbl = (f"{len(result_rows)} baris grup "
+                    f"({', '.join(f'#{r}' for r in result_rows)})"
+                    if is_multi else f"baris #{src_row}")
         self._ctx.log(
             f"[edit-pop-up] SIMPAN OK: {n_written} sel hari ditulis ke "
-            f"'{Path(src_path).name}' baris #{src_row}. "
+            f"'{Path(src_path).name}' {rows_lbl}. "
             f"TOTAL: {result.get('prev_total')!r} → {total_new!r}.")
         self._ctx.set_status(
-            f"Tersimpan: {n_written} hari ke baris #{src_row} "
+            f"Tersimpan: {n_written} hari ke {rows_lbl} "
             f"({Path(src_path).name}). TOTAL={fmt_cell(total_new)}. "
             f"Skor anomali/AVG/MAX STALE — re-run pipeline utk update.",
             "done")
-        # v2.16.2: dialog sukses HANYA bila panel masih visible. Bila user
-        # sudah pindah baris / filter berganti (panel di-clear+hide saat
-        # refresh), dialog dari parent hidden membingungkan. Log+status sudah
-        # cukup notifikasi; ctx.df + signal sudah diupdate di atas.
+        # v2.16.2: dialog sukses HANYA bila panel masih visible.
         if self.isVisible():
             QMessageBox.information(
                 self, "Koreksi Tersimpan",
                 f"Berhasil menulis {n_written} koreksi hari ke file Excel:\n"
                 f"  {Path(src_path).name}\n"
-                f"  Baris #{src_row} (sheet '{result.get('sheet', '?')}')\n\n"
+                f"  {rows_lbl} (sheet '{result.get('sheet', '?')}')\n\n"
                 f"TOTAL diperbarui: {fmt_cell(result.get('prev_total'))} → "
                 f"{fmt_cell(total_new)}\n\n"
                 f"PERHATIAN: Skor anomali, AVG, MAX, dan metrik turunan di "
@@ -2409,10 +2488,67 @@ class AnomaliView(FollowupTableMixin, QWidget):
                 f"refresh tabel berikutnya.")
             return
         mdf = model.dataframe
-        if mdf is None or mdf.empty or SRC_ROW_COL not in mdf.columns:
+        if mdf is None or mdf.empty:
             self._ctx.log(
-                f"[edit-pop-up] model df tak punya {SRC_ROW_COL} — skip "
-                f"re-render sel. Refresh tabel berikutnya ambil nilai baru.")
+                f"[edit-pop-up] model df kosong — skip re-render sel. "
+                f"Refresh tabel berikutnya ambil nilai baru.")
+            return
+        # v2.19.2 — tampilan GRUP: model df punya __SRC_ROWS (tuple anggota),
+        # BUKAN __SRC_ROW tunggal. Cari baris grup yg anggotanya memuat
+        # src_row, lalu recomput JUMLAH hari grup dari ctx.df (sum semua
+        # anggota — bukan pakai nilai tunggal). Total grup = sum hari grup.
+        ctx_df = self._ctx.df
+        if (_GRP_SRC_ROWS_COL in mdf.columns
+                and ctx_df is not None and SRC_ROW_COL in ctx_df.columns):
+            grp_label = None
+            for lbl, rows in mdf[_GRP_SRC_ROWS_COL].items():
+                if isinstance(rows, tuple) and src_row in rows:
+                    grp_label = lbl
+                    break
+            if grp_label is None:
+                self._ctx.log(
+                    f"[edit-pop-up] baris __SRC_ROW={src_row} tak tampak di "
+                    f"tabel grup (terfilter keluar) — skip re-render. ctx.df "
+                    f"sudah diupdate.")
+                return
+            # Recomput sum hari grup dari ctx.df (anggota via __SRC_ROWS).
+            member_rows = list(mdf.at[grp_label, _GRP_SRC_ROWS_COL])
+            src_col = ctx_df[SRC_ROW_COL]
+            member_mask = src_col.isin(member_rows)
+            members = ctx_df[member_mask]
+            for day in day_edits:
+                if day in mdf.columns and day in members.columns:
+                    new_sum = pd.to_numeric(
+                        members[day], errors="coerce").fillna(0.0).sum()
+                    mdf.at[grp_label, day] = float(new_sum)
+                    try:
+                        model.notify_column_changed(day)
+                    except Exception as exc:  # noqa: BLE001
+                        self._ctx.log(
+                            f"[edit-pop-up] WARNING: notify_column_changed "
+                            f"hari {day} gagal ({exc}).")
+            if "TOTAL" in mdf.columns:
+                day_cols = [c for c in (str(i) for i in range(1, 32))
+                            if c in members.columns]
+                new_total = (pd.to_numeric(members[day_cols], errors="coerce")
+                             .fillna(0.0).sum().sum() if day_cols
+                             else pd.to_numeric(
+                                 members.get("TOTAL", pd.Series([0])),
+                                 errors="coerce").fillna(0.0).sum())
+                mdf.at[grp_label, "TOTAL"] = float(new_total)
+                try:
+                    model.notify_column_changed("TOTAL")
+                except Exception as exc:  # noqa: BLE001
+                    self._ctx.log(
+                        f"[edit-pop-up] WARNING: notify_column_changed TOTAL "
+                        f"gagal ({exc}).")
+            return
+        # Jalur lama (baris tunggal — tab Hari / Follow Up / fixture tanpa
+        # grouping): cari baris via __SRC_ROW langsung.
+        if SRC_ROW_COL not in mdf.columns:
+            self._ctx.log(
+                f"[edit-pop-up] model df tak punya {SRC_ROW_COL}/{_GRP_SRC_ROWS_COL} "
+                f"— skip re-render sel. Refresh tabel berikutnya ambil nilai baru.")
             return
         col = mdf[SRC_ROW_COL]
         if not pd.api.types.is_numeric_dtype(col):

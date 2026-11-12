@@ -64,4 +64,5 @@ workers.py::HistoryWorker
 workers.py::PipelineWorker
 workers.py::RekapImportWorker
 workers.py::SaveEditsWorker
+workers.py::_build_grouped_layout_df
 workers.py::_extra_sheets

@@ -87,6 +87,32 @@ def _extra_sheets(df: pd.DataFrame, key_akhir: int, log) -> dict:
     return sheets
 
 
+def _build_grouped_layout_df(
+    df: pd.DataFrame, key_akhir: int, log
+) -> pd.DataFrame | None:
+    """v2.19.2 — bangun DataFrame grup utk sheet 'Anomali Grup'.
+
+    Memakai ui.grouping.group_anomali_display (agregasi per JENIS×NAMA
+    BARANG×NAMA RESTO — sama dgn tampilan tab Anomali). Mencakup SEMUA baris
+    (bukan hanya anomali) — sesuai sampel SAMPEL TAMPILAN BARU.xlsx yg
+    menampilkan seluruh item×cabang. has_baseline=False (kolom BULAN LALU
+    diisi bila df sudah ber-annotate change_vs_history; selain itu kosong).
+    """
+    if df is None or df.empty:
+        return None
+    if not all(k in df.columns for k in ("JENIS", "NAMA BARANG", "NAMA RESTO")):
+        return None
+    from .grouping import group_anomali_display
+    fps = fingerprint_series(df)
+    cfg = load_config()
+    grouped = group_anomali_display(
+        df, fps, cfg, key_akhir=key_akhir, has_baseline=False)
+    if grouped is None or grouped.empty:
+        return None
+    log(f"[export] sheet 'Anomali Grup': {len(grouped)} grup item×cabang")
+    return grouped
+
+
 class PipelineWorker(QThread):
     """Jalankan pipeline penuh di background thread.
 
@@ -159,10 +185,20 @@ class ExportWorker(QThread):
 
     def run(self) -> None:
         extra = _extra_sheets(self._df, self._key_akhir, self._log_cb)
+        # v2.19.2 — bangun DataFrame grup (layout SAMPEL TAMPILAN BARU) utk
+        # sheet 'Anomali Grup'. Best-effort: bila grouping gagal, export
+        # tetap jalan tanpa sheet ini (sheet opsional).
+        grouped_df = None
+        try:
+            grouped_df = _build_grouped_layout_df(
+                self._df, self._key_akhir, self._log_cb)
+        except Exception as e:  # noqa: BLE001 — sheet opsional best-effort
+            self._log_cb(f"⚠ Sheet 'Anomali Grup' dilewati: {e}")
         try:
             result = export_to_excel(
                 self._df, self._path, self._config, self._key_akhir,
                 self._log_lines, extra_sheets=extra,
+                grouped_layout_df=grouped_df,
             )
         except Exception as e:  # defensive — kontrak exporter dict
             self.failed.emit(str(e))
@@ -297,20 +333,41 @@ class SaveEditsWorker(QThread):
     failed = Signal(str, str)  # (pesan singkat, traceback)
 
     def __init__(self, source_path: str, src_row: int,
-                 day_edits: dict, parent=None) -> None:
+                 day_edits: dict, parent=None,
+                 src_rows: list[int] | None = None) -> None:
         super().__init__(parent)
         self._source = str(source_path)
-        self._src_row = int(src_row)
         self._day_edits = dict(day_edits)
+        # v2.19.2 — dukungan grup MULTI-anggota: bila src_rows (list) akan
+        # tulis koreksi yg SAMA ke SEMUA baris Excel anggota grup. src_row
+        # tunggal (jalur lama v2.16.0) tetap dipakai bila src_rows=None.
+        if src_rows:
+            self._src_rows = [int(r) for r in src_rows]
+        else:
+            self._src_rows = [int(src_row)]
 
     def run(self) -> None:
         try:
             from waste_anomaly.source_writer import (
                 SourceWriteError, write_day_edits)
-            result = write_day_edits(
-                self._source, self._src_row, self._day_edits,
-                logger=None, backup=False)
-            self.done.emit(result)
+            results: list[dict] = []
+            # Tulis tiap baris anggota grup. Backup dilewati (permintaan user
+            # v2.16.1). Bila satu baris gagal — hentikan & lempar (anti
+            # sebagian-tulis: file bisa konsisten atau gagal total).
+            for r in self._src_rows:
+                res = write_day_edits(
+                    self._source, r, self._day_edits,
+                    logger=None, backup=False)
+                results.append(res)
+            # Agregat hasil: emit result baris PERTAMA + ringkasan multi-row
+            # (cells_written = total seluruh baris; src_rows = semua; total_new
+            # = total baris pertama — utk sinkron ctx.df per-anggota di view).
+            agg = dict(results[0])
+            agg["cells_written"] = sum(r.get("cells_written", 0) for r in results)
+            agg["src_rows"] = self._src_rows
+            agg["results"] = results
+            agg["multi"] = len(self._src_rows) > 1
+            self.done.emit(agg)
         except SourceWriteError as e:
             # v2.16.2: sertakan traceback supaya root cause (chained
             # OSError/openpyxl) tak hilang dari log. Sebelumnya: "" (kosong).

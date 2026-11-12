@@ -84,6 +84,91 @@ THIN_BORDER = Border(
 STREAMING_THRESHOLD_DEFAULT = 35_000
 
 
+# ============================================================
+# GROUPED LAYOUT SHEET — SAMPEL TAMPILAN BARU (v2.19.2)
+# ============================================================
+# Sheet tambahan "Anomali Grup" mengikuti sampel user: SATU BARIS per
+# pasangan (JENIS × NAMA BARANG × NAMA RESTO), urut menurut (JENIS, NAMA
+# BARANG, NAMA RESTO), dgn BARIS KOSONG pemisah antar grup (JENIS, NAMA
+# BARANG). 11 kolom persis sampel:
+#   JENIS · NAMA BARANG · NAMA RESTO · SOURCE DATA GABUNGAN · [TOTAL] ·
+#   [% to BOM] · TOTAL BULAN LALU & % Selisih · Selisih Bulan Lalu ·
+#   PERUBAHAN · ANOMALY STATUS · PROFIL
+#
+# DataFrame grup dibangun pemanggil (ui/workers.py via ui.grouping
+# .group_anomali_display) lalu diteruskan ke export_to_excel lewat param
+# ``grouped_layout_df``. Engine tetap Qt-free (grouping pure-pandas; ui
+# memanggil & meneruskan hasilnya). Kolom internal (__SRC_ROW/__FPS/
+# __SRC_ROWS) dibuang sebelum tulis.
+
+# Nama kolom grup (string biasa — engine tak impor ui.grouping; pemanggil
+# membangun df dgn nama ini). Didefinisikan di awal supaya _GROUPED_COLS
+# di bawah tak dependensi impor silang.
+SRC_GAB_COL_NAME = "SOURCE DATA GABUNGAN"
+LASTMONTH_COMBINED_COL_NAME = "TOTAL BULAN LALU & % Selisih"
+SELISIH_COL_NAME = "Selisih Bulan Lalu"
+
+_GROUPED_COLS = [
+    "JENIS", "NAMA BARANG", "NAMA RESTO", SRC_GAB_COL_NAME,
+    "TOTAL", "% to BOM",
+    LASTMONTH_COMBINED_COL_NAME, SELISIH_COL_NAME, "PERUBAHAN",
+    "ANOMALY STATUS", "PROFIL",
+]
+_GROUPED_ALIASES = {"TOTAL": "[TOTAL]", "% to BOM": "[% to BOM]"}
+# Format angka: TOTAL/Selisih pakai pemisah ribuan; % to BOM skala 0-1 → 0%.
+_GROUPED_NUMFMT_INT = '#,##0;;"-"'
+_GROUPED_NUMFMT_PCT = '0%'
+
+
+def _fmt_id_num(value, decimals: int = 0) -> str:
+    """Format angka gaya Indonesia: ribuan '.', desimal ','.
+
+    Replika minimal ui/shared.py:fmt_id (engine tak boleh impor ui).
+    None/NaN → ''.
+    """
+    if value is None:
+        return ""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if f != f:  # NaN
+        return ""
+    s = f"{f:,.{decimals}f}"
+    return s.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _fmt_combined_lastmonth(value, delta_pct) -> str:
+    """Format kolom 'TOTAL BULAN LALU & % Selisih' — sampel: '1.969,1 (-30%)'.
+
+    Replika ui/models.py:fmt_lastmonth_combined (engine tak boleh impor ui).
+    value      = total bulan lalu (numerik; NaN/None → '' — grup BARU).
+    delta_pct  = PERUBAHAN % skala 0-100 (NaN → tanpa kurung persen).
+    """
+    import math
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return ""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if f != f:
+        return ""
+    base = _fmt_id_num(f, 1)
+    if delta_pct is None:
+        return base
+    try:
+        d = float(delta_pct)
+    except (TypeError, ValueError):
+        return base
+    if d != d:
+        return base
+    if d == 0:
+        return f"{base} (0%)"
+    sign = "+" if d > 0 else "-"
+    return f"{base} ({sign}{abs(d):.0f}%)"
+
+
 
 # ============================================================
 # MAIN ENTRY
@@ -96,6 +181,7 @@ def export_to_excel(
     key_akhir: int,
     log_lines: list[str],
     extra_sheets: dict[str, pd.DataFrame] | None = None,
+    grouped_layout_df: pd.DataFrame | None = None,
 ) -> dict:
     """Tulis multi-sheet xlsx. Return summary dict.
 
@@ -111,6 +197,11 @@ def export_to_excel(
     ditulis SETELAH 'Pareto Alasan' dan SEBELUM 'Log Run' (dipakai UI untuk
     sheet analisa baru: Waste per Hari, Alasan x Hari, Money View, Data
     Quality). Sheet kosong/None di-skip; nama didedupe otomatis.
+    v2.19.2: ``grouped_layout_df`` (opsional) = DataFrame grup hasil
+    group_anomali_display; ditulis sbg sheet 'Anomali Grup' SETELAH
+    'Anomali Prioritas' & SEBELUM 'Per Cabang'. Layout SAMPEL TAMPILAN
+    BARU: grup per NAMA BARANG + baris kosong pemisah (lihat
+    _write_grouped_layout_sheet). None/kosong → di-skip graceful.
     """
     output_path = Path(output_path)
     try:
@@ -127,17 +218,27 @@ def export_to_excel(
     # laporan Excel — pengguna melihat kolom teknis yang tak diminta di
     # sheet Detail/Anomali. Drop dari df utama & tiap extra sheet (kolom
     # internal tetap utuh di df in-memory pemanggil — ini salinan view).
+    # v2.19.2 — __FPS & __SRC_ROWS (kolom internal grouping) juga dibuang.
     from .rekap_import import SRC_ROW_COL
-    if SRC_ROW_COL in df.columns:
-        df = df.drop(columns=[SRC_ROW_COL])
+    _INTERNAL_DROP = [SRC_ROW_COL, "__FPS", "__SRC_ROWS"]
+    drop_main = [c for c in _INTERNAL_DROP if c in df.columns]
+    if drop_main:
+        df = df.drop(columns=drop_main)
     if extra_sheets:
         extra_sheets = {
-            name: (ex_df.drop(columns=[SRC_ROW_COL])
+            name: (ex_df.drop(columns=[c for c in _INTERNAL_DROP
+                                       if getattr(ex_df, "columns", None)
+                                       is not None and c in ex_df.columns])
                    if ex_df is not None and getattr(ex_df, "columns", None)
-                   is not None and SRC_ROW_COL in ex_df.columns
-                   else ex_df)
+                   is not None else ex_df)
             for name, ex_df in extra_sheets.items()
         }
+    # v2.19.2 — grouped_layout_df: buang kolom internal sebelum tulis.
+    if (grouped_layout_df is not None
+            and getattr(grouped_layout_df, "columns", None) is not None):
+        g_drop = [c for c in _INTERNAL_DROP if c in grouped_layout_df.columns]
+        if g_drop:
+            grouped_layout_df = grouped_layout_df.drop(columns=g_drop)
 
     # F10 (v2.4.0): pilih mode — normal (formatting penuh) vs streaming
     # (memori konstan untuk data besar). Threshold bisa di-override via
@@ -175,6 +276,22 @@ def export_to_excel(
         else:
             df_anomali = df.iloc[0:0]
         _write(wb, anomali_name, df_anomali, freeze="A2", status_col=status_col if has_status else None)
+
+        # ---- 2b. Anomali Grup (layout SAMPEL TAMPILAN BARU v2.19.2) ----
+        # Satu baris per (JENIS×NAMA BARANG×NAMA RESTO), urut, baris KOSONG
+        # pemisah antar grup (JENIS, NAMA BARANG). Dipakai utk tampilan ringkas
+        # per item seperti sampel user. Di-skip bila grouped_layout_df tak
+        # diberikan / kosong / streaming mode (mode streaming tak mendukung
+        # formatter per-cell — fitur ini ditunda di data ekstrem).
+        if (not use_streaming and grouped_layout_df is not None
+                and not grouped_layout_df.empty):
+            grouped_name = sheet_cfg.get("grouped_sheet", "Anomali Grup")
+            try:
+                _write_grouped_layout_sheet(
+                    wb, grouped_name, grouped_layout_df,
+                    status_col=status_col if has_status else None)
+            except Exception:  # noqa: BLE001 — sheet opsional best-effort
+                pass
 
         # ---- 3. Per Cabang ----
         per_cabang_name = sheet_cfg.get("per_cabang_sheet", "Per Cabang")
@@ -458,6 +575,158 @@ def _column_cell_values(series: pd.Series) -> list:
     if pd.api.types.is_float_dtype(dtype) or pd.api.types.is_integer_dtype(dtype):
         return series.astype(object).where(series.notna(), None).tolist()
     return [_to_cell_value(v) for v in series.tolist()]
+
+
+def _write_grouped_layout_sheet(
+    wb: Workbook,
+    sheet_name: str,
+    df: pd.DataFrame,
+    status_col: str | None = "ANOMALY STATUS",
+):
+    """Tulis sheet 'Anomali Grup' — layout SAMPEL TAMPILAN BARU (v2.19.2).
+
+    Satu baris per (JENIS × NAMA BARANG × NAMA RESTO), urut menurut
+    (JENIS, NAMA BARANG, NAMA RESTO), dgn BARIS KOSONG pemisah antar grup
+    (JENIS, NAMA BARANG). 11 kolom sampel; [TOTAL]/Selisih dgn pemisah
+    ribuan, [% to BOM] format persen, 'TOTAL BULAN LALU & % Selisih' sebagai
+    teks 'nilai (±X%)' gaya Indonesia (replika fmt_lastmonth_combined).
+    ANOMALY STATUS diberi warna status (sama sheet Anomali Prioritas).
+
+    ``df`` = DataFrame grup hasil group_anomali_display (pemanggil membangun).
+    Kolom internal (__SRC_ROW/__FPS/__SRC_ROWS) dibuang pemanggil sebelum
+    memanggil (lihat export_to_excel). Bila kolom sampel tak ada di df,
+    di-skip graceful (hanya kolom yg ada yg ditulis).
+    """
+    sheet_name = _dedupe_sheet_name(sheet_name, wb.sheetnames)
+    ws = wb.create_sheet(title=sheet_name)
+
+    if df is None or df.empty:
+        ws["A1"] = f"(Tidak ada data untuk sheet '{sheet_name}')"
+        ws["A1"].font = EMPTY_NOTE_FONT
+        return
+
+    # v2.19.2 — SELALU tulis 11 header sampel (meski kolom tak ada di df —
+    # mis. tanpa baseline, kolom BULAN LALU/Selisih/PERUBAHAN tak dihasilkan
+    # grouping → header tampil dgn sel kosong, persis struktur sampel user).
+    # Mapping nama kolom sampel → nama kolom df (None = tak ada → sel kosong).
+    cols_map: list[tuple[str, str | None]] = []
+    for c in _GROUPED_COLS:
+        cols_map.append((c, c if c in df.columns else None))
+    headers = [_GROUPED_ALIASES.get(c, c) for c, _ in cols_map]
+    # Indeks kolom sampel (posisi di header) utk number format + status color.
+    status_idx = next((i for i, (c, _) in enumerate(cols_map)
+                       if c == status_col), None) if status_col else None
+    total_idx = next((i for i, (c, _) in enumerate(cols_map) if c == "TOTAL"), None)
+    pct_idx = next((i for i, (c, _) in enumerate(cols_map) if c == "% to BOM"), None)
+    selisih_idx = next((i for i, (c, _) in enumerate(cols_map)
+                        if c == SELISIH_COL_NAME), None)
+    combined_df_col = LASTMONTH_COMBINED_COL_NAME  # nama di df (bila ada)
+    delta_col = "PERUBAHAN %"
+
+    # Sort by (JENIS, NAMA BARANG, NAMA RESTO) — stable mergesort.
+    sort_keys = [k for k in ("JENIS", "NAMA BARANG", "NAMA RESTO")
+                 if k in df.columns]
+    sdf = (df.sort_values(sort_keys, na_position="last", kind="mergesort")
+           if sort_keys else df)
+
+    # ---- Header (styled) ----
+    ws.append(headers)
+    for cell in ws[1]:
+        if _is_dangerous_text(cell.value):
+            cell.data_type = "s"
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = HEADER_ALIGN
+        cell.border = THIN_BORDER
+    ws.row_dimensions[1].height = 28
+
+    # ---- Body: baris demi baris, sisipkan baris KOSONG antar grup ----
+    n_body = 0
+    first_row = True  # grup pertama tak dapat pemisah di depannya
+    prev_key = None
+    # Pre-compute per-column python lists utk akses cepat (iterrows lambat
+    # pada 25k baris; pakai dict-of-lists). Kolom tak ada di df → list None.
+    col_data: dict[str, list] = {}
+    for c, src_col in cols_map:
+        if src_col is not None and src_col in sdf.columns:
+            col_data[src_col] = sdf[src_col].tolist()
+    delta_series = (sdf[delta_col].tolist() if delta_col in sdf.columns
+                    else [None] * len(sdf))
+    jenis_series = (sdf["JENIS"].tolist() if "JENIS" in sdf.columns
+                    else [None] * len(sdf))
+    barang_series = (sdf["NAMA BARANG"].tolist() if "NAMA BARANG" in sdf.columns
+                     else [None] * len(sdf))
+    for i in range(len(sdf)):
+        cur_key = (jenis_series[i], barang_series[i])
+        if not first_row and cur_key != prev_key:
+            # Baris KOSONG pemisah antar grup (JENIS, NAMA BARANG).
+            ws.append([None] * len(headers))
+            n_body += 1
+        first_row = False
+        prev_key = cur_key
+        row_cells = []
+        for c, src_col in cols_map:
+            if src_col is None or src_col not in col_data:
+                v = None
+            else:
+                v = col_data[src_col][i]
+                if c == combined_df_col:
+                    v = _fmt_combined_lastmonth(v, delta_series[i])
+                else:
+                    v = _to_cell_value(v)
+            row_cells.append(v)
+        ws.append(row_cells)
+        _force_text_row(ws, row_cells)
+        n_body += 1
+
+    # ---- Styling body (style objects shared) + number formats + status ----
+    body_style = _shared_body_style(ws)
+    for row_cells in ws.iter_rows(min_row=2, max_row=n_body + 1):
+        if body_style is not None:
+            for cell in row_cells:
+                cell._style = _StyleArray(body_style)
+        else:  # pragma: no cover — fallback kompatibilitas
+            for cell in row_cells:
+                cell.font = BODY_FONT
+                cell.border = THIN_BORDER
+                cell.alignment = BODY_ALIGN
+        # Number formats (hanya sel numerik — sel teks/'Cek' tak terformat).
+        if total_idx is not None:
+            v = row_cells[total_idx].value
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                row_cells[total_idx].number_format = _GROUPED_NUMFMT_INT
+        if selisih_idx is not None:
+            v = row_cells[selisih_idx].value
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                row_cells[selisih_idx].number_format = _GROUPED_NUMFMT_INT
+        if pct_idx is not None:
+            v = row_cells[pct_idx].value
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                row_cells[pct_idx].number_format = _GROUPED_NUMFMT_PCT
+        # Status coloring (ANOMALY STATUS).
+        if status_idx is not None:
+            v = row_cells[status_idx].value
+            fill = STATUS_FILLS.get(v) if isinstance(v, str) else None
+            if fill is not None:
+                row_cells[status_idx].fill = fill
+                row_cells[status_idx].font = STATUS_FONT
+                row_cells[status_idx].alignment = STATUS_ALIGN
+
+    # ---- Auto-width (sample 100 baris non-null per kolom df sumber) ----
+    for c_idx, (c, src_col) in enumerate(cols_map, start=1):
+        max_len = len(str(_GROUPED_ALIASES.get(c, c)))
+        if src_col is not None and src_col in sdf.columns:
+            sample = sdf[src_col].dropna().astype(str).head(100).tolist()
+            if sample:
+                sample_max = max(len(s) for s in sample)
+                max_len = max(max_len, min(sample_max, 60))
+        ws.column_dimensions[get_column_letter(c_idx)].width = min(max_len + 2, 40)
+
+    # Freeze + auto-filter (mencakup header + seluruh body termasuk pemisah;
+    # saat filter aktif, baris pemisah kosong tak match → tersembunyi otomatis).
+    ws.freeze_panes = "A2"
+    last_col = get_column_letter(len(headers))
+    ws.auto_filter.ref = f"A1:{last_col}{n_body + 1}"
 
 
 def _write_sheet(

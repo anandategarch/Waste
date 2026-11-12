@@ -505,7 +505,9 @@ class TestUiSekaliJalan:
         view = self._view(AppContext({}))
         try:
             btn = view._btn_import
-            assert "Olah & Jalankan REKAP MENTAH" in btn.text()
+            # v2.19.2 — label diperjelas "Pilih REKAP MENTAH" (ganti "Olah &
+            # Jalankan REKAP MENTAH" — fungsi sama, label dikenali user).
+            assert "Pilih REKAP MENTAH" in btn.text()
             assert "REKAP MENTAH_01-31" in btn.toolTip()
             assert "SEKALI JALAN" in btn.toolTip()
         finally:
@@ -620,9 +622,11 @@ class TestManifestBantuanVersi:
 
     def test_bantuan_menyebut_sekali_jalan(self):
         """F1 Bantuan seksi Tab Pipeline menyebut tombol baru + janji
-        SEKALI JALAN tanpa file antara (regresi dokumentasi — pola B24)."""
+        SEKALI JALAN tanpa file antara (regresi dokumentasi — pola B24).
+        v2.19.2 — label 'Pilih REKAP MENTAH…' (ganti 'Olah & Jalankan
+        REKAP MENTAH…'); janji SEKALI JALAN + tanpa file antara tetap."""
         src = (UI / "app.py").read_text(encoding="utf-8")
-        assert "Jalankan REKAP MENTAH" in src
+        assert "Pilih REKAP MENTAH" in src
         assert "REKAP MENTAH_01-31" in src
         assert "SEKALI" in src
         assert "tanpa file olahan antara" in src

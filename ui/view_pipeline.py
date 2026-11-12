@@ -207,14 +207,20 @@ class PipelineView(QWidget):
         # nilai identity + injeksi TOTAL BOM dari baris JENIS==BOM).
         # Tanpa file olahan antara — menggantikan 2-langkah v2.14.0
         # (olah → ekspor → klik Mulai Pipeline) atas permintaan user.
-        b_import = QPushButton("🧮 Olah & Jalankan REKAP MENTAH…", row)
+        # v2.19.2 — label diperjelas "Pilih REKAP MENTAH" (permintaan user:
+        # tombol "pilih rekap mentah" terasa hilang padahal fungsinya sama —
+        # label lama "Olah & Jalankan REKAP MENTAH" tak dikenali). Tombol ini
+        # = satu-satunya jalur memuat file REKAP MENTAH mentah + menjalankan
+        # pipeline sekaligus; tooltip menjelaskan olahan+pipeline sekali jalan.
+        b_import = QPushButton("🧮 Pilih REKAP MENTAH…", row)
         b_import.setToolTip(
             "Pilih file REKAP MENTAH mentah (mis. \"REKAP MENTAH_01-31 "
             "AGUSTUS 2026_TEGAR.xlsx\" — boleh masih berisi SEMUA jenis "
             "BOM/SO/stok & header tergeser) — olahan + pipeline berjalan "
             "SEKALI JALAN tanpa file antara: TOTAL BOM diambil dari baris "
             "BOM, saringan & statistik dihitung pipeline. Menggantikan "
-            "olah manual Excel + proses 2-klik.")
+            "olah manual Excel + proses 2-klik. Inilah tombol utama utk "
+            "memuat rekap mentah & mengaktifkan edit kuantiti di tab Anomali.")
         b_import.clicked.connect(self._on_import_rekap)
         rl.addWidget(b_import)
         self._btn_import = b_import
@@ -229,7 +235,7 @@ class PipelineView(QWidget):
             "absen), lalu DIGABUNG jadi satu dataset. Hasil gabungan = "
             "file sementara — edit nilai via pop-up menyimpan ke file "
             "sementara INI, bukan file asli di folder (untuk edit file "
-            "asli, gunakan tombol 🧮 Pilih File Sendiri dengan format "
+            "asli, gunakan tombol 🧮 Pilih REKAP MENTAH dengan format "
             "REKAP MENTAH_..._TEGAR).")
         b_folder.clicked.connect(self._on_import_folder)
         rl.addWidget(b_folder)

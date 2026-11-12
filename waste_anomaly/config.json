@@ -98,6 +98,7 @@
     "default_filename": "Waste_Anomaly_Report.xlsx",
     "detail_sheet": "Detail",
     "anomali_sheet": "Anomali Prioritas",
+    "grouped_sheet": "Anomali Grup",
     "per_cabang_sheet": "Per Cabang",
     "top_items_sheet": "Top Items",
     "pareto_sheet": "Pareto Alasan",

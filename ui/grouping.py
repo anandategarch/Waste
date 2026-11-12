@@ -48,6 +48,13 @@ SRC_GAB_COL = "SOURCE DATA GABUNGAN"
 LASTMONTH_COMBINED_COL = "TOTAL BULAN LALU & % Selisih"
 SELISIH_COL = "Selisih Bulan Lalu"
 FPS_COL = "__FPS"
+# v2.19.2 — sidik jari PLURAL baris Excel sumber (paralel __FPS). Tiap grup
+# membawa tuple nomor baris fisik sheet REKAP MENTAH semua anggotanya
+# (dipasang ensure_rekap_header via __SRC_ROW). Dipakai pop-up detail utk
+# menulis-balik koreksi nilai hari: grup 1-anggota → edit langsung (jalur
+# v2.16.0 pulih, regresi v2.19.0 diperbaiki); grup multi-anggota → tulis
+# koreksi ke SEMUA anggota sekaligus (konfirmasi daftar baris diberikan).
+SRC_ROWS_COL = "__SRC_ROWS"
 
 # Urutan status dari paling ringan → paling parah (worst-of-group).
 _STATUS_RANK = {"Normal": 0, "Perlu Review": 1, "Potensi Anomali": 2,
@@ -288,12 +295,32 @@ def group_anomali_display(
              .rename(FPS_COL).reset_index())
         out = out.merge(t, on=keys, how="left", sort=False)
 
+    # ---------- 9b) __SRC_ROWS anggota (tulis-balik koreksi v2.19.2) --------
+    # Tuple nomor baris Excel semua anggota grup (paralel __FPS). Dipakai
+    # pop-up detail utk memetakan grup → baris fisik sheet REKAP MENTAH:
+    # grup 1-anggota = edit langsung (pulihkan jalur v2.16.0 yg ter-regresi
+    # di v2.19.0 krn __FPS selalu tuple); grup multi-anggota = tulis ke
+    # SEMUA anggota. NaN/None di __SRC_ROW (dataset pra-v2.16 / fixture)
+    # disaring → tuple bersih; bila kosong seluruhnya → tuple () (caller
+    # memperlakukan () = tak bisa edit, pesan jujur).
+    from waste_anomaly.rekap_import import SRC_ROW_COL as _SRC_ROW_COL
+    if _SRC_ROW_COL in df.columns:
+        sr = pd.to_numeric(df[_SRC_ROW_COL], errors="coerce")
+        by = [df[k] for k in keys]
+        t = (sr.groupby(by, dropna=False, sort=False)
+             .agg(lambda s: tuple(int(v) for v in s
+                                  if v is not None and v == v))
+             .rename(SRC_ROWS_COL).reset_index())
+        out = out.merge(t, on=keys, how="left", sort=False)
+
     # ---------- 10) urutan kolom: sampel user dulu, pendamping belakang --
     front = [c for c in (
         keys + [SRC_GAB_COL, "TOTAL", "% to BOM",
                 LASTMONTH_COMBINED_COL, SELISIH_COL, "PERUBAHAN",
                 "ANOMALY STATUS", "PROFIL", "ANOMALY SCORE"]
     ) if c in out.columns]
+    _internal = {FPS_COL, SRC_ROWS_COL}
     rest = [c for c in out.columns
-            if c not in front + [FPS_COL]]
-    return out[front + rest + ([FPS_COL] if FPS_COL in out.columns else [])]
+            if c not in front + list(_internal)]
+    tail = [c for c in (FPS_COL, SRC_ROWS_COL) if c in out.columns]
+    return out[front + rest + tail]

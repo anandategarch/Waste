@@ -6,8 +6,8 @@ Letakkan `DATA_WASTE.xlsx` Anda di sini (atau di folder mana saja — browse via
 
 Tiga cara memuat data dari tab **Pipeline** (tanpa olah manual di Excel):
 
-1. **🧮 Pilih File Sendiri** — file `DATA_WASTE.xlsx` standar 53 kolom
-2. **🧮 Olah & Jalankan REKAP MENTAH…** — file rekap mentah bulanan, sekali proses langsung jalan
+1. **Telusuri…** — file `DATA_WASTE.xlsx` standar 53 kolom
+2. **🧮 Pilih REKAP MENTAH…** — file rekap mentah bulanan, sekali proses langsung jalan (jalur utama, mengaktifkan edit kuantiti dari tab Anomali)
 3. **📁 Proses dari Folder…** — folder berisi file `.xlsx` format BJMHAS (nama resto diambil dari nama file), semua digabung otomatis
 
 File lama cukup di-replace (overwrite) lalu run ulang — pipeline idempotent.

@@ -551,7 +551,7 @@ def load_rekap_folder(folder_path, config: dict | None = None,
       - NAMA RESTO disintesis → dicatat di "synthesized" (transparan).
       - Temp file path dikembalikan — EDIT nilai via pop-up akan menyimpan
         ke temp file INI, BUKAN file asli di folder (file asli utuh). Untuk
-        edit file asli, gunakan "Pilih File Sendiri" (format TEGAR).
+        edit file asli, gunakan "Pilih REKAP MENTAH" (format TEGAR).
 
     Return: {"temp_path": str, "files": [str,...], "rows_total": int,
              "rows_per_file": {name: int}, "synthesized": [name,...],

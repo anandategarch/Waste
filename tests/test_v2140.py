@@ -655,10 +655,11 @@ class TestManifestBantuanVersi:
     def test_bantuan_menyebut_tombol(self):
         """F1 Bantuan seksi Tab Pipeline menyebut tombol rekap mentah +
         alur singkatnya (regresi dokumentasi — pola B24 gel-6).
-        v2.15.0 — DITULIS ULANG JUJUR: label tombol kini 'Olah & Jalankan
-        REKAP MENTAH…' (sekali jalan, tanpa file antara)."""
+        v2.19.2 — label tombol diperjelas 'Pilih REKAP MENTAH…' (ganti
+        'Olah & Jalankan REKAP MENTAH…' — fungsi sama: sekali jalan, tanpa
+        file antara; label baru dikenali user)."""
         src = (UI / "app.py").read_text(encoding="utf-8")
-        assert "Jalankan REKAP MENTAH" in src
+        assert "Pilih REKAP MENTAH" in src
         assert "REKAP MENTAH_01-31" in src  # contoh nama file user
 
     def test_versi_2140_sinkron(self):

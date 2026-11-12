@@ -32,8 +32,8 @@
 
 | Tombol | Untuk File | Perilaku |
 |--------|-----------|----------|
-| 🧮 Pilih File Sendiri | `DATA_WASTE.xlsx` standar 53 kolom | Pipeline langsung pada file |
-| 🧮 Olah & Jalankan REKAP MENTAH… | Rekap mentah bulanan (mis. `REKAP MENTAH_01-31 AGUSTUS 2026_TEGAR.xlsx`) | Header diperbaiki, nilai dinormalisasi, TOTAL BOM diambil dari baris BOM — **sekali proses, tanpa file antara** |
+| Telusuri… | `DATA_WASTE.xlsx` standar 53 kolom | Pipeline langsung pada file |
+| 🧮 Pilih REKAP MENTAH… | Rekap mentah bulanan (mis. `REKAP MENTAH_01-31 AGUSTUS 2026_TEGAR.xlsx`) | Header diperbaiki, nilai dinormalisasi, TOTAL BOM diambil dari baris BOM — **sekali proses, tanpa file antara**. Jalur utama untuk mengaktifkan **edit kuantiti dari tab Anomali**. |
 | 📁 Proses dari Folder… | Folder berisi `.xlsx` format BJMHAS (sheet REKAP MENTAH tanpa kolom NAMA RESTO) | Semua file dipindai, resto disintesis dari nama file, digabung jadi satu dataset |
 
 > **Banding bulan lalu (opsional):** tab Banding Periode → ＋ Tambah File… → pilih beberapa file sekaligus → jalankan pipeline → muncul Ringkasan, per jenis, mover, dan mode 📊 Tipikal.

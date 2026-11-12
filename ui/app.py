@@ -94,7 +94,7 @@ def _build_help_html(config: dict | None = None) -> str:
 <li>Isi <b>Input Workbook</b>: tombol <b>Telusuri…</b> memilih file Excel rekap
 (mis. DATA_WASTE.xlsx), atau <b>Pakai Sample</b> mengisi file contoh dari folder
 aplikasi. Menekan <b>Enter</b> di kolom workbook langsung menjalankan pipeline.</li>
-<li><b>🧮 Olah &amp; Jalankan REKAP MENTAH…</b>: punya file rekap <b>mentah</b>
+<li><b>🧮 Pilih REKAP MENTAH…</b>: punya file rekap <b>mentah</b>
 bulanan (mis. "REKAP MENTAH_01-31 AGUSTUS 2026_TEGAR.xlsx" — masih berisi
 SEMUA jenis: WASTE/SUSUT/TRIAL/BOM/SO/stok; baris judul di atas header pun
 boleh)? Klik tombol ini, pilih filenya — <b>semuanya diproses SEKALI
@@ -103,6 +103,9 @@ BOM + normalisasi nilai + seluruh analisa pipeline berjalan LANGSUNG pada
 file mentah tersebut — <b>tanpa file olahan antara</b> dan tanpa klik Mulai
 Pipeline lagi (dulu dua proses terpisah: olah dulu, baru jalankan). Progres,
 log per-stage, tombol ⏹ Batalkan, dan ringkasan run bekerja seperti biasa.
+<b>Ini jalur utama</b> utk memuat rekap mentah & mengaktifkan <b>edit
+kuantiti hari langsung dari tab Anomali</b> (klik-ganda baris → pop-up →
+ubah nilai hari → Simpan koreksi → tulis balik ke file Excel sumber).
 Jalur file DATA_WASTE standar (Telusuri… → Mulai Pipeline) tetap didukung.</li>
 <li><b>📁 Proses dari Folder…</b>: punya <b>FOLDER</b> berisi file
 .xlsx format <b>BJMHAS</b> (sheet "REKAP MENTAH" <b>TANPA</b> kolom NAMA
@@ -117,8 +120,8 @@ file ±9-13 dtk. <b>Default folder</b>: C:\\KERJA\\1. RESTO\\9.NEW QUERY\\1.
 DEVIASI WEEKLY (bisa diganti di config.json key "default_deviasi_folder";
 dialog folder tetap bisa pilih folder lain). Catatan: <b>edit nilai via
 pop-up menyimpan ke file sementara INI</b>, bukan file asli di folder
-(file asli utuh) — untuk edit file asli, gunakan tombol 🧮 Pilih File
-Sendiri dgn format REKAP MENTAH_..._TEGAR.</li>
+(file asli utuh) — untuk edit file asli, gunakan tombol 🧮 Pilih REKAP
+MENTAH dgn format REKAP MENTAH_..._TEGAR.</li>
 <li><b>Key Akhir (1–31)</b>: hanya hari 1..N yang dianalisa — bulan berjalan
 yang belum penuh cukup diisi sampai tanggal terakhirnya.</li>
 <li>Kartu <b>Threshold &amp; Konfigurasi</b> (config.json): nilai ambang
