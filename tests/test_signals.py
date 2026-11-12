@@ -159,15 +159,18 @@ class TestS5MaxVsSecond:
 class TestS6MaxVsBom:
     def test_skor2(self):
         score, _ = run(make_df(**{"MAX": 50, "TOTAL BOM": 100}))
-        assert score == 2  # 50/100 = 0.50 boundary high
+        assert score == 2  # 50/100 = 0.50 >> high(0.10)
 
     def test_skor1(self):
-        score, _ = run(make_df(**{"MAX": 25, "TOTAL BOM": 100}))
-        assert score == 1  # 0.25 boundary warn
+        # v2.19.9 W-3: warn 0.25 → 0.03 — 25/100 = 0.25 kini band HIGH.
+        # Uji band warn dgn rasio antara warn(0.03) dan high(0.10).
+        score, _ = run(make_df(**{"MAX": 5, "TOTAL BOM": 100}))
+        assert score == 1  # 5/100 = 0.05 ∈ [0.03, 0.10) → warn
 
     def test_non_trigger(self):
-        score, _ = run(make_df(**{"MAX": 24.9, "TOTAL BOM": 100}))
-        assert score == 0
+        # v2.19.9 W-3: rasio di bawah warn(0.03) → 0.
+        score, _ = run(make_df(**{"MAX": 2.9, "TOTAL BOM": 100}))
+        assert score == 0  # 0.029 < 0.03
 
     def test_bom_nol_atau_nan_aman(self):
         # TOTAL BOM = 0 → rasio 0 (guarded), tidak div-by-zero
@@ -184,14 +187,16 @@ class TestS6MaxVsBom:
 class TestS7TotalVsBom:
     def test_skor2(self):
         score, _ = run(make_df(**{"TOTAL": 100, "TOTAL BOM": 100}))
-        assert score == 2
+        assert score == 2  # 1.0 >> high(0.35)
 
     def test_skor1(self):
-        score, _ = run(make_df(**{"TOTAL": 50, "TOTAL BOM": 100}))
+        # v2.19.9 W-3: warn 0.50 → 0.10. Band warn: 15/100 = 0.15 ∈ [0.10, 0.35).
+        score, _ = run(make_df(**{"TOTAL": 15, "TOTAL BOM": 100}))
         assert score == 1
 
     def test_non_trigger(self):
-        score, _ = run(make_df(**{"TOTAL": 49.9, "TOTAL BOM": 100}))
+        # v2.19.9 W-3: di bawah warn(0.10) → 0.
+        score, _ = run(make_df(**{"TOTAL": 9.9, "TOTAL BOM": 100}))
         assert score == 0
 
 
@@ -242,8 +247,10 @@ class TestS9PeerTotal:
 
 class TestS10SingleDay:
     def test_trigger_via_bom(self):
+        # v2.19.9 W-3: S10_BOM_MIN tetap 0.10 — 20/100 = 0.2 >= 0.10 → S10=1.
+        # Rasio 0.2 kini juga >= S6 high(0.10) → S6=2. TOTAL = S10(1)+S6(2) = 3.
         score, _ = run(make_df(**{"Count Hari": 1, "MAX": 20, "TOTAL BOM": 100}))
-        assert score == 1  # 20/100 = 0.2 >= 0.10
+        assert score == 3  # S10(1) + S6 high(2)
 
     def test_trigger_via_peer(self):
         score, _ = run(make_df(**{"Count Hari": 1, "MAX": 25, "PEER MEDIAN MAX": 10, "PEER COUNT": 3}))
@@ -252,8 +259,10 @@ class TestS10SingleDay:
         assert score == 2
 
     def test_non_trigger_count_2(self):
-        score, _ = run(make_df(**{"Count Hari": 2, "MAX": 20, "TOTAL BOM": 100}))
-        assert score == 0  # S10 mati; MaxBOM 0.2 < 0.25 → S6 mati
+        # v2.19.9 W-3: MaxBOM 0.2 kini >= high(0.10) → S6 menyala — S10 mati
+        # (Count 2) tapi S6 = 2. Uji no-S10 + no-S6: rasio < warn 0.03.
+        score, _ = run(make_df(**{"Count Hari": 2, "MAX": 2, "TOTAL BOM": 100}))
+        assert score == 0  # S10 mati (Count 2); MaxBOM 0.02 < 0.03 → S6 mati
 
     def test_count1_tanpa_bom_dan_peer(self):
         score, _ = run(make_df(**{"Count Hari": 1, "MAX": 5, "TOTAL": 5}))

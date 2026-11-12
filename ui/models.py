@@ -946,11 +946,16 @@ class PandasTableModel(QAbstractTableModel):
                         sorted_df, keys=self._sep_group_keys)
                 except Exception:  # noqa: BLE001 — pemisah opsional
                     pass
+            # v2.19.8 (audit-2 B-9): begin/endResetModel harus try/finally —
+            # exception di assign/_rebuild_snapshot antara keduanya
+            # meninggalkan model MID-RESET (view terkunci abadi).
             self.beginResetModel()
-            self._df = sorted_df
-            self._texts = {}  # urutan baris berganti → cache teks basi
-            self._rebuild_snapshot()  # v2.12.1: urutan baris berganti
-            self.endResetModel()
+            try:
+                self._df = sorted_df
+                self._texts = {}  # urutan baris berganti → cache teks basi
+                self._rebuild_snapshot()  # v2.12.1: urutan baris berganti
+            finally:
+                self.endResetModel()
         except Exception:
             # V26-L3: sort gagal (dtype aneh dsb.) — jangan senyap total,
             # tinggalkan jejak debug utk logs/waste_anomaly.log.

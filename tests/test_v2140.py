@@ -418,11 +418,13 @@ class TestEndToEndPipeline:
         assert summary["total_rows"] == 6
         assert int(df["TOTAL BOM"].notna().sum()) == 6  # semua baris ber-BOM
         assert (df["Rill % to BOM"] > 0).any()
-        # Spike 30 di hari-5 (vs rata-rata 40/31) tertangkap engine:
-        # 1 baris Perlu Review di data sintetis mini (Prioritas butuh
-        # skor ≥ STATUS_PRIORITAS=8 — data 6 baris tak sampai; flag
-        # review membuktikan deteksi jalan ujung-ke-ujung).
-        assert summary["review_count"] == 1
+        # Spike 30 di hari-5 (vs rata-rata 40/31) tertangkap engine.
+        # v2.19.9 (W-3 recalibrasi): S6 'Puncak harian vs BOM' kini fire
+        # pada rasio mini-fixture (threshold 0.25→0.03) → baris spike
+        # PROMOTED: Perlu Review (skor 3) → Potensi Anomali (skor 5).
+        # Deteksi lebih kuat + konsisten dgn data real (S6 hidup lagi).
+        assert summary["potensi_count"] == 1
+        assert summary["review_count"] == 0
 
     def test_loader_menemukan_sheet_kandidat(self, tmp_path):
         """Loader.resolve_sheet_for menemukan 'DATA_WASTE' & 'BOM' lewat

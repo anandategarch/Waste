@@ -72,6 +72,7 @@ GABUNGAN, RANGKING WASTE) — semua dihitung ulang pipeline (README tabel
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 import re
@@ -202,11 +203,17 @@ def _promote_at(df: pd.DataFrame, hr: int) -> pd.DataFrame:
 
     v2.15.0: nilai header float-integral (1.0 — engine calamine)
     dinormalisasi ke "1" (pola C3-a _normalize_columns) — dulu
-    str(1.0)="1.0" membuat kolom hari tak ditemukan stage berikutnya."""
+    str(1.0)="1.0" membuat kolom hari tak ditemukan stage berikutnya.
+
+    v2.19.8 (audit-2 B-10): header hari DUPLIKAT ("1" & "1") → "1_1"
+    suffix membuat kolom kedua HILANG dari _DAY_SET (tak ikut dihitung
+    TOTAL/sinyal) — kini diberi WARNING log (anti kolom hilang senyap;
+    pandas mangling keep-first sudah konsisten dgn engine pipeline)."""
     headers = df.iloc[hr].tolist()
     body = df.iloc[hr + 1:].reset_index(drop=True)
     new_cols: list[str] = []
     seen: dict[str, int] = {}
+    _dupes: list[str] = []
     for i, h in enumerate(headers):
         if h is None or (isinstance(h, float) and math.isnan(h)):
             h = f"Column{i + 1}"
@@ -216,10 +223,16 @@ def _promote_at(df: pd.DataFrame, hr: int) -> pd.DataFrame:
         if h in seen:
             seen[h] += 1
             h = f"{h}_{seen[h]}"
+            _dupes.append(str(h))
         else:
             seen[h] = 0
         new_cols.append(h)
     body.columns = new_cols
+    if _dupes:
+        logging.getLogger("waste_anomaly.rekap_import").warning(
+            "[rekap_import] header duplikat ditemukan: %s — kolom kedua "
+            "diberi suffix (mis. hari '1' ganda → '1_1' TIDAK ikut dihitung "
+            "TOTAL/sinyal hari; cek sheet sumber)", ", ".join(_dupes[:8]))
     return body
 
 
@@ -889,7 +902,11 @@ def _bom_map_from_rows(raw: pd.DataFrame,
     Satu sumber kebenaran utk convert_rekap_mentah (v2.14.0) DAN
     inject_bom_from_raw_rows (v2.15.0): groupby jumlah kolom hari, kunci
     _key_str dua sisi (outlet numerik 1049.0 → "1049"; None → skip —
-    pola H9-a: kunci kosong tak bisa di-join)."""
+    pola H9-a: kunci kosong tak bisa di-join).
+
+    v2.19.8 (audit-2 B-4): pasangan (resto, barang) BERGANDA di-SUM —
+    pemanggil bertanggung jawab audit duplikat/konflik (lihat
+    _bom_dupe_audit) supaya double-entry konflik tak senyap."""
     bom_map: dict[tuple[str, str], float] = {}
     if raw is None or raw.empty or "JENIS" not in raw.columns:
         return bom_map
@@ -907,6 +924,42 @@ def _bom_map_from_rows(raw: pd.DataFrame,
         key = (r, b)
         bom_map[key] = bom_map.get(key, 0.0) + float(t)
     return bom_map
+
+
+def _bom_dupe_audit(raw: pd.DataFrame,
+                    day_cols: list[str],
+                    logger=None) -> tuple[int, int, int]:
+    """v2.19.8 (audit-2 B-4) — audit baris BOM berganda per pasangan
+    (resto, barang): SUM diam-diam dulu (split line vs salah-ketik ganda
+    tak bisa dibedakan). Return (n_dupe_pairs, n_conflict_pairs, n_pairs):
+      - n_dupe_pairs: pasangan dgn >1 baris BOM.
+      - n_conflict_pairs: pasangan >1 baris yg nilainya BERSELISIH
+        >1% (indikasi double-entry konflik — perlu cek manual).
+    Pemanggil (inject/convert) me-LOG hasilnya (transparan, bukan senyap)."""
+    if raw is None or raw.empty or "JENIS" not in raw.columns:
+        return 0, 0, 0
+    jenis_norm = raw["JENIS"].astype(str).str.strip().str.upper()
+    bom_rows = raw[jenis_norm == "BOM"]
+    if bom_rows.empty:
+        return 0, 0, 0
+    bom_num = bom_rows[day_cols].apply(pd.to_numeric, errors="coerce")
+    bom_tot = bom_num.fillna(0).sum(axis=1)
+    k_resto = bom_rows["NAMA RESTO"].map(_key_str)
+    k_barang = bom_rows["NAMA BARANG"].map(_key_str)
+    vals: dict[tuple[str, str], list[float]] = {}
+    for r, b, t in zip(k_resto, k_barang, bom_tot):
+        if r is None or b is None:
+            continue
+        vals.setdefault((r, b), []).append(float(t))
+    n_pairs = len(vals)
+    n_dupe = sum(1 for vs in vals.values() if len(vs) > 1)
+    n_conflict = 0
+    for vs in vals.values():
+        if len(vs) > 1 and vs:
+            scale = max(abs(x) for x in vs)
+            if scale > 0 and (max(vs) - min(vs)) > 0.01 * scale:
+                n_conflict += 1
+    return n_dupe, n_conflict, n_pairs
 
 
 def _bom_inline_series(df: pd.DataFrame,
@@ -1008,12 +1061,21 @@ def normalize_rekap_values(df: pd.DataFrame, logger=None) -> pd.DataFrame:
     return out
 
 
-def inject_bom_from_raw_rows(df: pd.DataFrame, logger=None) -> pd.DataFrame:
+def inject_bom_from_raw_rows(df: pd.DataFrame, logger=None,
+                             key_akhir: int | None = None) -> pd.DataFrame:
     """v2.15.0: tambah kolom inline "TOTAL BOM" dari baris JENIS=="BOM"
     sheet mentah — dipanggil pipeline SEBELUM stage_01 (stage_01
     memfilter baris BOM keluar; tanpa injeksi ini sinyal S6/S7 mati di
     file mentah karena kolom TOTAL BOM tidak ada & sheet BOM terpisah
     tidak ada di file rekap).
+
+    v2.19.8 (audit-2 B-2): ``key_akhir`` — TOTAL BOM dihitung HANYA dari
+    kolom hari 1..key_akhir (konsisten dgn TOTAL waste stage_02 yg juga
+    hari ≤ key_akhir). Sebelumnya: sum SEMUA hari 1-31 yg ada → pada file
+    pendek dijalankan k<31, denominator BOM memuat hari > k → rasio S6/S7
+    (MAX/BOM, TOTAL/BOM) bias ~hari-ekstra/hari-total. None = semua hari
+    (jalur convert/standar — total BOM bulan penuh, konsisten perilaku
+    lama).
 
     Guard (idempotent + jujur):
       - "TOTAL BOM" SUDAH ada di kolom → passthrough identitas (file
@@ -1040,6 +1102,17 @@ def inject_bom_from_raw_rows(df: pd.DataFrame, logger=None) -> pd.DataFrame:
     n_bom_rows = int((jenis_norm == "BOM").sum())
     if n_bom_rows == 0:
         return df
+    # B-2: slice kolom hari ke 1..key_akhir (denominator konsisten dgn
+    # TOTAL waste stage_02 — anti bias rasio S6/S7 pada file pendek).
+    if key_akhir is not None:
+        try:
+            ka = int(key_akhir)
+            day_cols = [c for c in day_cols
+                        if str(c).isdigit() and int(c) <= ka]
+        except (TypeError, ValueError):
+            pass  # key_akhir aneh → semua hari (perilaku lama)
+    if not day_cols:
+        return df
     bom_map = _bom_map_from_rows(df, day_cols)
     if not bom_map:
         return df
@@ -1052,10 +1125,20 @@ def inject_bom_from_raw_rows(df: pd.DataFrame, logger=None) -> pd.DataFrame:
     # 25 ribu).
     keep_mask = jenis_norm.isin(_KEEP_JENIS)
     n_matched = int(bom_inline[keep_mask].notna().sum())
+    # B-4: audit duplikat/konflik pasangan BOM (anti double-entry senyap).
+    n_dupe, n_conflict, _n_pairs = _bom_dupe_audit(df, day_cols)
+    ka_txt = (f"hari 1..{key_akhir}" if key_akhir is not None
+              else "semua hari")
     _log(logger, f"[rekap_import] TOTAL BOM inline dari {n_bom_rows} baris "
-                 f"JENIS=BOM → {len(bom_map)} pasangan (resto, barang); "
-                 f"{n_matched} baris data (W/S/T) ber-TOTAL BOM — sinyal "
-                 f"S6/S7 & Rill % to BOM aktif (v2.15.0 sekali jalan)")
+                 f"JENIS=BOM ({ka_txt}) → {len(bom_map)} pasangan (resto, "
+                 f"barang); {n_matched} baris data (W/S/T) ber-TOTAL BOM — "
+                 f"sinyal S6/S7 & Rill % to BOM aktif (v2.15.0 sekali jalan)")
+    if n_dupe:
+        _log(logger, f"[rekap_import] BOM duplikat: {n_dupe} pasangan "
+                     f"(resto, barang) punya >1 baris BOM (di-SUM)."
+                     + (f" {n_conflict} pasangan nilainya BERSELISIH >1% — "
+                        f"cek manual (double-entry konflik?)."
+                        if n_conflict else ""))
     return out
 
 
@@ -1170,8 +1253,15 @@ def convert_rekap_mentah(source: str | os.PathLike,
     day_num = kept[day_cols].apply(pd.to_numeric, errors="coerce")
     day_filled = day_num.fillna(0)
     total = day_filled.sum(axis=1)
-    with np.errstate(invalid="ignore"):
-        avg = day_num.mean(axis=1, skipna=True)   # mean non-null (stage_02)
+    # v2.19.8 (audit-2 B-3): AVG = mean atas kolom hari YANG DITULIS
+    # (day_filled — 0-filled) BUKAN day_num (skipna atas sel asli yg
+    # kosong). File olahan ini menulis day_filled ke kolom hari → AVG
+    # harus konsisten dgn AVERAGE(kolom hari di file yang sama) supaya
+    # analisa manual Excel cocok (sebelumnya: sel kosong di-skip → AVG
+    # ≠ AVERAGE(0-filled) ≠ pipeline recompute — 3 nilai beda utk 1 baris).
+    # Konsisten pula dgn pipeline sekali-jalan (normalize 0-fill PRA
+    # stage_02 → AVG = TOTAL/key).
+    avg = day_filled.mean(axis=1)
     mx = day_filled.max(axis=1)
     count_hari = (day_filled > 0).sum(axis=1)
     status2 = np.where(total == 0, "Kosong", "Isi")

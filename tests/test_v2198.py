@@ -187,15 +187,20 @@ class TestKronisGuard:
 
 
 # ============================================================
-# [D] W-5 SISTEMATIK rework (sum + absolute threshold)
+# [D] W-5 SISTEMATIK rework + B-1 QUADRANT split (audit-2)
 # ============================================================
 
 class TestSistematikRework:
-    def test_days_active_sum_bukan_max(self):
-        """daysActive per item = SUM Count Hari lintas resto (bukan max).
-        Item dgn 5 resto × 2 hari = sum 10 (bukan max 2)."""
+    def test_days_active_net_sum_dan_days_active_max(self):
+        """B-1 (audit-2) — DUA variabel utk DUA konsumen:
+          - daysActiveNet = SUM Count Hari lintas resto (LUAS jaringan —
+            SISTEMATIK). Item 5 resto × 2 hari = sum 20.
+          - daysActive = MAX Count Hari (persistence PER-OUTLET —
+            QUADRANT stage_12_6: daysActive/key_akhir harus ≤1; SUM bisa
+            >1 → flood QUADRANT=SISTEMIK palsu).
+        SISTEMATIK = daysActiveNet ≥ 5 ∧ cabangActive ≥ 2."""
         from waste_anomaly.stages import stage_12_5_fingerprint
-        # 5 resto × 2 hari Count Hari = 10 baris; sum=10, max=2.
+        # 5 resto × 2 hari Count Hari = 10 baris; sum=20, max=2.
         df = pd.DataFrame({
             "JENIS": ["WASTE"] * 10,
             "NAMA BARANG": ["AYAM"] * 10,
@@ -205,15 +210,45 @@ class TestSistematikRework:
             "W": [10.0] * 10, "S": [0.0] * 10, "T": [0.0] * 10,
         })
         out = stage_12_5_fingerprint(df, key_akhir=31, config={})
-        sist = out[["NAMA BARANG", "daysActive", "cabangActive",
-                    "SISTEMATIK", "SISTEMATIK DAYS THRESHOLD"]]
+        sist = out[["NAMA BARANG", "daysActive", "daysActiveNet",
+                    "cabangActive", "SISTEMATIK",
+                    "SISTEMATIK DAYS THRESHOLD"]]
         ayam = sist[sist["NAMA BARANG"] == "AYAM"].iloc[0]
-        assert int(ayam["daysActive"]) == 20, (
-            f"sum Count Hari 5×2×2=20 (bukan max 2), dapat {ayam['daysActive']}")
+        assert int(ayam["daysActive"]) == 2, (
+            f"daysActive = MAX per-outlet = 2 (B-1: utk QUADRANT "
+            f"persistence ≤1), dapat {ayam['daysActive']}")
+        assert int(ayam["daysActiveNet"]) == 20, (
+            f"daysActiveNet = SUM lintas resto = 5 resto × 2 baris × "
+            f"Count 2 = 20, dapat {ayam['daysActiveNet']}")
         assert int(ayam["cabangActive"]) == 5
         assert ayam["SISTEMATIK"] == "YES", (
-            "sum 20 ≥ SISTEMATIK_MIN_DAYS 5 + cabangActive 5 ≥ 2 → YES")
+            "daysActiveNet 20 ≥ SISTEMATIK_MIN_DAYS 5 + cabangActive "
+            "5 ≥ 2 → YES")
         assert int(ayam["SISTEMATIK DAYS THRESHOLD"]) == 5  # absolute, bukan ceil(31/2)=16
+
+    def test_quadrant_persistence_tidak_banjir_sistemik(self):
+        """B-1 (audit-2): QUADRANT persistence = daysActive(max)/key_akhir —
+        dengan SUM, item aktif-luas jadi persistence >1 → QUADRANT=SISTEMIK
+        palsu. Kini max → persistence ≤ 1 dan QUADRANT benar per-outlet."""
+        from waste_anomaly.stages import stage_12_5_fingerprint, \
+            stage_12_6_quadrant
+        # 10 resto × 3 hari → daysActiveNet=30 (SUM), daysActive=3 (max).
+        df = pd.DataFrame({
+            "JENIS": ["WASTE"] * 10,
+            "NAMA BARANG": ["AYAM"] * 10,
+            "NAMA RESTO": [f"R{i}" for i in range(10)],
+            "TOTAL": [10.0] * 10,
+            "Count Hari": [3] * 10,
+            "W": [10.0] * 10, "S": [0.0] * 10, "T": [0.0] * 10,
+        })
+        out = stage_12_5_fingerprint(df, key_akhir=31, config={})
+        out = stage_12_6_quadrant(out, key_akhir=31, config={})
+        # prevalence = 10/10 = 1.0 ≥ 0.5; persistence = max(3)/31 ≈ 0.097
+        # < 0.5 → MUSIMAN (bukan SISTEMIK palsu dari SUM 30/31 = 0.97).
+        assert out["QUADRANT"].iloc[0] == "MUSIMAN", (
+            f"persistence max=3/31 < 0.5 → MUSIMAN (dgn SUM bakal jadi "
+            f"SISTEMIK palsu — B-1), dapat {out['QUADRANT'].iloc[0]}")
+        assert out["SISTEMATIK"].iloc[0] == "YES"  # net 30 ≥ 5 + 10 cabang ≥ 2
 
 
 # ============================================================
@@ -254,3 +289,112 @@ class TestScaleSignalLog10:
         # Di bawah floor 8 → NO (noise rendah).
         assert _scale_signal(5) == "NO"
         assert _scale_signal(7) == "NO"
+
+
+# ============================================================
+# [F] Audit-2 B-2/B-3/B-9 — BOM key_akhir slice, AVG olahan, sort guard
+# ============================================================
+
+class TestAudit2Fixes:
+    def test_bom_inline_menghormati_key_akhir(self):
+        """B-2 (audit-2): inject_bom_from_raw_rows(key_akhir=K) → TOTAL BOM
+        dihitung HANYA dari hari ≤ K (konsisten dgn TOTAL waste stage_02).
+        Tanpa key_akhir → semua hari (perilaku lama, jalur convert)."""
+        from waste_anomaly.rekap_import import inject_bom_from_raw_rows
+        # 2 baris BOM: hari 1-5 = 100, hari 6-10 = 900 → full = 1000.
+        def _bom_row(days_1_5, days_6_10):
+            cells = {str(x): 0.0 for x in range(1, 32)}
+            for day, v in days_1_5.items():
+                cells[str(day)] = float(v)
+            for day, v in days_6_10.items():
+                cells[str(day)] = float(v)
+            return {"JENIS": "BOM", "NAMA BARANG": "AYAM",
+                    "NAMA RESTO": "R1", **cells}
+        rows = [
+            _bom_row({1: 100}, {}),
+            _bom_row({}, {6: 900}),  # hari 6 (beyond k=5)
+            {"JENIS": "WASTE", "NAMA BARANG": "AYAM", "NAMA RESTO": "R1",
+             **{str(d): 0.0 for d in range(1, 32)}},
+        ]
+        df = pd.DataFrame(rows)
+        # key_akhir=5 → BOM = hari 1 saja = 100 (hari 6 dikecualikan).
+        out = inject_bom_from_raw_rows(df, logger=None, key_akhir=5)
+        w = out[out["JENIS"] == "WASTE"].iloc[0]
+        assert float(w["TOTAL BOM"]) == 100.0, (
+            f"BOM k=5 harus 100 (hari 1 saja), dapat {w['TOTAL BOM']}")
+        # Tanpa key_akhir → semua hari = 1000 (perilaku lama).
+        out2 = inject_bom_from_raw_rows(df, logger=None)
+        w2 = out2[out2["JENIS"] == "WASTE"].iloc[0]
+        assert float(w2["TOTAL BOM"]) == 1000.0, (
+            f"BOM full harus 1000, dapat {w2['TOTAL BOM']}")
+
+    def test_bom_dupe_audit_terdeteksi(self):
+        """B-4 (audit-2): _bom_dupe_audit menghitung pasangan berganda +
+        konflik nilai (>1% selisih) — bukan SUM senyap lagi."""
+        from waste_anomaly.rekap_import import _bom_dupe_audit
+        def _bom(barang, vals_by_day):
+            d = {str(x): 0.0 for x in range(1, 32)}
+            for dd, v in vals_by_day.items():
+                d[str(dd)] = float(v)
+            return {"JENIS": "BOM", "NAMA BARANG": barang,
+                    "NAMA RESTO": "R1", **d}
+        rows = [
+            _bom("AYAM", {1: 100}),           # duplikat konsisten
+            _bom("AYAM", {1: 100}),           # (2 baris, nilai sama)
+            _bom("BEBEK", {1: 50}),           # duplikat KONFLIK (50 vs 60)
+            _bom("BEBEK", {1: 60}),
+            _bom("CEK", {1: 10}),            # single — bukan duplikat
+        ]
+        df = pd.DataFrame(rows)
+        day_cols = [str(d) for d in range(1, 32)]
+        n_dupe, n_conflict, n_pairs = _bom_dupe_audit(df, day_cols)
+        assert n_pairs == 3, f"3 pasangan unik (AYAM/BEBEK/CEK), dapat {n_pairs}"
+        assert n_dupe == 2, f"2 pasangan berganda (AYAM, BEBEK), dapat {n_dupe}"
+        assert n_conflict == 1, (
+            f"1 pasangan konflik (BEBEK 50 vs 60 >1%), dapat {n_conflict}")
+
+    def test_promote_at_warning_header_duplikat(self, caplog):
+        """B-10 (audit-2): header hari ganda ("1" & "1") → kolom kedua
+        jadi "1_1" + WARNING log (bukan hilang senyap)."""
+        import logging as _logging
+        from waste_anomaly.rekap_import import _promote_at
+        grid = pd.DataFrame([
+            ["SOURCE", "1", "1", "5"],   # header dgn "1" duplikat
+            ["WASTE", 10, 20, 30],
+        ])
+        with caplog.at_level(_logging.WARNING, logger="waste_anomaly.rekap_import"):
+            out = _promote_at(grid, 0)
+        assert list(out.columns) == ["SOURCE", "1", "1_1", "5"], (
+            f"kolom duplikat di-suffix, dapat {list(out.columns)}")
+        assert any("header duplikat" in r.message for r in caplog.records), (
+            "WARNING header duplikat harus tercatat (B-10)")
+
+    def test_sort_guard_end_reset_model(self):
+        """B-9 (audit-2): PandasTableModel.sort — exception di tengah
+        reset tak boleh meninggalkan model mid-reset (endResetModel
+        terpanggil via finally). Simulasi: _rebuild_snapshot raise."""
+        _qapp()
+        from PySide6.QtCore import Qt
+        from ui.models import PandasTableModel
+        df = pd.DataFrame({"A": [3, 1, 2], "B": ["x", "y", "z"]})
+        m = PandasTableModel(df)
+        # Normal sort masih jalan.
+        m.sort(0, Qt.SortOrder.DescendingOrder)
+        assert list(m.dataframe["A"]) == [3, 2, 1]
+        # _rebuild_snapshot di-break → sort exception → endResetModel
+        # tetap terpanggil (finally) → model TIDAK stranded mid-reset.
+        boom = {"armed": True}
+        orig = m._rebuild_snapshot
+        def broken():
+            if boom["armed"]:
+                raise RuntimeError("simulasi snapshot gagal (B-9)")
+            return orig()
+        m._rebuild_snapshot = broken
+        try:
+            m.sort(0, Qt.SortOrder.AscendingOrder)  # harus tak raise
+        finally:
+            boom["armed"] = False
+            m._rebuild_snapshot = orig
+        # Verifikasi model TIDAK mid-reset: sort ulang normal jalan.
+        m.sort(0, Qt.SortOrder.AscendingOrder)
+        assert list(m.dataframe["A"]) == [1, 2, 3]

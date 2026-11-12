@@ -96,9 +96,12 @@ _DEFAULT_CONFIG = {
     "thresholds": {
         "TH_SPIKE": 3, "TH_MAX_AVG_AKTIF": 2.5, "TH_MAX_MEDIAN": 3,
         "TH_MAX_SECOND": 3, "TH_MAX_SHARE_WARN": 0.50,
-        "TH_MAX_SHARE_HIGH": 0.70, "TH_MAX_BOM_WARN": 0.25,
-        "TH_MAX_BOM_HIGH": 0.50, "TH_TOTAL_BOM_WARN": 0.50,
-        "TH_TOTAL_BOM_HIGH": 1.00, "TH_PEER_MIN": 3,
+        "TH_MAX_SHARE_HIGH": 0.70,
+        # v2.19.9 — W-3 recalibrasi empiris (p95/p99 data real 9MB
+        # TEGAR; lama 0.25/0.50/0.50/1.00 TIDAK PERNAH fire — sinyal mati).
+        "TH_MAX_BOM_WARN": 0.03, "TH_MAX_BOM_HIGH": 0.10,
+        "TH_TOTAL_BOM_WARN": 0.10, "TH_TOTAL_BOM_HIGH": 0.35,
+        "TH_PEER_MIN": 3,
         "TH_PEER_WARN": 2, "TH_PEER_HIGH": 3, "TH_LAST_SHARE": 0.70,
         "TH_HARI_PEER_RATIO": 5.0,
         "TH_HARI_HIST_RATIO": 3.0,

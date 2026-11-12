@@ -71,10 +71,18 @@ def compute_signals(
     th_max_second = th.get("TH_MAX_SECOND", 3)
     th_max_share_warn = th.get("TH_MAX_SHARE_WARN", 0.50)
     th_max_share_high = th.get("TH_MAX_SHARE_HIGH", 0.70)
-    th_max_bom_warn = th.get("TH_MAX_BOM_WARN", 0.25)
-    th_max_bom_high = th.get("TH_MAX_BOM_HIGH", 0.50)
-    th_total_bom_warn = th.get("TH_TOTAL_BOM_WARN", 0.50)
-    th_total_bom_high = th.get("TH_TOTAL_BOM_HIGH", 1.00)
+    # v2.19.9 — W-3 (audit-1+2): recalibrasi empiris. Threshold lama
+    # (0.25/0.50) TIDAK PERNAH fire pada data real (p95 MAX/BOM = 0.03,
+    # p99 = 0.09 — 9MB TEGAR: sinyal mati). Baru = p95/p99:
+    #   TH_MAX_BOM_WARN  0.25 → 0.03 (fires ~3-4% baris BOM-aktif)
+    #   TH_MAX_BOM_HIGH  0.50 → 0.10 (~0.7%)
+    #   TH_TOTAL_BOM_WARN 0.50 → 0.10 (~4-5%; p95)
+    #   TH_TOTAL_BOM_HIGH 1.00 → 0.35 (~0.5%; p99)
+    # TH_LAST_SHARE tetap 0.70 (k=benar: p99=1.0 — fires kasus nyata).
+    th_max_bom_warn = th.get("TH_MAX_BOM_WARN", 0.03)
+    th_max_bom_high = th.get("TH_MAX_BOM_HIGH", 0.10)
+    th_total_bom_warn = th.get("TH_TOTAL_BOM_WARN", 0.10)
+    th_total_bom_high = th.get("TH_TOTAL_BOM_HIGH", 0.35)
     th_peer_min = th.get("TH_PEER_MIN", 3)
     th_peer_warn = th.get("TH_PEER_WARN", 2)
     th_peer_high = th.get("TH_PEER_HIGH", 3)

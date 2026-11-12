@@ -1114,27 +1114,34 @@ def stage_12_5_fingerprint(
     item_pivot = item_pivot.reset_index()
 
     # Compute SISTEMATIK FLAG per item
-    # v2.19.8 — W-5 (audit): daysActive pakai SUM Count Hari per item
-    # (total hari pelaporan lintas resto), BUKAN max. Threshold absolute
-    # (config SISTEMATIK_MIN_DAYS, default 5), BUKAN ceil(key_akhir/2) yg
-    # mati pada file pendek (key_akhir=31, data 7-9 hari → threshold 16
-    # tak tercapai). cabangActive ≥ 2 tetap (item muncul di ≥2 resto).
+    # v2.19.8 — W-5 (audit-1) + B-1 (audit-2): DUA variabel utk DUA konsumen
+    # (satu variabel utk keduanya merusak QUADRANT — persistence bisa >1):
+    #   - daysActiveNet = SUM Count Hari per item lintas resto — LUAS
+    #     jaringan, utk SISTEMATIK (threshold absolute
+    #     SISTEMATIK_MIN_DAYS default 5 — BUKAN ceil(key_akhir/2) yg mati
+    #     pada file pendek; audit-1 W-5).
+    #   - daysActive = MAX Count Hari per item — persistence PER-OUTLET,
+    #     utk stage_12_6 QUADRANT (daysActive/key_akhir harus ≤ 1; SUM bisa
+    #     >1 → semua item aktif jadi QUADRANT=SISTEMIK palsu — audit-2 B-1).
+    # cabangActive ≥ 2 tetap (item muncul di ≥2 resto).
     sistematik_min_days = int(config.get("SISTEMATIK_MIN_DAYS", 5))
     if "Count Hari" in df.columns and "NAMA RESTO" in df.columns:
         sistematik_df = df.groupby("NAMA BARANG", dropna=False).agg(
-            daysActive=("Count Hari", "sum"),  # v2.19.8 — sum lintas resto
+            daysActive=("Count Hari", "max"),      # per-outlet (QUADRANT)
+            daysActiveNet=("Count Hari", "sum"),   # network breadth (SISTEMATIK)
             cabangActive=("NAMA RESTO", "nunique"),
             totalWaste=("TOTAL", "sum"),
         ).reset_index()
     else:
         sistematik_df = item_pivot[["NAMA BARANG"]].copy()
         sistematik_df["daysActive"] = 0
+        sistematik_df["daysActiveNet"] = 0
         sistematik_df["cabangActive"] = 0
         sistematik_df["totalWaste"] = 0
 
-    # Sistematik threshold: daysActive (sum) >= SISTEMATIK_MIN_DAYS AND cabangActive >= 2
+    # Sistematik threshold: daysActiveNet (sum) >= SISTEMATIK_MIN_DAYS AND cabangActive >= 2
     sistematik_df["SISTEMATIK"] = np.where(
-        (sistematik_df["daysActive"] >= sistematik_min_days) & (sistematik_df["cabangActive"] >= 2),
+        (sistematik_df["daysActiveNet"] >= sistematik_min_days) & (sistematik_df["cabangActive"] >= 2),
         "YES", "NO"
     )
     sistematik_df["SISTEMATIK DAYS THRESHOLD"] = sistematik_min_days
@@ -1142,7 +1149,7 @@ def stage_12_5_fingerprint(
     # Merge fingerprint + sistematik ke df utama (left join on NAMA BARANG)
     # Pertama, drop kolom yang akan di-merge dari df kalau sudah ada (idempotent)
     cols_to_merge = ["W", "S", "T", "explained", "shareW", "shareS", "shareT", "FINGERPRINT CLASS",
-                    "daysActive", "cabangActive", "totalWaste", "SISTEMATIK", "SISTEMATIK DAYS THRESHOLD"]
+                    "daysActive", "daysActiveNet", "cabangActive", "totalWaste", "SISTEMATIK", "SISTEMATIK DAYS THRESHOLD"]
     df_clean = df.copy()
     for c in cols_to_merge:
         if c in df_clean.columns:

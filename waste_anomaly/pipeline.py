@@ -310,7 +310,8 @@ def _run_pipeline(
     # BOM terpisah tak ada di file rekap) → sinyal S6/S7 + Rill % to BOM
     # mati. No-op idempotent: TOTAL BOM sudah ada (file standar / hasil
     # olahan / re-run output) atau tanpa baris BOM → passthrough.
-    df_rekap = inject_bom_from_raw_rows(df_rekap, logger=_log)
+    df_rekap = inject_bom_from_raw_rows(df_rekap, logger=_log,
+                                         key_akhir=key_akhir)
 
     # ---- STAGE 1: SOURCE & CLEANUP ----
     _gate("Stage 1 — Source & cleanup", 15)
