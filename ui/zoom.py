@@ -105,10 +105,21 @@ class ZoomManager(QObject):
         self._apply()
 
     def reset(self) -> None:
-        """Kembali ke 100% (Ctrl+0)."""
+        """Kembali ke 100% (Ctrl+0 — standard 'actual size' browser-style)."""
         if self._pct == 100:
             return
         self._pct = 100
+        self._apply()
+
+    def set_level(self, pct: int) -> None:
+        """Set level zoom eksplisit (clamped MIN..MAX) + apply. Dipakai
+        MainWindow.main() utk default 80% saat aplikasi pertama dibuka
+        (permintaan user: 'tampilan aplikasi pertama kali buka jadikan
+        80% aja'). Berbeda dgn zoom(steps) (relative) — ini absolute."""
+        new = max(MIN_PCT, min(MAX_PCT, int(pct)))
+        if new == self._pct:
+            return
+        self._pct = new
         self._apply()
 
     # ------------------------------------------------------------

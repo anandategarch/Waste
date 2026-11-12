@@ -449,7 +449,6 @@ class TestMainWindowUpdateTab:
             assert isinstance(win._update_view, UpdateView)
         finally:
             win.close()
-            win.deleteLater()
 
     def test_update_staged_pindah_tab_otomatis(self):
         """ctx.update_staged (koreksi ditampung) → MainWindow pindah tab
@@ -467,4 +466,3 @@ class TestMainWindowUpdateTab:
                 "update_staged harus pindah ke tab Update nilai (idx 5)")
         finally:
             win.close()
-            win.deleteLater()

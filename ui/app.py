@@ -92,7 +92,9 @@ def _build_help_html(config: dict | None = None) -> str:
 <p><b>Shortcut:</b> <b>Ctrl+1..Ctrl+6</b> pindah tab (sesuai urutan) ·
 <b>Ctrl+E</b> ekspor Excel · <b>F1</b> bantuan ini ·
 <b>Ctrl+scroll atas/bawah</b> = zoom in/out tampilan (semua tabel/teks) ·
-<b>Ctrl+=</b> perbesar · <b>Ctrl+-</b> perkecil · <b>Ctrl+0</b> reset 100%.</p>
+<b>Ctrl+=</b> perbesar · <b>Ctrl+-</b> perkecil · <b>Ctrl+0</b> reset 100%.
+Tampilan default <b>80%</b> saat aplikasi dibuka (anti terlalu ngezoom —
+ubah kapan saja dgn Ctrl+scroll).</p>
 <h3>Tab Pipeline (tempat semua dimulai)</h3>
 <ul>
 <li>Isi <b>Input Workbook</b>: tombol <b>Telusuri…</b> memilih file Excel rekap
@@ -784,6 +786,11 @@ def main() -> int:
     app.setStyleSheet(QSS)
     app.setApplicationName(APP_TITLE)
     win = MainWindow()
+    # v2.19.7 — default zoom 80% saat aplikasi pertama dibuka (permintaan
+    # user: "pop up di tab anomali terlalu ngezoom, buat jadi 80% secara
+    # default; tampilan aplikasi pertama kali buka jadikan 80% aja"). Apply
+    # SEBELUM show supaya tak flicker (user langsung lihat 80%).
+    win._zoom.set_level(80)
     win.show()
     return app.exec()
 

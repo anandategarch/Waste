@@ -246,12 +246,29 @@ class TestZoomTheme:
 
 
 class TestZoomManager:
+    # v2.19.7 — ZoomManager._apply mutates app.setFont + app.setStyleSheet
+    # (persistent app-wide state). Save/restore around each test supaya
+    # test lain (mis. test_v270 lantai header) tak tercemar font zoom.
+    @staticmethod
+    def _save_state(app):
+        from PySide6.QtGui import QFont
+        return (QFont(app.font()), app.styleSheet())
+
+    @staticmethod
+    def _restore_state(app, state):
+        from ui.theme import UI_FONT_PX, set_current_font_px
+        orig_font, orig_ss = state
+        app.setFont(orig_font)
+        app.setStyleSheet(orig_ss)
+        set_current_font_px(UI_FONT_PX)
+
     def test_level_clamp_dan_reset(self):
         """Zoom level: clamp 70-200, step 10, reset ke 100."""
         from PySide6.QtWidgets import QApplication, QWidget
         from ui.theme import UI_FONT_PX, set_current_font_px
         from ui.zoom import MAX_PCT, MIN_PCT, STEP_PCT, ZoomManager, px_for_pct
         app = _qapp()
+        state = self._save_state(app)
         win = QWidget()
         try:
             zm = ZoomManager(app, win)
@@ -268,7 +285,41 @@ class TestZoomManager:
             assert px_for_pct(70) == round(UI_FONT_PX * 0.7)
             assert STEP_PCT == 10
         finally:
+            self._restore_state(app, state)
+            win.deleteLater()
+
+    def test_set_level_absolute_dan_clamp(self):
+        """set_level(pct) — set eksplisit (dipakai main() utk default 80%);
+        clamp MIN..MAX; apply font+QSS."""
+        from PySide6.QtWidgets import QApplication, QWidget
+        from ui.theme import (QSS, UI_FONT_PX, current_font_px,
+                              set_current_font_px)
+        from ui.zoom import MAX_PCT, MIN_PCT, ZoomManager, px_for_pct
+        app = _qapp()
+        state = self._save_state(app)
+        win = QWidget()
+        try:
             set_current_font_px(UI_FONT_PX)
+            app.setStyleSheet(QSS)
+            zm = ZoomManager(app, win)
+            assert zm.pct() == 100  # __init__ default 100 (main() apply 80)
+            # set_level(80) — default aplikasi (permintaan user v2.19.7).
+            zm.set_level(80)
+            assert zm.pct() == 80
+            # QSS + font diskalakan ke px = round(12*0.8) = 10.
+            assert current_font_px() == px_for_pct(80)
+            assert f"font-size: {px_for_pct(80)}px;" in app.styleSheet()
+            # Clamp: set_level(0) → MIN_PCT; set_level(999) → MAX_PCT.
+            zm.set_level(0)
+            assert zm.pct() == MIN_PCT
+            zm.set_level(999)
+            assert zm.pct() == MAX_PCT
+            # Idempoten: set_level ke nilai sama → no-op (tak apply ulang).
+            before = zm.pct()
+            zm.set_level(before)
+            assert zm.pct() == before
+        finally:
+            self._restore_state(app, state)
             win.deleteLater()
 
     def test_event_filter_ctrl_wheel_zoom(self):
@@ -280,6 +331,7 @@ class TestZoomManager:
         from ui.theme import UI_FONT_PX, set_current_font_px
         from ui.zoom import ZoomManager
         app = _qapp()
+        state = self._save_state(app)
         target = QWidget()
         try:
             zm = ZoomManager(app, target)
@@ -306,7 +358,7 @@ class TestZoomManager:
                           Qt.KeyboardModifier.NoModifier))
             assert zm.pct() == 100
         finally:
-            set_current_font_px(UI_FONT_PX)
+            self._restore_state(app, state)
             target.deleteLater()
 
     def test_apply_ubah_stylesheet_dan_font(self):
@@ -317,6 +369,7 @@ class TestZoomManager:
                               set_current_font_px)
         from ui.zoom import ZoomManager
         app = _qapp()
+        state = self._save_state(app)
         win = QWidget()
         try:
             # Reset ke baseline.
@@ -331,8 +384,7 @@ class TestZoomManager:
             assert f"font-size: {UI_FONT_PX}px;" not in ss
             assert current_font_px() == 16
         finally:
-            set_current_font_px(UI_FONT_PX)
-            app.setStyleSheet(QSS)
+            self._restore_state(app, state)
             win.deleteLater()
 
     def test_datatable_zoom_refresh_buang_cache(self):
