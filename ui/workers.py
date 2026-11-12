@@ -377,6 +377,90 @@ class SaveEditsWorker(QThread):
                              traceback.format_exc())
 
 
+class BatchUpdateWorker(QThread):
+    """v2.19.5 — proses SEMUA koreksi staging ke file Excel (batch).
+
+    Menggantikan jalur SaveEditsWorker satu-per-satu (user: "bisa gak
+    misal update nilai nya ke file rekap mentah dikumpulin dulu terus
+    baru proses dari pada proses satu per satu?"). Tab Update nilai
+    menampung staging; tombol 'Proses semua' menjalankan worker ini.
+
+    Input: list entry staging (sama dgn ctx.pending_updates — dipakai
+    APA ADANYA; index entry == index ctx.pending_updates supaya
+    mark_update_status(idx) tepat). Entry ber-status 'done' di-skip
+    (idempoten — klik Proses ulang tak tulis ulang yg sukses).
+
+    Per entry: loop src_rows (anggota grup) → write_day_edits per row
+    (backup=False, langsung timpa file asli — permintaan user v2.19.4).
+    Bila satu row gagal → entry FAILED (anti sebagian-tulis: tulis ke
+    anggota grup harus konsisten atau gagal total — pola SaveEditsWorker).
+    Entry gagal TETAP di staging (status='failed') utk retry setelah
+    user tutup Excel; batch lanjut entry berikutnya (jangan hentikan
+    seluruh batch karena 1 file terkunci).
+
+    Signals:
+      progress(idx, ok, msg) — per entry (idx = index ctx.pending_updates).
+      done(n_ok, n_fail)     — ringkasan akhir.
+    """
+
+    progress = Signal(int, bool, str)
+    done = Signal(int, int)
+
+    def __init__(self, entries: list[dict], parent=None) -> None:
+        super().__init__(parent)
+        # Snapshot list (referensi dict sama dgn ctx — mutasi status
+        # via mark_update_status dilihat UpdateView secara langsung).
+        self._entries = list(entries)
+        self._cancel = False
+
+    def cancel(self) -> None:
+        """Batalkan ANTAR-entry (pola FolderScanWorker — efektif setelah
+        entry saat ini selesai; write_day_edits sendiri tak bisa cancel
+        tengah-jalan). Dipakai closeEvent supaya close saat batch berjalan
+        tak menghancurkan QThread hidup."""
+        self._cancel = True
+
+    def run(self) -> None:
+        from waste_anomaly.source_writer import (
+            SourceWriteError, write_day_edits)
+        n_ok = 0
+        n_fail = 0
+        for i, entry in enumerate(self._entries):
+            if self._cancel:
+                break
+            # Skip entry sudah sukses (idempoten — Proses ulang tak tulis
+            # ulang entry 'done').
+            if entry.get("status") == "done":
+                continue
+            source = entry.get("source")
+            src_rows = entry.get("src_rows") or []
+            day_edits = entry.get("day_edits") or {}
+            if not source or not src_rows or not day_edits:
+                n_fail += 1
+                self.progress.emit(
+                    i, False, "Entry tidak lengkap (source/src_rows/day_edits).")
+                continue
+            try:
+                # Tulis tiap baris anggota grup (pola SaveEditsWorker).
+                # Bila satu row gagal → entry FAILED (anti sebagian-tulis).
+                for r in src_rows:
+                    write_day_edits(source, int(r), day_edits,
+                                    logger=None, backup=False)
+                n_ok += 1
+                rows_txt = ", ".join(f"#{r}" for r in src_rows)
+                self.progress.emit(
+                    i, True,
+                    f"{len(day_edits)} hari × {len(src_rows)} baris "
+                    f"({rows_txt}) tersimpan.")
+            except SourceWriteError as e:
+                n_fail += 1
+                self.progress.emit(i, False, str(e))
+            except Exception as e:  # noqa: BLE001 — error ke UI, bukan crash
+                n_fail += 1
+                self.progress.emit(i, False, f"{type(e).__name__}: {e}")
+        self.done.emit(n_ok, n_fail)
+
+
 class FolderScanWorker(QThread):
     """v2.17.2 — scan folder file .xlsx → gabung → temp .xlsx (background).
 

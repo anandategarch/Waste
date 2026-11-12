@@ -425,14 +425,14 @@ class TestD24ShortcutGlobal:
         assert win._tabs.currentIndex() == 4, "Ctrl+5 → tab Follow Up (idx 4)"
 
     def test_shortcut_terpasang_semua_action(self):
-        """D24: 5 action tab (Ctrl+1..Ctrl+5; v2.18.5 Scorecard dihapus)
+        """D24: 6 action tab (Ctrl+1..Ctrl+6; v2.19.5 +tab Update nilai)
         + action ekspor (Ctrl+E) semuanya ber-shortcut (shortcuts()
         non-kosong & urut benar)."""
         from PySide6.QtGui import QKeySequence
         from ui.app import MainWindow
         app = _qapp()
         win = MainWindow()
-        assert len(win._tab_actions) == 5, "lima tab = lima shortcut"
+        assert len(win._tab_actions) == 6, "enam tab = enam shortcut"
         for i, act in enumerate(win._tab_actions):
             sc = act.shortcuts()
             assert len(sc) == 1, f"tab {i + 1}: tepat satu shortcut"

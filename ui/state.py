@@ -43,6 +43,13 @@ class AppContext(QObject):
     followup_changed = Signal()  # v2.12.0: daftar follow-up baris berubah
     status = Signal(str, str)
     log_line = Signal(str)
+    # v2.19.5 — staging koreksi (tab Update nilai): kumpulin dulu, proses
+    # batch nanti. update_staged dipancar HANYA saat add_update (MainWindow
+    # dengar → pindah ke tab Update nilai). updates_changed dipancar saat
+    # ANY change (add/remove/clear/status) — UpdateView dengar → refresh
+    # tabel; MainWindow dengar → update badge jumlah pending.
+    update_staged = Signal()
+    updates_changed = Signal()
 
     def __init__(self, config: dict, parent: QObject | None = None,
                  followup_path=None) -> None:
@@ -59,6 +66,9 @@ class AppContext(QObject):
         # v2.7.0: versi dataset — bertambah tiap set_dataset; dipakai view
         # (mis. Banding Periode) utk tahu hasil lama dibuat dari dataset lama.
         self.data_version = 0
+        # v2.19.5 — staging koreksi: list dict pending tulis ke file Excel
+        # sumber. Diproses batch via tab Update nilai (BatchUpdateWorker).
+        self.pending_updates: list[dict] = []
 
         # Drill-down state (bentuk IDENTIK v2.5.1 — dikonsumsi _apply_filters)
         # v2.13.8 (gel-C): search/day_min/day_max DIHAPUS — kotak cari &
@@ -442,3 +452,86 @@ class AppContext(QObject):
 
     def set_status(self, text: str, kind: str = "running") -> None:
         self.status.emit(text, kind)
+
+    # ------------------------------------------------------------
+    # v2.19.5 — PENDING UPDATES (staging koreksi, tab Update nilai)
+    # ------------------------------------------------------------
+    def add_update(self, entry: dict) -> int:
+        """Tambah satu entry koreksi pending ke antrian staging.
+
+        entry dict kontrak (dipasang DetailPanel._on_stage_edits):
+          source    : str path file Excel sumber (REKAP MENTAH).
+          src_rows  : list[int] nomor baris fisik sheet (anggota grup).
+          day_edits : dict[str, float] hari→nilai-baru.
+          day_orig  : dict[str, float] hari→nilai-lama (utk tampilan).
+          label     : str ringkas (mis. "WASTE · AYAM · R1").
+          jenis/barang/resto : str komponen label.
+          added_at  : str timestamp.
+
+        Return index entry di pending_updates (utk highlight baris baru).
+        Pancar update_staged (MainWindow → pindah tab Update nilai) +
+        updates_changed (UpdateView refresh + badge).
+        """
+        entry.setdefault("status", "pending")
+        entry.setdefault("error", None)
+        entry.setdefault("result", None)
+        entry.setdefault("added_at",
+                         datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        self.pending_updates.append(entry)
+        idx = len(self.pending_updates) - 1
+        self.update_staged.emit()
+        self.updates_changed.emit()
+        return idx
+
+    def remove_update(self, idx: int) -> bool:
+        """Buang entry staging ber-index. Return True bila dibuang."""
+        if 0 <= idx < len(self.pending_updates):
+            del self.pending_updates[idx]
+            self.updates_changed.emit()
+            return True
+        return False
+
+    def clear_updates(self) -> int:
+        """Kosongkan SELURUH staging (pending + hasil). Return jumlah
+        dibuang. Dipakai tombol 'Kosongkan semua' di tab Update nilai."""
+        n = len(self.pending_updates)
+        self.pending_updates.clear()
+        if n:
+            self.updates_changed.emit()
+        return n
+
+    def clear_processed_updates(self) -> int:
+        """Buang HANYA entry yg status-nya 'done' (tersimpan). Entry
+        'failed' + 'pending' tetap (utk retry). Dipakai pasca proses
+        batch supaya user bisa lihat yg gagal tanpa clutter yg sukses.
+        Return jumlah dibuang."""
+        before = len(self.pending_updates)
+        self.pending_updates = [e for e in self.pending_updates
+                                if e.get("status") != "done"]
+        removed = before - len(self.pending_updates)
+        if removed:
+            self.updates_changed.emit()
+        return removed
+
+    def mark_update_status(self, idx: int, status: str,
+                           error: str | None = None,
+                           result: dict | None = None) -> None:
+        """Update status entry staging (dipanggil BatchUpdateWorker via
+        UpdateView: 'done' / 'failed'). Pancar updates_changed."""
+        if 0 <= idx < len(self.pending_updates):
+            e = self.pending_updates[idx]
+            e["status"] = status
+            e["error"] = error
+            e["result"] = result
+            self.updates_changed.emit()
+
+    def pending_count(self) -> int:
+        """Jumlah entry staging (semua status)."""
+        return len(self.pending_updates)
+
+    def pending_unprocessed_count(self) -> int:
+        """Jumlah entry staging BELUM tersimpan (pending + failed — siap
+        diproses/diulang). Dipakai badge tab + enabled-state tombol Proses.
+        Entry 'done' tak dihitung (sudah sukses — menunggu dibersihkan)."""
+        return sum(1 for e in self.pending_updates
+                   if e.get("status") != "done")

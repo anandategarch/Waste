@@ -348,13 +348,13 @@ class TestScorecardDihapus:
         import waste_anomaly.profile as pr
         assert not hasattr(pr, "PEER_KEYS")  # konsumen terakhir = insights
 
-    def test_mainwindow_lima_tab(self):
+    def test_mainwindow_enam_tab(self):
         from ui.app import MainWindow
         app = _qapp()
         win = MainWindow()
-        assert win._tabs.count() == 5
+        assert win._tabs.count() == 6
         assert "Scorecard" not in " ".join(
-            win._tabs.tabText(i) for i in range(5))
+            win._tabs.tabText(i) for i in range(6))
         win.close()
 
 

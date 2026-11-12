@@ -59,6 +59,7 @@ from .view_followup import FollowUpView
 from .view_hari import HariView
 from .view_periode import PeriodeView
 from .view_pipeline import PipelineView
+from .view_update import UpdateView
 from .workers import ExportWorker
 from .zoom import ZoomManager
 from waste_anomaly.followup import followup_path
@@ -385,20 +386,26 @@ class MainWindow(QMainWindow):
         # harus tab ke akhir dulu baru bisa muat data (alur terbalik).
         # v2.18.5: Scorecard Cabang DIHAPUS (permintaan user — tab &
         # modul insights.py dibuang bersama dead code-nya; 6 → 5 tab).
+        # v2.19.5: tab 'Update nilai' DITAMBAHKAN (index 5) — staging
+        # koreksi batch (gantikan simpan-satu-per-satu). 5 → 6 tab.
         self._views: list[tuple[str, QWidget]] = [
             ("Pipeline", PipelineView(self.ctx)),
             ("Anomali", AnomaliView(self.ctx)),
             ("Hari Mencurigakan", HariView(self.ctx)),
             ("Banding Periode", PeriodeView(self.ctx)),
             ("Follow Up", FollowUpView(self.ctx)),
+            ("Update nilai", UpdateView(self.ctx)),
         ]
         for name, view in self._views:
             self._tabs.addTab(view, name)
         # v2.12.0: ref view Follow Up (badge jumlah baris di judul tab).
         # v2.17.0: Follow Up sekarang di index 4 (v2.18.5: tetap 4 setelah
-        # Scorecard dihapus — index terakhir).
+        # Scorecard dihapus — index terakhir). v2.19.5: Update nilai di
+        # index 5 (setelah Follow Up).
         self._fu_view = self._views[4][1]
+        self._update_view = self._views[5][1]
         self._update_followup_badge()
+        self._update_update_badge()
         self._tabs.currentChanged.connect(self._on_tab_changed)
         # v2.13.11 (gel-2 D4): first-run — currentChanged terpasang SETELAH
         # addTab, jadi tab 0 TIDAK PERNAH memicu on_shown otomatis. v2.17.0:
@@ -473,6 +480,12 @@ class MainWindow(QMainWindow):
         # perlu disinkronkan (funnel tabel membaca state saat melukis).
         # v2.12.0: daftar follow-up berubah → badge jumlah di judul tab.
         self.ctx.followup_changed.connect(self._on_followup_changed)
+        # v2.19.5: staging koreksi (tab Update nilai). update_staged =
+        # koreksi baru ditampung dari pop-up → pindah tab otomatis.
+        # updates_changed = staging berubah (add/remove/clear/status) →
+        # badge jumlah pending di judul tab Update nilai.
+        self.ctx.update_staged.connect(self._on_update_staged)
+        self.ctx.updates_changed.connect(self._update_update_badge)
 
     def _on_status(self, text: str, kind: str) -> None:
         # v2.12.1 (perf): setStyleSheet HANYA saat warna berganti —
@@ -537,6 +550,30 @@ class MainWindow(QMainWindow):
         n = len(self.ctx.followup_keys)
         self._tabs.setTabText(idx, f"Follow Up ({fmt_id(n)})" if n
                                else "Follow Up")
+
+    def _on_update_staged(self) -> None:
+        """v2.19.5 — ctx.update_staged (koreksi ditampung dari pop-up detail)
+        → pindah tab otomatis ke 'Update nilai' supaya user lihat daftar
+        staging bertambah (permintaan user: 'tombol simpan koreksi diganti
+        Pindah ke tab Update nilai')."""
+        if not hasattr(self, "_update_view") or self._update_view is None:
+            return
+        idx = self._tabs.indexOf(self._update_view)
+        if idx >= 0:
+            self._tabs.setCurrentIndex(idx)
+
+    def _update_update_badge(self) -> None:
+        """v2.19.5 — judul tab 'Update nilai (N)' — jumlah koreksi staging
+        yg belum tersimpan (pending + failed — siap diproses/diulang)."""
+        if not hasattr(self, "_update_view") or self._update_view is None:
+            return
+        idx = self._tabs.indexOf(self._update_view)
+        if idx < 0:
+            return
+        n = sum(1 for e in self.ctx.pending_updates
+                if e.get("status") != "done")
+        self._tabs.setTabText(idx, f"Update nilai ({fmt_id(n)})" if n
+                               else "Update nilai")
     # ------------------------------------------------------------
     # TAB
     # ------------------------------------------------------------

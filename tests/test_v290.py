@@ -219,21 +219,22 @@ def _make_hari_view(df=None):
 
 class TestHariView:
 
-    def test_mainwindow_5_tab_dengan_hari(self):
+    def test_mainwindow_6_tab_dengan_hari(self):
         # v2.12.0: 4 → 5 tab (+ Follow Up). v2.13.1: 5 → 6 (+ Scorecard
-        # Cabang); v2.18.5: 6 → 5 (Scorecard dihapus permintaan user).
+        # Cabang); v2.18.5: 6 → 5 (Scorecard dihapus permintaan user);
+        # v2.19.5: 5 → 6 (+ Update nilai — staging koreksi batch).
         from ui.app import MainWindow
         _qapp()
         win = MainWindow()
-        assert win._tabs.count() == 5
+        assert win._tabs.count() == 6
         # v2.17.0 rombak P0: tab 0 = Pipeline (entry), tab 1 = Anomali,
-        # tab 4 = Follow Up (terakhir). tab 2 = Hari tetap.
+        # tab 4 = Follow Up, tab 5 = Update nilai (v2.19.5). tab 2 = Hari tetap.
         assert win._tabs.tabText(0) == "Pipeline"
         assert win._tabs.tabText(1) == "Anomali"
         assert win._tabs.tabText(2) == "Hari Mencurigakan"
-        titles = [win._tabs.tabText(i).split(" (")[0] for i in range(5)]
+        titles = [win._tabs.tabText(i).split(" (")[0] for i in range(6)]
         assert titles == ["Pipeline", "Anomali", "Hari Mencurigakan",
-                          "Banding Periode", "Follow Up"]
+                          "Banding Periode", "Follow Up", "Update nilai"]
         win.close()
 
     def test_render_tabel_bukti_default(self):

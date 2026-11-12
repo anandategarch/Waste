@@ -28,7 +28,7 @@ EXPECTED_MODULES = [
     "workers.py", "widgets.py", "app.py",
     "view_anomali.py", "view_followup.py", "view_hari.py",
     "view_periode.py", "view_pipeline.py", "followup_table.py",
-    "grouping.py", "zoom.py",
+    "grouping.py", "zoom.py", "view_update.py",
 ]
 
 # File mixin Tkinter lama — TIDAK BOLEH kembali (rebuild = penggantian total)
@@ -49,15 +49,17 @@ DATA_VIEWS = {
     "view_followup.py": "FollowUpView",
     "view_hari.py": "HariView",
     "view_periode.py": "PeriodeView",
+    "view_update.py": "UpdateView",
 }
 
 # v2.9.0: 3 → 4 tab (+ Hari Mencurigakan); v2.12.0: 4 → 5 (+ Follow Up);
 # v2.17.0 rombak P0: urutan alur analisa — Pipeline index 0 (entry point
 # muat data), Anomali index 1, drill Hari/Banding index 2-3, Follow Up
-# (tindak lanjut) terakhir. v2.18.5: Scorecard Cabang DIHAPUS (6 → 5).
+# (tindak lanjut) index 4. v2.18.5: Scorecard Cabang DIHAPUS (6 → 5).
+# v2.19.5: tab 'Update nilai' DITAMBAHKAN index 5 (staging koreksi batch).
 VIEW_TAB_TITLES = [
     "Pipeline", "Anomali", "Hari Mencurigakan",
-    "Banding Periode", "Follow Up",
+    "Banding Periode", "Follow Up", "Update nilai",
 ]
 
 
@@ -168,7 +170,7 @@ class TestUiStructure:
         for title in VIEW_TAB_TITLES:
             assert f'("{title}"' in src, f"tab '{title}' tidak dibangun"
         # 5 judul (v2.18.5: Scorecard Cabang dihapus), tidak ada duplikat
-        assert len(VIEW_TAB_TITLES) == len(set(VIEW_TAB_TITLES)) == 5
+        assert len(VIEW_TAB_TITLES) == len(set(VIEW_TAB_TITLES)) == 6
 
     def test_window_dibangun_offscreen(self):
         """MainWindow + 5 view ter-instantiate tanpa display (smoke).
@@ -182,8 +184,8 @@ class TestUiStructure:
         app = QApplication.instance() or QApplication(sys.argv)
         from ui.app import MainWindow
         win = MainWindow()
-        assert win._tabs.count() == 5
-        for i in range(5):
+        assert win._tabs.count() == 6
+        for i in range(6):
             assert win._tabs.tabText(i).split(" (")[0] == VIEW_TAB_TITLES[i]
         win.close()
 

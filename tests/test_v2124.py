@@ -118,16 +118,17 @@ class TestSidebarDihapus:
         finally:
             win.close()
 
-    def test_lima_tab_utuh(self):
+    def test_enam_tab_utuh(self):
         # v2.13.1: 5 → 6 tab (+ Scorecard); v2.18.5: 6 → 5 tab — Scorecard
-        # Cabang DIHAPUS (permintaan user; urutan lain tak berubah).
+        # Cabang DIHAPUS; v2.19.5: 5 → 6 tab (+ Update nilai — staging batch).
         win = self._win()
         try:
             # v2.17.0 rombak P0: urutan alur analisa — Pipeline (entry
-            # point muat data) di index 0, Follow Up (tindak lanjut) terakhir.
+            # point muat data) di index 0, Follow Up (tindak lanjut) index 4,
+            # Update nilai (staging koreksi) index 5 (v2.19.5).
             labels = [win._tabs.tabText(i) for i in range(win._tabs.count())]
             assert labels == ["Pipeline", "Anomali", "Hari Mencurigakan",
-                              "Banding Periode", "Follow Up"]
+                              "Banding Periode", "Follow Up", "Update nilai"]
         finally:
             win.close()
 

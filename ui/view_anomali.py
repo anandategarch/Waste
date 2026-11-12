@@ -795,6 +795,9 @@ class DetailPanel(Card):
                     src_rows = []
         self._cur_src_rows = src_rows
         self._cur_src_row = src_rows[0] if len(src_rows) == 1 else None
+        # v2.19.5 — simpan record aktif utk label staging (jenis/barang/resto)
+        # di _on_stage_edits (tab Update nilai).
+        self._cur_rec = rec
         is_multi = len(src_rows) > 1
         if is_multi:
             lay.addWidget(self._section(
@@ -858,12 +861,12 @@ class DetailPanel(Card):
         # grup 1-anggota editable seperti biasa, grup multi-anggota editable
         # dgn tulis ke SEMUA anggota (konfirmasi daftar baris diberikan).
         src_path = self._ctx.summary.get("workbook_path") if self._ctx.summary else None
-        save = QPushButton("💾 Simpan koreksi hari ke file Excel")
+        save = QPushButton("➡ Pindah ke tab Update nilai")
         save.setStyleSheet(
-            "QPushButton { background:#dc2626; color:white; "
+            "QPushButton { background:#0f766e; color:white; "
             "font-weight:700; border:none; padding:8px 14px; "
             "border-radius:5px; }"
-            "QPushButton:hover { background:#b91c1c; }"
+            "QPushButton:hover { background:#115e59; }"
             "QPushButton:disabled { background:#cbd5e1; color:#94a3b8; }")
         # v2.17.3 — edit DISABLED utk file folder-flow (temp gabungan).
         # Edit nilai HANYA utk file asli (mode Pilih REKAP MENTAH / TEGAR).
@@ -885,22 +888,24 @@ class DetailPanel(Card):
             save.setEnabled(True)
             if len(src_rows) == 1:
                 save.setToolTip(
-                    f"Tulis nilai hari yang diubah ke file Excel sumber:\n"
-                    f"  {src_path}\n"
-                    f"  baris Excel #{src_rows[0]} (sheet REKAP MENTAH)\n"
-                    f"Backup otomatis dibuat sebelum tulis (.bak-*.xlsx).\n"
-                    f"TOTAL dihitung ulang = sum hari 1-31 (konsisten).")
+                    f"Tampung koreksi hari yg diubah ke daftar staging\n"
+                    f"(tab Update nilai — BELUM ditulis ke file Excel):\n"
+                    f"  File: {src_path}\n"
+                    f"  baris Excel #{src_rows[0]} (sheet REKAP MENTAH)\n\n"
+                    f"Setelah ditampung, tab pindah otomatis ke Update nilai.\n"
+                    f"Kumpulkan koreksi lain, lalu klik 'Proses semua' di\n"
+                    f"tab Update nilai utk tulis sekaligus ke file Excel\n"
+                    f"(langsung timpa, tanpa backup — TOTAL dihitung ulang).")
             else:
                 rows_txt = ", ".join(f"#{r}" for r in src_rows)
                 save.setToolTip(
-                    f"Tulis nilai hari yg diubah ke SEMUA {len(src_rows)} "
-                    f"baris Excel anggota grup (alasan berbeda, item+cabang "
-                    f"sama):\n"
-                    f"  {src_path}\n"
-                    f"  baris Excel: {rows_txt}\n"
-                    f"Nilai baru ditulis SAMA ke tiap anggota (bukan "
-                    f"distribusi). Konfirmasi daftar baris diberikan sebelum tulis.\n"
-                    f"TOTAL tiap anggota dihitung ulang = sum hari 1-31.")
+                    f"Tampung koreksi hari yg diubah ke daftar staging\n"
+                    f"(tab Update nilai — BELUM ditulis ke file Excel):\n"
+                    f"  File: {src_path}\n"
+                    f"  baris Excel: {rows_txt} ({len(src_rows)} anggota grup)\n"
+                    f"Nilai baru ditulis SAMA ke tiap anggota saat diproses.\n\n"
+                    f"Setelah ditampung, tab pindah otomatis ke Update nilai.\n"
+                    f"Klik 'Proses semua' di sana utk tulis sekaligus.")
         else:
             save.setEnabled(False)
             why = ("__SRC_ROW tidak ada di record"
@@ -910,7 +915,7 @@ class DetailPanel(Card):
                 f"Nonaktif — {why}.\n"
                 "Jalankan ulang pipeline (tab Pipeline → 🧮 Pilih REKAP "
                 "Mentah → Mulai) supaya mapping baris Excel terpasang.")
-        save.clicked.connect(self._on_save_edits)
+        save.clicked.connect(self._on_stage_edits)
         self._save_btn = save
         alay.addWidget(save)
 
@@ -1259,28 +1264,22 @@ class DetailPanel(Card):
                 "ensure_rekap_header.", src_row, len(idx))
         return idx[0]
 
-    def _on_save_edits(self) -> None:
-        """Handler klik "Simpan koreksi" — tulis hari yg diubah ke Excel.
+    def _on_stage_edits(self) -> None:
+        """v2.19.5 — Handler klik "➡ Pindah ke tab Update nilai".
 
-        v2.16.1 — ASYNC via SaveEditsWorker (background thread). UI TIDAK
-        membeku ("Not Responding" hilang). Alur:
-          1. Kumpulkan HANYA hari yg berubah (banding spinbox vs orig).
-          2. Validasi __SRC_ROW + workbook_path.
-          3. Dialog konfirmasi (transparan — daftar perubahan + file + baris).
-          4. Start SaveEditsWorker(backup=False). Tombol di-disable, status
-             "Menyimpan…". Worker selesai → signal done/failed ke UI thread.
-          5. _on_save_done: update ctx.df + emit day_edited + dialog sukses.
-          6. _on_save_failed: dialog error + log.
+        Kumpulkan hari yg diubah → tampung ke ctx.pending_updates (staging)
+        → MainWindow pindah tab ke "Update nilai" (signal ctx.update_staged).
+        TIDAK menulis ke file Excel di sini — user klik "Proses semua" di
+        tab Update nilai utk tulis batch (permintaan user: "kumpulin dulu
+        terus baru proses dari pada proses satu per satu").
 
-        backup=False (permintaan user: "Gak perlu ada back up file aja biar
-        cepat dan aku sudah aku yakin dengan perubahan nku"). Verifikasi
-        post-write TETAP jalan di worker (anti silent-error).
+        Menggantikan _on_save_edits (v2.16.0 — simpan-satu-per-satu ke
+        Excel via SaveEditsWorker). SaveEditsWorker tetap tersedia sbg API
+        (BatchUpdateWorker memakai write_day_edits langsung).
         """
         if self._save_btn is None:
             return  # tombol mayat — jangan sentuh
         # v2.17.3 — guard: edit DISABLED utk file folder-flow (temp).
-        # Tombol sudah di-disable di construction, tapi guard ini jaga
-        # ekstra bila state berubah / shortcut keyboard memicu.
         src_path = (self._ctx.summary.get("workbook_path")
                     if self._ctx.summary else None)
         if _workbook_is_folder_temp(src_path):
@@ -1296,13 +1295,6 @@ class DetailPanel(Card):
                 "REKAP MENTAH_..._TEGAR (dgn kolom NAMA RESTO) → edit via "
                 "pop-up.")
             return
-        # Jangan mulai worker kedua saat satu lagi jalan
-        if self._save_worker is not None:
-            QMessageBox.information(
-                self, "Simpan sedang berjalan",
-                "Penyimpanan koreksi sebelumnya masih berjalan di background.\n"
-                "Tunggu sebentar lalu coba lagi.")
-            return
         # 1. Kumpulkan perubahan
         if not self._day_edits:
             QMessageBox.information(
@@ -1317,7 +1309,7 @@ class DetailPanel(Card):
             src_rows = [int(self._cur_src_row)]
         if not src_rows:
             QMessageBox.warning(
-                self, "Tidak bisa simpan",
+                self, "Tidak bisa menampung koreksi",
                 "Record ini tidak punya mapping baris Excel (__SRC_ROW / "
                 "__SRC_ROWS).\n"
                 "Jalankan ulang pipeline (tab Pipeline → 🧮 Pilih REKAP "
@@ -1325,15 +1317,14 @@ class DetailPanel(Card):
                 "Kemungkinan sebab: record dari dataset lama yang dimuat "
                 "sebelum fitur edit pop-up aktif.")
             return
-        src_path = (self._ctx.summary.get("workbook_path")
-                    if self._ctx.summary else None)
         if not src_path:
             QMessageBox.warning(
-                self, "Tidak bisa simpan",
+                self, "Tidak bisa menampung koreksi",
                 "Path file Excel sumber tidak ada di summary context.\n"
                 "Jalankan ulang pipeline dari tab Pipeline.")
             return
         day_edits: dict[str, float] = {}
+        day_orig: dict[str, float] = {}
         for name, sp in self._day_edits.items():
             try:
                 new_val = float(sp.value())
@@ -1346,82 +1337,76 @@ class DetailPanel(Card):
             orig = self._day_orig.get(name, 0.0)
             if abs(new_val - orig) > 1e-9:  # hanya yg berubah
                 day_edits[name] = new_val
+                day_orig[name] = float(orig)
         if not day_edits:
             QMessageBox.information(
                 self, "Tidak ada perubahan",
                 "Tidak ada nilai hari yang berubah dari nilai asli.\n"
-                "Ubah minimal satu hari di grid atas lalu klik Simpan.")
+                "Ubah minimal satu hari di grid atas lalu klik tombol "
+                "Pindah ke tab Update nilai.")
             return
-        # 2. Dialog konfirmasi (transparan)
+        # 2. Bangun entry staging + label dari record aktif.
+        rec = getattr(self, "_cur_rec", None)
+
+        def _s(name: str) -> str:
+            v = rec.get(name) if rec is not None else None
+            if v is None:
+                return ""
+            if isinstance(v, float) and v != v:  # NaN
+                return ""
+            return str(v).strip()
+
+        jenis = _s("JENIS")
+        barang = _s("NAMA BARANG")
+        resto = _s("NAMA RESTO")
+        label = " · ".join(p for p in (jenis, barang, resto) if p)
+        rows_txt = ", ".join(f"#{r}" for r in src_rows)
         changes_txt = "\n".join(
-            f"  Hari {d}: {fmt_cell(self._day_orig.get(d, 0.0))} → "
+            f"  Hari {d}: {fmt_cell(day_orig.get(d, 0.0))} → "
             f"{fmt_color_styled_write_day_value(day_edits[d])}"
             for d in sorted(day_edits, key=int))
         from pathlib import Path
-        is_multi = len(src_rows) > 1
-        if is_multi:
-            rows_txt = ", ".join(f"#{r}" for r in src_rows)
-            baris_line = (f"  Baris Excel ({len(src_rows)} anggota grup): "
-                          f"{rows_txt}\n"
-                          f"  Nilai baru ditulis SAMA ke SEMUA anggota "
-                          f"(alasan berbeda, item+cabang sama).\n")
-        else:
-            baris_line = f"  Baris Excel: #{src_rows[0]}\n"
+        # 3. Konfirmasi tampung (BELUM tulis Excel — aman dibatalkan).
         confirm = QMessageBox(self)
         confirm.setIcon(QMessageBox.Icon.Question)
-        confirm.setWindowTitle("Konfirmasi Simpan Koreksi")
+        confirm.setWindowTitle("Tampung koreksi ke Update nilai")
         confirm.setText(
-            f"Akan menulis {len(day_edits)} koreksi hari ke file Excel "
-            f"sumber:\n\n"
+            f"Tampung {len(day_edits)} koreksi hari ke daftar staging?\n\n"
             f"  File: {Path(src_path).name}\n"
-            f"{baris_line}\n"
+            f"  Baris Excel: {rows_txt}\n"
+            f"  Item: {label}\n\n"
             f"Perubahan:\n{changes_txt}\n\n"
-            f"TOTAL akan dihitung ulang = sum hari 1-31.\n"
-            f"Tanpa backup (langsung tulis — cepat).\n\n"
-            f"Lanjutkan?")
+            f"Koreksi BELUM ditulis ke file Excel — ditampung dulu di\n"
+            f"tab Update nilai. Kumpulkan koreksi lain, lalu klik\n"
+            f"'Proses semua' di tab Update nilai utk menulis sekaligus.")
         confirm.setStandardButtons(
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        confirm.setDefaultButton(QMessageBox.StandardButton.No)
+        confirm.setDefaultButton(QMessageBox.StandardButton.Yes)
         if confirm.exec() != QMessageBox.StandardButton.Yes:
-            self._ctx.set_status("Simpan koreksi dibatalkan user.", "info")
+            self._ctx.set_status("Tampung koreksi dibatalkan user.", "info")
             return
-        # v2.18.0 audit (UI-6): box parented per klik tak pernah dihapus
-        # otomatis — pensiunkan pasca exec (pola menu konteks widgets).
         confirm.deleteLater()
-
-        # 3. Start worker (background thread — UI tak membeku)
-        # v2.19.2 — src_rows (list) utk grup multi-anggota; worker tulis ke
-        # SEMUA anggota (lihat SaveEditsWorker.run).
-        self._pending_edits = dict(day_edits)
-        self._pending_src_rows = list(src_rows)
-        self._save_worker = SaveEditsWorker(
-            src_path, src_rows[0], day_edits, parent=self,
-            src_rows=src_rows if is_multi else None)
-        self._save_worker.done.connect(self._on_save_done)
-        self._save_worker.failed.connect(self._on_save_failed)
-        # v2.16.2: safety net — finished→deleteLater supaya worker di-cleanup
-        # meski done/failed handler tak jalan (mis. panel di-destroy saat
-        # worker masih running). Qt auto-disconnect signal saat receiver
-        # destroy; deleteLater pastikan worker objek tak leak.
-        self._save_worker.finished.connect(self._save_worker.deleteLater)
-        # Disable tombol + status "Menyimpan…"
-        if self._save_btn is not None:
-            self._save_btn.setEnabled(False)
-            self._save_btn.setText("⏳ Menyimpan…")
-        # Disable semua spinbox (anti edit saat write berjalan)
-        for sp in self._day_edits.values():
-            try:
-                sp.setEnabled(False)
-            except RuntimeError:
-                pass
-        rows_lbl = (f"{len(src_rows)} baris grup ({rows_txt})"
-                    if is_multi else f"baris #{src_rows[0]}")
+        # 4. Tampung ke ctx.pending_updates → pancar update_staged
+        # (MainWindow pindah tab) + updates_changed (UpdateView refresh).
+        entry = {
+            "source": str(src_path),
+            "src_rows": list(src_rows),
+            "day_edits": dict(day_edits),
+            "day_orig": dict(day_orig),
+            "label": label,
+            "jenis": jenis,
+            "barang": barang,
+            "resto": resto,
+        }
+        idx = self._ctx.add_update(entry)
+        n_total = self._ctx.pending_count()
         self._ctx.set_status(
-            f"Menyimpan {len(day_edits)} koreksi ke '{Path(src_path).name}' "
-            f"{rows_lbl} (background)…", "info")
-        self._ctx.log(f"[edit-pop-up] mulai simpan (background): "
-                      f"{len(day_edits)} hari ke {rows_lbl}")
-        self._save_worker.start()
+            f"Koreksi ditampung ke tab Update nilai (#{idx + 1} — total "
+            f"{n_total}). Klik 'Proses semua' di tab Update nilai utk "
+            f"tulis ke file Excel.", "info")
+        self._ctx.log(
+            f"[edit-pop-up] STAGE: {len(day_edits)} hari ke {rows_txt} "
+            f"({label}) — total staging {n_total}.")
 
     def _on_save_done(self, result: dict) -> None:
         """Worker selesai SUKSES — update df + emit signal + dialog hasil.

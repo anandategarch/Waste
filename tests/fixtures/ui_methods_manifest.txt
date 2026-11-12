@@ -45,6 +45,10 @@ view_periode.py::fmt_run_label
 view_pipeline.py::PipelineView
 view_pipeline.py::_fmt_ts_id
 view_pipeline.py::_log_id
+view_update.py::UpdateView
+view_update.py::_fmt_day_edits
+view_update.py::_fmt_num
+view_update.py::_status_render
 widgets.py::Card
 widgets.py::DataTable
 widgets.py::FilterHeader
@@ -62,6 +66,7 @@ widgets.py::_paint_funnel
 widgets.py::busy_feedback
 widgets.py::icon_header
 widgets.py::status_chip_for
+workers.py::BatchUpdateWorker
 workers.py::ExportWorker
 workers.py::FolderScanWorker
 workers.py::HistoryWorker

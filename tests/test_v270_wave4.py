@@ -43,7 +43,7 @@ EXPECTED_MODULES = [
     "workers.py", "widgets.py", "app.py",
     "view_anomali.py", "view_followup.py", "view_hari.py",
     "view_periode.py", "view_pipeline.py", "followup_table.py",
-    "grouping.py", "zoom.py",
+    "grouping.py", "zoom.py", "view_update.py",
 ]
 
 
