@@ -547,7 +547,19 @@ def load_bom(
         sheet, ref = resolve_sheet_for("bom", config, sheets, named)
     except ValueError:
         if logger:
-            logger("[loader] BOM sheet tidak ditemukan — BOM join dilewati (TOTAL BOM = None)")
+            # v2.19.6 — reword: warning lama "TOTAL BOM = None" menyesatkan
+            # utk flow REKAP MENTAH sekali-jalan (v2.15.0). BOM sheet terpisah
+            # memang tak ada di file rekap (single-sheet), TAPI inject_bom
+            # _from_raw_rows (pipeline) mengambil BOM INLINE dari baris
+            # JENIS=BOM di sheet REKAP MENTAH — TOTAL BOM TERISI bila file
+            # punya baris JENIS=BOM (lihat log "[rekap_import] TOTAL BOM
+            # inline ..." berikutnya). TOTAL BOM = None HANYA bila file tak
+            # punya baris JENIS=BOM sama sekali.
+            logger(
+                "[loader] BOM sheet terpisah tidak ditemukan di workbook — "
+                "BOM akan diambil INLINE dari baris JENIS=BOM sheet REKAP "
+                "MENTAH (v2.15.0 sekali-jalan; lihat log berikutnya). "
+                "TOTAL BOM = None HANYA bila file tak punya baris JENIS=BOM.")
         return pd.DataFrame(columns=_EMPTY_BOM_COLUMNS)
 
     if logger:
