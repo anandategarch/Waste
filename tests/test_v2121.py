@@ -211,6 +211,8 @@ class TestDisplayLru:
         # v2.19.0 — tampilan GRUP: kolom kunci = __FPS (tuple sidik jari
         # anggota grup), bukan __FP baris-tunggal. Centang semua grup =
         # masukkan SEMUA fp anggota semua grup (SATU broadcast).
+        # v2.19.3 — layout sampel: tabel ber-PEMISAH grup (baris __SEP
+        # kosong, selalu ✓ False) — cek ✓ hanya pada baris DATA.
         from ui.grouping import FPS_COL
         ctx, view = self._view()
         view.show()
@@ -219,6 +221,8 @@ class TestDisplayLru:
         _qapp().processEvents()
         m = view._table.model()
         disp = m.dataframe
+        is_sep = (disp["__SEP"].tolist() if "__SEP" in disp.columns
+                  else [False] * len(disp))
         all_fps: list[str] = []
         for fps in disp[FPS_COL]:
             if isinstance(fps, tuple):
@@ -226,12 +230,17 @@ class TestDisplayLru:
         ctx.add_followup_many(all_fps)
         _qapp().processEvents()
         assert m.dataframe is disp
-        assert bool(disp[CHECK_COL].all())
+        # ✓ dibaca ULANG pasca-refresh in-place (bukan snapshot pra-toggle)
+        data_vals = [v for v, s in zip(disp[CHECK_COL].tolist(), is_sep)
+                     if s is not True]
+        assert all(bool(v) for v in data_vals)
         # keluarkan semua → ✓ False pada objek display YANG SAMA
         ctx.clear_followup()
         _qapp().processEvents()
         assert m.dataframe is disp
-        assert not bool(disp[CHECK_COL].any())
+        assert not any(bool(v) for v, s in
+                       zip(disp[CHECK_COL].tolist(), is_sep)
+                       if s is not True)
         view.close()
 
     def test_data_ready_mengosongkan_cache_display(self):

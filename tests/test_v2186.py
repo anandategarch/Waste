@@ -121,7 +121,9 @@ class TestPopupViaKlikGanda:
 
     def test_popup_terbuka_klik_mengikuti(self):
         """Saat pop-up SUDAH terbuka, klik 1×/navigasi mengganti isi
-        pop-up (perilaku lama dipertahankan utk navigasi aktif)."""
+        pop-up (perilaku lama dipertahankan utk navigasi aktif).
+        v2.19.3 — tabel ber-PEMISAH grup: navigasi ke baris DATA ke-2
+        (baris pemisah kosong tak punya record → pop-up tak berubah)."""
         from PySide6.QtWidgets import QApplication
         view, _ = _make_view()
         app = QApplication.instance() or QApplication([])
@@ -133,10 +135,14 @@ class TestPopupViaKlikGanda:
         assert view._popup.isVisible()
         assert "RESTO 1" in view._popup._panel._title.text()
         m = view._table.model()
-        view._table.setCurrentIndex(m.index(1, 2))  # kolom non-✓
+        mdf = m.dataframe
+        r1 = (next(i for i, v in enumerate(mdf["__SEP"].tolist())
+                   if v is not True and i > 0)
+               if "__SEP" in mdf.columns else 1)
+        view._table.setCurrentIndex(m.index(r1, 2))  # kolom non-✓
         app.processEvents()
-        assert view._table.currentIndex().row() == 1
-        view._table.row_clicked.emit(m.index(1, 2))
+        assert view._table.currentIndex().row() == r1
+        view._table.row_clicked.emit(m.index(r1, 2))
         app.processEvents()
         assert "RESTO 2" in view._popup._panel._title.text(), (
             "pop-up terbuka harus mengikuti baris yang dipilih")

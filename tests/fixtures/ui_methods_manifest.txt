@@ -8,6 +8,7 @@ grouping.py::_day_columns
 grouping.py::_join_unique
 grouping.py::_safe_div
 grouping.py::group_anomali_display
+grouping.py::insert_group_separators
 models.py::PandasTableModel
 models.py::_fmt_th
 models.py::_th

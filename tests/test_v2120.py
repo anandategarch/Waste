@@ -64,6 +64,15 @@ def _qapp():
     return QApplication.instance() or QApplication(sys.argv)
 
 
+def _data_row_idx(model_df: pd.DataFrame) -> list[int]:
+    """v2.19.3 — indeks baris DATA murni (baris pemisah grup __SEP
+    dilewati — layout sampel menambah baris kosong antar grup)."""
+    if "__SEP" in getattr(model_df, "columns", []):
+        return [i for i, v in enumerate(model_df["__SEP"].tolist())
+                if v is not True]
+    return list(range(len(model_df)))
+
+
 def _df_fu() -> pd.DataFrame:
     """Fixture 5 baris — kembar identik, kembar beda-nilai, lonjakan.
 
@@ -489,13 +498,19 @@ class TestV2120AnomaliView:
         assert m.dataframe.columns[0] == CHECK_COL
         assert FPS_COL in m.dataframe.columns  # v2.19.0: grup → __FPS
         # grup-1 = BEBEK (1 anggota) → klik = 1 fp masuk follow-up
-        rect = view._table.visualRect(m.index(1, 0))
+        # v2.19.3 — urutan default = GRUP (JENIS alfabetis: BEBEK(SUSUT)
+        # di depan, CUMI, AYAM) + pemisah antar grup — cari baris grup
+        # by NAMA BARANG (bukan posisi lama).
+        bebek_row = next(
+            i for i, v in enumerate(m.dataframe["NAMA BARANG"].tolist())
+            if v == "BEBEK")
+        rect = view._table.visualRect(m.index(bebek_row, 0))
         QTest.mouseClick(view._table.viewport(), Qt.MouseButton.LeftButton,
                          Qt.KeyboardModifier.NoModifier,
                          QPoint(rect.x() + 8, rect.y() + rect.height() // 2))
         _qapp().processEvents()
         assert len(ctx.followup_keys) == 1
-        assert bool(m.dataframe.iloc[1][CHECK_COL]) is True
+        assert bool(m.dataframe.iloc[bebek_row][CHECK_COL]) is True
         # uncheck klik ulang
         QTest.mouseClick(view._table.viewport(), Qt.MouseButton.LeftButton,
                          Qt.KeyboardModifier.NoModifier,
@@ -532,7 +547,9 @@ class TestV2120AnomaliView:
         reset model (objek df model tetap — cache fit tak tersentuh).
         v2.19.0 — tampilan GRUP: ✓ grup = ADA anggota tercentang.
         fps.iloc[0] = AYAM row-0 (grup-0 → ✓ True); fps.iloc[3] = BEBEK
-        (grup-1 → ✓ True). Grup-2 (CUMI) tak terkena → ✓ False."""
+        (grup-1 → ✓ True). Grup-2 (CUMI) tak terkena → ✓ False.
+        v2.19.3 — tabel kini ber-PEMISAH grup (baris __SEP): indeks posisi
+        data diambil lewat _data_row_idx (baris pemisah dilewati)."""
         ctx, view = self._view()
         view.show()
         ctx.set_dataset(_df_fu(), {"key_akhir": 31})
@@ -544,10 +561,15 @@ class TestV2120AnomaliView:
         ctx.add_followup_many([fps.iloc[0], fps.iloc[3]])
         _qapp().processEvents()
         assert m.dataframe is df_obj  # TAK di-reset
-        # grup-0 (AYAM) & grup-1 (BEBEK) ber-✓ True; grup-2 (CUMI) False
-        assert bool(m.dataframe.iloc[0][CHECK_COL]) is True
-        assert bool(m.dataframe.iloc[1][CHECK_COL]) is True
-        assert bool(m.dataframe.iloc[2][CHECK_COL]) is False
+        # v2.19.3 — urutan default = GRUP (JENIS alfabetis: BEBEK, CUMI,
+        # AYAM) — cek ✓ per NAMA BARANG (bukan posisi lama AYAM/BEBEK/CUMI).
+        for nama, expected in (("AYAM", True), ("BEBEK", True),
+                               ("CUMI", False)):
+            row = next(
+                i for i, v in enumerate(m.dataframe["NAMA BARANG"].tolist())
+                if v == nama)
+            assert bool(m.dataframe.iloc[row][CHECK_COL]) is expected, (
+                f"✓ grup {nama} harus {expected}")
         view.close()
 
     def test_display_memo_objek_stabil(self):

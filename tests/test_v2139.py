@@ -109,6 +109,19 @@ def _click_row(view, row: int) -> None:
     app.processEvents()
 
 
+def _data_row(view, n: int) -> int:
+    """v2.19.3 — posisi baris DATA ke-n (0-based; baris PEMISAH grup
+    __SEP dilewati — layout sampel menambah baris kosong antar grup,
+    baris pemisah tak selectable sehingga klik/seleksi tak bisa
+    mendarat di sana)."""
+    mdf = view._table.model().dataframe
+    if "__SEP" in mdf.columns:
+        rows = [i for i, v in enumerate(mdf["__SEP"].tolist())
+                if v is not True]
+        return rows[n]
+    return n
+
+
 # ============================================================
 # [F] GUARD TEKAN#1 REPLAY — bug "klik filter muncul pop up"
 # ============================================================
@@ -158,13 +171,13 @@ class TestGuardTekanTunggal:
         app.processEvents()
         QTest_qWait(50)
         view._table._hf_hide = (view._table._hf_hide[0] - 10.0, None)
-        _click_row(view, 1)
+        _click_row(view, r1 := _data_row(view, 1))
         # klik SAH: baris terseleksi (guard tak menelan)
-        assert view._table.currentIndex().row() == 1
+        assert view._table.currentIndex().row() == r1
         assert not view._popup.isVisible(), (
             "klik 1× tak membuka pop-up (v2.18.6)")
         # klik-ganda pasca-guard → pop-up terbuka
-        view._table.double_clicked.emit(view._table._model.record(1))
+        view._table.double_clicked.emit(view._table._model.record(r1))
         QApplication.processEvents()
         assert view._popup.isVisible(), (
             "klik-ganda harus membuka pop-up pasca-guard")
@@ -177,9 +190,9 @@ class TestGuardTekanTunggal:
         from PySide6.QtWidgets import QApplication
         view, _ = _make_view()
         assert view._table._hf_hide[0] < 0
-        _click_row(view, 1)
-        assert view._table.currentIndex().row() == 1
-        view._table.double_clicked.emit(view._table._model.record(1))
+        _click_row(view, r1 := _data_row(view, 1))
+        assert view._table.currentIndex().row() == r1
+        view._table.double_clicked.emit(view._table._model.record(r1))
         QApplication.processEvents()
         assert view._popup.isVisible()
 
@@ -203,12 +216,15 @@ class TestGuardTekanTunggal:
         m = view._table.model()
         assert m.dataframe.columns[0] == CHECK_COL
         # toggle programatik (kontrak suite) — jalur setData/model
-        view._on_check_toggled(1, True)
-        fps = m.record(1)["__FPS"]
+        # v2.19.3: posisi baris DATA (pemisah dilewati).
+        r1 = _data_row(view, 1)
+        view._on_check_toggled(r1, True)
+        fps = m.record(r1)["__FPS"]
         fp0 = str(fps[0]) if isinstance(fps, tuple) else str(fps)
         assert fp0 in ctx.followup_set()
         # tekan mouse pada sel ✓ → seleksi hidup + pop-up ditekan
-        idx = m.index(2, 0)
+        r2 = _data_row(view, 2)
+        idx = m.index(r2, 0)
         rect = view._table.visualRect(idx)
         pos, g = QPointF(rect.center()), QPointF(
             view._table.mapToGlobal(rect.center()))
@@ -220,7 +236,7 @@ class TestGuardTekanTunggal:
                 typ, pos, g, Qt.MouseButton.LeftButton, btns,
                 Qt.KeyboardModifier.NoModifier))
         app.processEvents()
-        assert view._table.selectionModel().currentIndex().row() == 2
+        assert view._table.selectionModel().currentIndex().row() == r2
         assert not view._popup.isVisible(), (
             "klik sel ✓ tanpa riwayat menu tetap aksi murni (v2.13.5)")
 

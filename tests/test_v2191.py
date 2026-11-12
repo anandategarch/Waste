@@ -161,7 +161,7 @@ class TestBFunnelKeterangan:
         view.show()
         _qapp().processEvents()
         m = view._table.model()
-        assert m.rowCount() == 2
+        assert m.rowCount() == 3  # v2.19.3: 2 grup + 1 baris pemisah
         hdr = view._table.horizontalHeader()
         logical = list(m.dataframe.columns).index("KETERANGAN")
         hdr._open_menu(logical)
@@ -192,7 +192,7 @@ class TestBFunnelKeterangan:
         # lepas
         view._on_header_filter("KETERANGAN", "keterangan", None)
         _qapp().processEvents()
-        assert view._table.model().rowCount() == 2
+        assert view._table.model().rowCount() == 3  # v2.19.3: 2 grup + 1 pemisah
         view.close()
 
     def test_filter_keterangan_total_grup_utuh(self):
@@ -218,7 +218,7 @@ class TestBFunnelKeterangan:
         view._on_clear_filters()
         _qapp().processEvents()
         assert not view._hfilters
-        assert view._table.model().rowCount() == 2
+        assert view._table.model().rowCount() == 3  # v2.19.3: 2 grup + 1 pemisah
         view.close()
 
 

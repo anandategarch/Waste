@@ -55,6 +55,16 @@ FPS_COL = "__FPS"
 # v2.16.0 pulih, regresi v2.19.0 diperbaiki); grup multi-anggota → tulis
 # koreksi ke SEMUA anggota sekaligus (konfirmasi daftar baris diberikan).
 SRC_ROWS_COL = "__SRC_ROWS"
+# v2.19.3 — kolom penanda BARIS PEMISAH grup (layout SAMPEL TAMPILAN BARU
+# di TABEL tab Anomali — permintaan user: "insert blank line after each
+# item label ... kolom jenis dan nama barang"). Baris pemisah: seluruh
+# kolom NaN + __SEP=True → model merender baris KOSONG (tak selectable,
+# record()=None, tak masuk funnel/klik).
+SEP_COL = "__SEP"
+# Kunci grup pemisah = label item (JENIS + NAMA BARANG) — pemisah disisipkan
+# saat label item BERUBAH antar baris bertetangga (urutan grup dijamin
+# oleh sort (JENIS, NAMA BARANG, NAMA RESTO)).
+SEP_KEYS = ("JENIS", "NAMA BARANG")
 
 # Urutan status dari paling ringan → paling parah (worst-of-group).
 _STATUS_RANK = {"Normal": 0, "Perlu Review": 1, "Potensi Anomali": 2,
@@ -324,3 +334,77 @@ def group_anomali_display(
             if c not in front + list(_internal)]
     tail = [c for c in (FPS_COL, SRC_ROWS_COL) if c in out.columns]
     return out[front + rest + tail]
+
+
+def insert_group_separators(
+    df: pd.DataFrame,
+    keys: tuple[str, ...] = SEP_KEYS,
+) -> pd.DataFrame:
+    """v2.19.3 — sisipkan BARIS KOSONG pemisah ANTAR grup item.
+
+    Layout SAMPEL TAMPILAN BARU.xlsx di TABEL tab Anomali (permintaan user:
+    "insert blank line after each item label ... dari kolom jenis dan nama
+    barang"): setelah tiap grup (JENIS, NAMA BARANG) — baris bertetangga dgn
+    label item sama — disisipkan SATU baris kosong; pemisah HANYA antar grup
+    (tidak sebelum grup pertama, tidak setelah grup terakhir — sama dgn
+    sheet Excel 'Anomali Grup').
+
+    Syarat: ``df`` SUDAH diurut supaya baris grup bertetangga (pemanggil
+    mem-sort by JENIS, NAMA BARANG, NAMA RESTO; model.sort memakai mergesort
+    stable → sort by salah satu kunci grup tetap menjaga kedekatan grup).
+
+    Baris pemisah: SELURUH kolom NaN + ``__SEP``=True (Python bool —
+    kontrak model: render kosong, tak selectable, record()=None; funnel &
+    klik di-guard). Idempoten: bila __SEP sudah ada → buang dulu, sisip
+    ulang (dipakai model.sort saat user sort by kolom grup).
+
+    Return: df baru (index 0..n-1) dgn kolom ``__SEP`` tambahan; df KOSONG
+    / tanpa kunci grup / 1 grup tunggal → df asli (tanpa pemisah, dgn
+    kolom __SEP=False utk kontrak seragam bila memungkinkan).
+    """
+    if df is None or df.empty:
+        return df
+    have = [k for k in keys if k in df.columns]
+    if not have:
+        return df
+    # Idempoten: buang pemisah lama (sort ulang / re-insert).
+    if SEP_COL in df.columns:
+        try:
+            old_sep = df[SEP_COL].map(
+                lambda v: isinstance(v, bool) and v)
+            if bool(old_sep.any()):
+                df = df[~old_sep]
+            df = df.drop(columns=[SEP_COL])
+        except Exception:  # noqa: BLE001 — dtype eksotis: anggap tak ada
+            pass
+    # Grup baru dimulai saat label item BERUBAH dari baris sebelumnya.
+    # fillna sentinel: pandas ``ne`` menganggap NaN ≠ NaN (dua baris NaN
+    # berurutan akan dianggap "berubah" — salah).
+    k = df[have].fillna("\x00nan")
+    changed = k.ne(k.shift()).any(axis=1)
+    insert_before = changed.copy()
+    if len(insert_before):
+        insert_before.iloc[0] = False  # grup pertama tanpa pemisah di depan
+    n_sep = int(insert_before.sum())
+    if n_sep == 0:
+        # 1 grup tunggal: tanpa pemisah — kolom __SEP tetap dipasang (kontrak
+        # seragam: model/funnel boleh asumsi kolom ada).
+        out = df.copy()
+        out[SEP_COL] = False
+        return out
+    arr = df.to_numpy(dtype=object)
+    n, ncols = arr.shape
+    flags = insert_before.to_numpy()
+    total = n + n_sep
+    out_arr = np.empty((total, ncols + 1), dtype=object)
+    out_arr[:, :] = np.nan
+    out_arr[:, ncols] = False
+    pos = 0
+    for i in range(n):
+        if flags[i]:
+            out_arr[pos, ncols] = True   # baris pemisah: semua kolom NaN
+            pos += 1
+        out_arr[pos, :ncols] = arr[i]
+        out_arr[pos, ncols] = False
+        pos += 1
+    return pd.DataFrame(out_arr, columns=list(df.columns) + [SEP_COL])

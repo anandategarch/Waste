@@ -476,6 +476,11 @@ class PandasTableModel(QAbstractTableModel):
         # Hanya ToolTipRole header yang membaca ini; kontrak lain
         # (set_header_map alias judul, data, sort) tak tersentuh.
         self._tooltip_map: dict[str, str] = {}
+        # v2.19.3 — baris PEMISAH grup (layout SAMPEL TAMPILAN BARU di tab
+        # Anomali): kolom __SEP=True → baris kosong visual. Opt-in via
+        # set_separator_column; data()/flags()/record()/sort() separator-aware.
+        self._sep_col: str | None = None
+        self._sep_group_keys: tuple[str, ...] = ("JENIS", "NAMA BARANG")
 
     def _rebuild_snapshot(self) -> None:
         """Bangun ulang snapshot numpy dari _df (setelah set/reset/sort)."""
@@ -537,7 +542,12 @@ class PandasTableModel(QAbstractTableModel):
         return self._df
 
     def record(self, row: int) -> pd.Series | None:
-        """Baris penuh (pd.Series) pada posisi tampilan saat ini."""
+        """Baris penuh (pd.Series) pada posisi tampilan saat ini.
+
+        v2.19.3 — baris PEMISAH grup → None (bukan data; caller memperlakukan
+        None = tak ada baris → pop-up/klik/follow-up no-op)."""
+        if self._sep_row(row):
+            return None
         if 0 <= row < len(self._df):
             return self._df.iloc[row]
         return None
@@ -553,6 +563,40 @@ class PandasTableModel(QAbstractTableModel):
         """Pasang kolom kunci baris (mis. '__FP') — dasar penanda sel."""
         self._fp_col = name
         self._fp_idx = None
+
+    # ------------------------------------------------------------
+    # v2.19.3 — baris pemisah grup (layout SAMPEL TAMPILAN BARU)
+    # ------------------------------------------------------------
+    def set_separator_column(
+        self, name: str | None,
+        group_keys: tuple[str, ...] = ("JENIS", "NAMA BARANG"),
+    ) -> None:
+        """Pasang kolom penanda baris pemisah grup (mis. '__SEP').
+
+        Baris dgn nilai bool True di kolom tsb = baris KOSONG pemisah
+        antar grup item (layout sampel user): render kosong, tak
+        selectable, record()=None, tak masuk funnel. ``group_keys`` =
+        kolom identitas grup — dipakai sort() utk menyisip ulang pemisah
+        saat user sort by kolom grup (pemisah hanya bermakna bila baris
+        grup bertetangga). None = matikan (default — view lain tak
+        terdampak).
+        """
+        self._sep_col = name
+        self._sep_group_keys = tuple(group_keys)
+
+    def _sep_row(self, row: int) -> bool:
+        """Baris `row` = baris pemisah grup? (guard murah — snapshot numpy)"""
+        if (self._sep_col is None or row < 0 or row >= len(self._df)
+                or self._sep_col not in self._df.columns):
+            return False
+        try:
+            c = self._df.columns.get_loc(self._sep_col)
+            v = (self._arr[row, c] if self._arr is not None
+                 and self._arr.shape == self._df.shape
+                 else self._df.iat[row, c])
+        except Exception:  # noqa: BLE001 — bentuk eksotis: bukan pemisah
+            return False
+        return isinstance(v, bool) and v
 
     def set_highlights(self, red: set[tuple[str, str]],
                        amber: set[tuple[str, str]]) -> None:
@@ -705,6 +749,13 @@ class PandasTableModel(QAbstractTableModel):
             return None
         row, col = index.row(), index.column()
         col_name = self._df.columns[col]
+        # v2.19.3 — baris PEMISAH grup (layout sampel user): baris kosong
+        # murni visual — DisplayRole "", tanpa centang/tooltip/warna/judul
+        # alignment (semua role lain None → default paint polos).
+        if self._sep_row(row):
+            if role in (Qt.DisplayRole, Qt.EditRole):
+                return ""
+            return None
         try:
             value = self._df.iat[row, col]  # live-view (mutasi df terlihat)
         except Exception:  # noqa: BLE001
@@ -782,6 +833,11 @@ class PandasTableModel(QAbstractTableModel):
     # v2.12.0 — centang in-place (delegate klik → CheckStateRole)
     # ------------------------------------------------------------
     def flags(self, index: QModelIndex):
+        # v2.19.3 — baris PEMISAH grup: ENABLED saja (tak selectable /
+        # checkable) — klik, Enter, klik-ganda tak memicu pop-up detail;
+        # fokus keyboard boleh lewat (currentRowChanged di-guard record()).
+        if index.isValid() and self._sep_row(index.row()):
+            return Qt.ItemFlag.ItemIsEnabled
         base = super().flags(index)
         if (self._check_col is not None and index.isValid()
                 and 0 <= index.column() < len(self._df.columns)
@@ -853,17 +909,45 @@ class PandasTableModel(QAbstractTableModel):
             return
         name = self._df.columns[column]
         ascending = order == Qt.AscendingOrder
+        # v2.19.3 — separator-aware: baris pemisah BUKAN data (NaN di semua
+        # kolom sort — na_position="last" akan menumpuk mereka di ekor).
+        # Buang pemisah → sort data murni → sisip ulang pemisah antar grup
+        # HANYA bila kolom sort = kunci grup (pemisah cuma bermakna bila
+        # baris grup bertetangga). Sort kolom lain (skor/TOTAL) → pemisah
+        # DIBUANG (tabel jadi ter-ranked polos — layout sampel tak relevan).
+        base_df = self._df
+        sep_mode = (self._sep_col is not None
+                    and self._sep_col in self._df.columns)
+        if sep_mode:
+            try:
+                sep_mask = base_df[self._sep_col].map(
+                    lambda v: isinstance(v, bool) and v)
+                if bool(sep_mask.any()):
+                    base_df = base_df[~sep_mask]
+            except Exception:  # noqa: BLE001 — anggap tak ada pemisah
+                sep_mode = False
         try:
-            col = self._df[name]
+            col = base_df[name]
             numeric = pd.to_numeric(col, errors="coerce")
             if numeric.notna().sum() > 0:
                 key = numeric
             else:
                 key = col.astype(str).str.lower()
-            self.beginResetModel()
-            self._df = self._df.assign(_k=key).sort_values(
+            sorted_df = base_df.assign(_k=key).sort_values(
                 "_k", ascending=ascending, na_position="last"
             ).drop(columns="_k")
+            if sep_mode and name in self._sep_group_keys:
+                # mergesort stable → baris dgn nilai kunci sama tetap
+                # bertetangga sesuai urutan grup sebelumnya → pemisah
+                # antar grup tetap benar posisinya.
+                try:
+                    from .grouping import insert_group_separators
+                    sorted_df = insert_group_separators(
+                        sorted_df, keys=self._sep_group_keys)
+                except Exception:  # noqa: BLE001 — pemisah opsional
+                    pass
+            self.beginResetModel()
+            self._df = sorted_df
             self._texts = {}  # urutan baris berganti → cache teks basi
             self._rebuild_snapshot()  # v2.12.1: urutan baris berganti
             self.endResetModel()

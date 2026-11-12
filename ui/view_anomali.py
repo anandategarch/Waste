@@ -95,11 +95,15 @@ from .followup_table import (
 )
 from .grouping import (
     FPS_COL as _GRP_FPS_COL,
+    GROUP_KEYS,
     LASTMONTH_COMBINED_COL,
+    SEP_COL,
+    SEP_KEYS,
     SELISIH_COL,
     SRC_GAB_COL,
     SRC_ROWS_COL as _GRP_SRC_ROWS_COL,
     group_anomali_display,
+    insert_group_separators,
 )
 from .models import (
     COLUMN_TOOLTIPS,
@@ -1834,10 +1838,11 @@ class AnomaliView(FollowupTableMixin, QWidget):
         # kolom mapping = state global ctx, lainnya = filter lokal view.
         # v2.19.0: + skip __FPS (daftar sidik jari anggota grup — kolom
         # internal tampilan grup, bukan nilai yang layak difilter).
+        # v2.19.3: + skip __SEP (penanda baris pemisah layout sampel).
         self._table.setup_header_filters(
             _HF_COLS, self._on_header_filter, self._hf_state,
             all_cols=True,
-            skip=(CHECK_COL, FP_COL, SRC_ROW_COL, FPS_LIST_COL))
+            skip=(CHECK_COL, FP_COL, SRC_ROW_COL, FPS_LIST_COL, SEP_COL))
         self._table.selectionModel().currentRowChanged.connect(
             lambda *_: self._on_selection())
         # v2.13.5: sinyal QTableView.clicked memicu di SETIAP klik — termasuk
@@ -1918,6 +1923,11 @@ class AnomaliView(FollowupTableMixin, QWidget):
         # identitas (lihat followup_table._mask_local — anti tabrakan id
         # pasca-GC, audit A5).
         self._mask_cache: OrderedDict[tuple, tuple] = OrderedDict()
+        # v2.19.3: memo df tampilan GRUP+PEMISAH (layout sampel) — objek
+        # STABIL per objek shown (pola _disp_cache LRU-8 + weakref) supaya
+        # cache fit DataTable tetap kena antar-refresh (kontrak perf
+        # v2.9.0/test_v2120 'display memo objek stabil').
+        self._sep_cache: OrderedDict[int, tuple] = OrderedDict()
         # v2.19.1 (audit bug C): memo 1-slot df sumber anomali tanpa
         # filter baris keterangan/status (jalur rebuild lintas-tab).
         self._src_cache: tuple | None = None
@@ -1940,6 +1950,8 @@ class AnomaliView(FollowupTableMixin, QWidget):
         self._change_cache.clear()
         # v2.19.1 (audit bug C): memo df sumber ikut basi bersama dataset.
         self._src_cache = None
+        # v2.19.3: memo pemisah grup ikut basi bersama dataset.
+        self._sep_cache.clear()
         # v2.12.4: dataset baru → nilai funnel lokal bisa jadi tak ada lagi
         # di data baru — reset (state global sudah direset set_dataset).
         self._hfilters.clear()
@@ -2214,6 +2226,37 @@ class AnomaliView(FollowupTableMixin, QWidget):
             self._disp_cache.popitem(last=False)
         return disp
 
+    def _separated_df(self, shown: pd.DataFrame) -> pd.DataFrame:
+        """v2.19.3 — df tampilan GRUP urut-sampel + BARIS PEMISAH kosong.
+
+        Urut (JENIS, NAMA BARANG, NAMA RESTO) lalu sisip pemisah antar
+        grup (JENIS, NAMA BARANG) — layout SAMPEL TAMPILAN BARU.xlsx di
+        TABEL tab Anomali (permintaan user: "insert blank line after each
+        item label"). Memo LRU per objek shown (pola _display_df) — objek
+        df ber-pemisah STABIL antar-refresh → cache fit DataTable tetap
+        kena (kontrak perf v2.9.0). Defensif: grouping/tanpa kunci grup /
+        error → shown apa adanya (tabel tetap jalan tanpa spasi).
+        """
+        try:
+            if (shown is None or shown.empty
+                    or not all(k in shown.columns for k in GROUP_KEYS)):
+                return shown
+            key = id(shown)
+            entry = self._sep_cache.get(key)
+            if (entry is not None and entry[0]() is shown
+                    and entry[1] is not None):
+                self._sep_cache.move_to_end(key)
+                return entry[1]
+            disp = shown.sort_values(
+                GROUP_KEYS, na_position="last", kind="mergesort")
+            disp = insert_group_separators(disp)
+            self._sep_cache[key] = (weakref.ref(shown), disp)
+            while len(self._sep_cache) > self._DISP_LRU:
+                self._sep_cache.popitem(last=False)
+            return disp
+        except Exception:  # noqa: BLE001 — layout spasi opsional, defensif
+            return shown
+
     def _refresh_check_col(self, d: pd.DataFrame) -> None:
         """Override hook mixin — ✓ GRUP = ADA anggota yang tercentang."""
         if (CHECK_COL in d.columns and _GRP_FPS_COL in d.columns):
@@ -2429,9 +2472,27 @@ class AnomaliView(FollowupTableMixin, QWidget):
         visible = [CHECK_COL] + [c for c in TABLE_COLS if c in shown.columns] + [
             _TABLE_ALIASES[c] for c in TABLE_COLS
             if c in shown.columns and c in _TABLE_ALIASES]
-        self._table.set_dataframe(shown, sort_desc="ANOMALY SCORE",
+        # v2.19.3 — TABEL layout SAMPEL TAMPILAN BARU (permintaan user:
+        # "tampilan di tab anomali kok gak ada spasi nya ... insert blank
+        # line after each item label dari kolom jenis dan nama barang"):
+        # urut per GRUP ITEM (JENIS, NAMA BARANG, NAMA RESTO) — bukan skor
+        # turun (dulu) — + BARIS KOSONG pemisah antar grup (JENIS, NAMA
+        # BARANG). Sort by skor/angka lain tetap tersedia via SortControl /
+        # klik judul (model.sort separator-aware: sort kolom non-grup =
+        # tabel polos ter-ranked; sort kolom grup = pemisah disisip ulang;
+        # "(urut default)" mengembalikan layout grup+spasi).
+        # MEMO LRU per objek shown (pola _disp_cache) — objek df ber-pemisah
+        # STABIL antar-refresh supaya cache fit DataTable tetap kena
+        # (kontrak perf v2.9.0; insert membangun df baru tiap kali tanpa memo).
+        disp = self._separated_df(shown)
+        self._table.set_dataframe(disp, sort_desc=None,
                                   narrow_hide=[SRC_GAB_COL, "PERUBAHAN"],
                                   visible_cols=visible)
+        # Aktifkan render separator (baris kosong) di model — SETELAH
+        # set_dataframe (setter tak memicu render ulang; data()/flags()
+        # membaca kolom __SEP per baris).
+        self._table.model().set_separator_column(
+            SEP_COL, group_keys=SEP_KEYS)
         # v2.16.1 — refresh pilihan kolom SortControl sesuai dataset baru
         if self._sort is not None:
             self._sort.refresh_columns()

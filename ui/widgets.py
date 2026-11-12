@@ -599,6 +599,18 @@ class FilterHeader(QHeaderView):
         df = getattr(m, "dataframe", None)
         if df is None or name not in df.columns:
             return
+        # v2.19.3 — buang BARIS PEMISAH grup (layout sampel tab Anomali)
+        # dari sumber nilai funnel: baris kosong bukan data — nilai NaN-nya
+        # tak layak jadi pilihan '(kosong)' dgn jumlah fiktif.
+        sep_col = getattr(m, "_sep_col", None)
+        if sep_col is not None and sep_col in df.columns:
+            try:
+                sep_mask = df[sep_col].map(
+                    lambda v: isinstance(v, bool) and v)
+                if bool(sep_mask.any()):
+                    df = df[~sep_mask]
+            except Exception:  # noqa: BLE001 — funnel tetap dibuka apa adanya
+                pass
         series = df[name]
         # v2.13.12 (gel-3 B9): dropna=False — nilai KOSONG ditawarkan
         # sebagai pilihan ('(kosong)') alih-alih dibuang senyap (dulu:
@@ -822,6 +834,10 @@ class DataTable(QTableView):
         self._src_df: pd.DataFrame | None = None  # df terakhir (strong ref)
         self._src_key: tuple | None = None
         self._default_order = True  # urutan model == urutan sort default?
+        # v2.19.3 — sort_desc dari set_dataframe terakhir (utk
+        # apply_default_order: SortControl "(urut default)" kini benar-benar
+        # mengembalikan urutan default — dulu no-op senyap).
+        self._sort_desc: str | None = None
         # v2.9.0: waktu (monotonic) fit programatik TERAKHIR — layout
         # Qt yang di-queue bisa memancarkan sectionResized UTk lebar yang
         # BARU kita pasang sendiri SETELAH _in_fit berakhir (deferred);
@@ -1278,6 +1294,7 @@ class DataTable(QTableView):
         """
         self._narrow_hide = list(narrow_hide or [])
         self._visible_cols = list(visible_cols) if visible_cols else None
+        self._sort_desc = sort_desc  # v2.19.3 — utk apply_default_order
         self._model.set_dataframe(df)
         # V26-M3: tabel raksasa (>3000 baris) — _refit_rows di-skip demi
         # kecepatan; bila word-wrap tetap nyala, teks multi-baris TERPOTONG
@@ -1333,6 +1350,38 @@ class DataTable(QTableView):
             self._default_order = True
         self._pending_fit = True
         self._auto_columns(fit=fit)
+
+    def apply_default_order(self) -> None:
+        """v2.19.3 — kembalikan URUTAN DEFAULT tabel (df + sort_desc dari
+        set_dataframe terakhir).
+
+        Dipicu SortControl "(urut default)" — dulu pilihan itu NO-OP senyap
+        (tabel tinggal di sort user terakhir; janji 'urut default' bohong).
+        Urutan default:
+          - view ber-sort_desc (mis. tab lama): sort kolom itu DESCENDING —
+            sama dgn yang dipasang set_dataframe.
+          - view sort_desc=None (tab Anomali v2.19.3): urutan df masli =
+            layout SAMPEL TAMPILAN BARU (grup item + baris pemisah kosong).
+        sort() model TIDAK memutasi _src_df (sort membangun df baru) → objek
+        _src_df tetap memegang urutan default utuh → cukup dipasang ulang.
+        """
+        if self._src_df is None:
+            return
+        self._model.set_dataframe(self._src_df)
+        if self._sort_desc and self._sort_desc in self._src_df.columns:
+            self._default_order = False
+            col = list(self._src_df.columns).index(self._sort_desc)
+            self.horizontalHeader().setSortIndicator(
+                col, Qt.DescendingOrder)
+            self._model.sort(col, Qt.DescendingOrder)
+            self._default_order = True
+        else:
+            # urutan default = urutan df masli (layout grup+spasi tab Anomali)
+            self.horizontalHeader().setSortIndicator(
+                -1, Qt.AscendingOrder)
+            self._default_order = True
+        self._pending_fit = True
+        self._auto_columns()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -1849,7 +1898,16 @@ class SortControl(QWidget):
             return
         col_name = self._cb.currentData()
         if not col_name:
-            return  # "(urut default)" — biarkan tabel sortir default
+            # v2.19.3 — "(urut default)": dulunya NO-OP senyap (tabel tetap
+            # di sort user terakhir) — kini benar-benar mengembalikan urutan
+            # default (layout grup+spasi tab Anomali / sort_desc view lain).
+            apply_default = getattr(table, "apply_default_order", None)
+            if callable(apply_default):
+                try:
+                    apply_default()
+                except Exception:  # noqa: BLE001 — jangan crash UI
+                    pass
+            return
         model = table.model()
         df = getattr(model, "dataframe", None)
         if df is None or col_name not in df.columns:

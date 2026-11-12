@@ -98,6 +98,17 @@ def _make_view():
     return view, ctx
 
 
+def _data_row(view, n: int) -> int:
+    """v2.19.3 — posisi baris DATA ke-n (0-based, baris pemisah __SEP
+    dilewati — layout sampel menambah baris kosong antar grup)."""
+    mdf = view._table.model().dataframe
+    if "__SEP" in mdf.columns:
+        rows = [i for i, v in enumerate(mdf["__SEP"].tolist())
+                if v is not True]
+        return rows[n]
+    return n
+
+
 def _make_hari_view(df=None):
     _qapp()
     from ui.state import AppContext
@@ -191,7 +202,9 @@ class TestPopupSelaluBisaDibuka:
     def test_show_record_idempoten_record_sama(self):
         """Pop-up tampak + record sama → TIDAK dibangun ulang (klik
         tunggal memicu currentRowChanged + clicked; guard mencegah rebuild
-        ganda ~70 widget)."""
+        ganda ~70 widget).
+        v2.19.3 — tabel ber-PEMISAH grup: record(1) bisa baris pemisah
+        (record → None) — ambil baris DATA ke-2 lewat _data_row."""
         from PySide6.QtWidgets import QApplication
         view, _ = _make_view()
         QApplication.processEvents()
@@ -207,7 +220,7 @@ class TestPopupSelaluBisaDibuka:
         try:
             view._popup.show_record(rec)  # record sama + tampak
             assert calls == [], "rebuild harus dilewati (idempoten)"
-            rec2 = view._table.model().record(1)
+            rec2 = view._table.model().record(_data_row(view, 1))
             view._popup.show_record(rec2)  # record beda → rebuild
             assert calls == [1]
         finally:

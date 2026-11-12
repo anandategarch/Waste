@@ -88,6 +88,14 @@ def _fps():
     return [str(v) for v in fingerprint_series(_df_anomali()).tolist()]
 
 
+def _n_data(dfm: pd.DataFrame) -> int:
+    """v2.19.3 — jumlah baris DATA murni (baris pemisah grup __SEP dari
+    layout sampel tidak dihitung)."""
+    if "__SEP" in dfm.columns:
+        return sum(1 for v in dfm["__SEP"].tolist() if v is not True)
+    return len(dfm)
+
+
 # ============================================================
 # [J] KOLOM JENIS TAMPIL · KOLOM SKOR DIHAPUS
 # ============================================================
@@ -131,20 +139,45 @@ class TestJenisTampilSkorDihapus:
 
     def test_nilai_jenis_terbaca_waste_susut_trial(self):
         """Isi kolom JENIS = jenis catatan baris (WASTE/SUSUT/TRIAL) —
-        nilai dibaca langsung dari tabel tanpa pop-up."""
+        nilai dibaca langsung dari tabel tanpa pop-up.
+        v2.19.3 — baris PEMISAH grup (NaN) dikecualikan."""
         view, _ = _make_view()
         dfm = view._table.model().dataframe
-        assert set(dfm["JENIS"]) == {"WASTE", "SUSUT", "TRIAL"}
+        jenis = ([v for v, s in zip(dfm["JENIS"].tolist(),
+                                    dfm["__SEP"].tolist())
+                  if s is not True]
+                 if "__SEP" in dfm.columns else dfm["JENIS"].tolist())
+        assert set(jenis) == {"WASTE", "SUSUT", "TRIAL"}
         view.close()
 
     def test_ranking_tetap_berdasar_skor(self):
-        """Kolom skor dihapus TAPI urutan tabel tetap skor tertinggi
-        duluan (sort_desc='ANOMALY SCORE' dipertahankan)."""
+        """v2.19.3 — DITULIS ULANG JUJUR: urutan DEFAULT tabel kini
+        LAYOUT SAMPEL TAMPILAN BARU (permintaan user: grup per item +
+        baris kosong pemisah): urut (JENIS, NAMA BARANG, NAMA RESTO),
+        bukan skor turun. Sort by skor TETAP tersedia (SortControl/klik
+        judul — model.sort separator-aware)."""
         view, _ = _make_view()
         dfm = view._table._model.dataframe
-        skor = pd.to_numeric(dfm["ANOMALY SCORE"])
-        assert int(skor.iloc[0]) == 12 and int(skor.iloc[-1]) == 4
-        assert int(skor.iloc[0]) == int(skor.max())
+        # Default: urut grup — TEH(SUSUT) < KOPI(TRIAL) < MIE(WASTE)
+        # (JENIS alfabetis) + pemisah kosong antar grup.
+        jenis_vals = ([v for v, s in zip(dfm["JENIS"].tolist(),
+                                         dfm["__SEP"].tolist())
+                       if s is not True]
+                      if "__SEP" in dfm.columns
+                      else dfm["JENIS"].tolist())
+        assert jenis_vals == sorted(jenis_vals)
+        if "__SEP" in dfm.columns:
+            assert any(v is True for v in dfm["__SEP"].tolist()), (
+                "layout sampel: baris pemisah antar grup harus ada")
+            assert not dfm["__SEP"].tolist()[0]  # tidak di depan grup pertama
+        # Sort by skor masih jalan (pemisah dibuang — tabel ter-ranked).
+        from PySide6.QtCore import Qt
+        skor_col = list(dfm.columns).index("ANOMALY SCORE")
+        view._table._model.sort(skor_col, Qt.SortOrder.DescendingOrder)
+        dfm2 = view._table._model.dataframe
+        skor2 = pd.to_numeric(dfm2["ANOMALY SCORE"])
+        assert int(skor2.iloc[0]) == 12 and int(skor2.iloc[-1]) == 4
+        assert int(skor2.iloc[0]) == int(skor2.max())
         view.close()
 
 
@@ -163,19 +196,20 @@ class TestComboTampilkan:
 
     def test_filter_sudah_follow_up(self):
         """Pilih ✓ Sudah masuk Follow Up → tabel hanya baris tercentang;
-        kembali ke Semua → tabel penuh (3 baris)."""
+        kembali ke Semua → tabel penuh (3 grup data).
+        v2.19.3 — jumlah baris dihitung per DATA (pemisah dikecualikan)."""
         view, ctx = _make_view()
         fps = _fps()
         ctx.add_followup_many([fps[0]])  # MIE (skor tertinggi)
         view._cb_followup.setCurrentIndex(1)  # → _on_fu_filter → render
         dfm = view._table.model().dataframe
-        assert len(dfm) == 1
+        assert _n_data(dfm) == 1
         assert dfm.iloc[0]["NAMA BARANG"] == "MIE"
         # v2.19.0: label menyebut GRUP (tampilan item×cabang).
         assert "1 grup" in view._lbl_count.text()
         # kembali ke Semua
         view._cb_followup.setCurrentIndex(0)
-        assert len(view._table.model().dataframe) == 3
+        assert _n_data(view._table.model().dataframe) == 3
         view.close()
 
     def test_pesan_0_baris_kontekstual(self):
@@ -192,23 +226,25 @@ class TestComboTampilkan:
     def test_lepas_centang_langsung_hilang(self):
         """Saat filter FU aktif, lepas centang ✓ (dari mana pun) = baris
         LANGSUNG hilang dari tabel — override _on_followup_changed
-        me-render ulang (bukan hanya segarkan ✓ in-place)."""
+        me-render ulang (bukan hanya segarkan ✓ in-place).
+        v2.19.3 — jumlah baris dihitung per DATA (pemisah dikecualikan)."""
         view, ctx = _make_view()
         fps = _fps()
         ctx.add_followup_many([fps[0], fps[1]])  # MIE + KOPI
         view._cb_followup.setCurrentIndex(1)
-        assert len(view._table.model().dataframe) == 2
+        assert _n_data(view._table.model().dataframe) == 2
         # lepas satu centang (jalur ctx — sama dgn klik ✓ di tabel)
         ctx.toggle_followup(fps[0], False)
         _qapp().processEvents()
         dfm = view._table.model().dataframe
-        assert len(dfm) == 1
+        assert _n_data(dfm) == 1
         assert dfm.iloc[0]["NAMA BARANG"] == "KOPI"
         view.close()
 
     def test_reset_lewat_tombol_hapus_filter(self):
         """✕ Hapus Filter me-reset combo ke 'Semua' (tooltip menjanjikan
-        SEMUA — hook _reset_view_controls)."""
+        SEMUA — hook _reset_view_controls).
+        v2.19.3 — jumlah baris dihitung per DATA (pemisah dikecualikan)."""
         view, ctx = _make_view()
         ctx.add_followup_many([_fps()[0]])
         view._cb_followup.setCurrentIndex(1)
@@ -216,7 +252,7 @@ class TestComboTampilkan:
         view._btn_clear.click()
         assert view._cb_followup.currentIndex() == 0
         assert view._cb_followup.currentData() is None
-        assert len(view._table.model().dataframe) == 3
+        assert _n_data(view._table.model().dataframe) == 3
         view.close()
 
     def test_hook_mixin_bukan_salinan(self):

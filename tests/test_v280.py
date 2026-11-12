@@ -80,6 +80,17 @@ def _make_view():
     return view, ctx
 
 
+def _data_row(view, n: int) -> int:
+    """v2.19.3 — posisi baris DATA ke-n (0-based; baris PEMISAH grup __SEP
+    dilewati — layout sampel menambah baris kosong antar grup)."""
+    mdf = view._table._model.dataframe
+    if "__SEP" in mdf.columns:
+        rows = [i for i, v in enumerate(mdf["__SEP"].tolist())
+                if v is not True]
+        return rows[n]
+    return n
+
+
 class TestHapusLimaView:
     def test_file_view_dihapus_dari_repo(self):
         for fname in REMOVED_VIEW_FILES:
@@ -219,14 +230,17 @@ class TestTabelAnomaliPenuhDanPopup:
 
     def test_popup_satu_instance_dipakai_ulang(self):
         """Pop-up TERBUKA → pilih baris lain → pop-up yang SAMA diperbarui
-        (tidak menumpuk; konten mengikuti navigasi saat pop-up terbuka)."""
+        (tidak menumpuk; konten mengikuti navigasi saat pop-up terbuka).
+        v2.19.3 — navigasi ke baris DATA ke-2 (baris pemisah kosong tak
+        punya record → konten tak berubah — pemisah di-lewati)."""
         from PySide6.QtWidgets import QApplication
         view, _ = _make_view()
         QApplication.processEvents()
         view._table.double_clicked.emit(view._table._model.record(0))
         first = view._popup
         title1 = first._panel._title.text()
-        view._table.setCurrentIndex(view._table.model().index(1, 0))
+        r1 = _data_row(view, 1)
+        view._table.setCurrentIndex(view._table.model().index(r1, 0))
         QApplication.processEvents()
         assert view._popup is first, "instance pop-up harus dipakai ulang"
         assert view._popup._panel._title.text() != title1, (
@@ -329,13 +343,15 @@ class TestKolomPctToBom:
         assert shown == "1,34%", f"tampilan {shown!r} harus '1,34%'"
 
     def test_sel_penanda_cek_diteruskan(self):
-        """'Cek' = item tanpa data penjualan — ditampilkan apa adanya."""
+        """'Cek' = item tanpa data penjualan — ditampilkan apa adanya.
+        v2.19.3 — baris data ke-2 (pemisah dilewati)."""
         from PySide6.QtCore import Qt
         view, _ = _make_view()
         dfm = view._table._model.dataframe
         col = list(dfm.columns).index("% to BOM")
+        r1 = _data_row(view, 1)
         shown = view._table._model.data(
-            view._table._model.index(1, col), Qt.DisplayRole)
+            view._table._model.index(r1, col), Qt.DisplayRole)
         assert shown == "Cek"
 
     def test_kolom_pct_fit_tanpa_scrollbar_di_viewport_sempit(self):

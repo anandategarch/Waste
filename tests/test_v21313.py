@@ -538,8 +538,15 @@ class TestA4ZonaCentang:
                     Qt.KeyboardModifier.NoModifier))
             app.processEvents()
 
-        for row, x_off, label in [(0, 22, "tengah"), (1, 38, "kanan"),
-                                  (2, 10, "indikator")]:
+        # v2.19.3 — layout sampel: tabel ber-PEMISAH grup (baris __SEP kosong
+        # antar grup) — klik sel ✓ pada baris DATA murni (pemisah tak
+        # ber-centang & tak selectable).
+        _sep = m.dataframe["__SEP"].tolist() if "__SEP" in m.dataframe.columns else []
+        data_rows = ([i for i, v in enumerate(_sep) if v is not True]
+                     if _sep else list(range(len(m.dataframe))))
+        for row, x_off, label in [(data_rows[0], 22, "tengah"),
+                                  (data_rows[1], 38, "kanan"),
+                                  (data_rows[2], 10, "indikator")]:
             before = m.data(m.index(row, 0), Qt.ItemDataRole.CheckStateRole)
             _click(row, x_off)
             after = m.data(m.index(row, 0), Qt.ItemDataRole.CheckStateRole)

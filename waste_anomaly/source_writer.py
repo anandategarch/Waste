@@ -46,6 +46,7 @@ import logging
 import os
 import re
 import shutil
+import time
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -77,6 +78,43 @@ def _log(logger: Callable[[str], None] | None, msg: str) -> None:
         except Exception:  # noqa: BLE001 — logger gagal tidak boleh crash write
             _LOG.warning("logger callback gagal (pesan: %s)", msg,
                          exc_info=True)
+
+
+def _assert_writable(src: Path,
+                     logger: Callable[[str], None] | None = None) -> None:
+    """v2.19.3 — PRE-CHECK kunci tulis SEBELUM kerja berat dimulai.
+
+    Laporan user (WinError 5 saat "Simpan koreksi"): file rekap terbuka
+    di Excel mengunci file → os.replace gagal SETELAH seluruh kerja tulis
+    selesai — jelek: tmp file tercecer, user baru tahu di akhir, koreksi
+    "hilang". Uji kunci di muka: buat handle tulis SEBENTAR (os.open
+    O_RDWR + tutup). File yang:
+      - dibuka di Excel (sharing violation menolak tulis),
+      - ber-atribut read-only,
+      - sedang di-sinkron OneDrive / discan antivirus
+    → PermissionError → raise pesan ramah LANGSUNG (sebelum backup/
+    tmp/verifikasi jalan; tidak ada file tercecer).
+
+    Kegagalan OSError lain (platform eksotis) → diabaikan diam-diam:
+    jalur os.replace asli tetap jadi sumber kebenaran terakhir.
+    """
+    try:
+        fd = os.open(str(src), os.O_RDWR | getattr(os, "O_BINARY", 0))
+    except PermissionError as exc:
+        _log(logger, f"[source_writer] PRE-CHECK: file terkunci: {exc}")
+        raise SourceWriteError(
+            f"File '{src.name}' sedang TERKUNI — tidak bisa ditulis.\n"
+            "Kemungkinan: (1) masih DIBUKA di Excel — paling sering; "
+            "(2) atribut read-only; (3) sedang disinkronkan OneDrive / "
+            "discan antivirus.\n"
+            "Solusi: TUTUP dulu file-nya (Excel: File → Close, atau keluar "
+            "Excel), lalu klik \"Simpan koreksi\" ulang.\n"
+            "(File asli TIDAK tersentuh — pengecekan ini jalan sebelum "
+            "penulisan.)") from exc
+    except OSError:
+        return
+    else:
+        os.close(fd)
 
 
 def make_backup(source_path: str | os.PathLike,
@@ -371,6 +409,10 @@ def write_day_edits(
     # ---- VALIDASI INPUT (sebelum sentuh file) ----
     if not src.exists():
         raise SourceWriteError(f"File sumber tidak ditemukan: {src}")
+    # v2.19.3 — pre-check kunci tulis (Excel terbuka / read-only / sync):
+    # gagal cepat dgn pesan jelas SEBELUM kerja tulis jalan (anti tmp
+    # file tercecer + koreksi "hilang" — laporan user WinError 5).
+    _assert_writable(src, logger=logger)
     try:
         src_row_i = int(src_row)
     except (TypeError, ValueError) as exc:
@@ -627,13 +669,33 @@ def write_day_edits(
     # copy = file sumber HANCUR. os.replace = MoveFileExW REPLACE_EXISTING
     # (atomik); file terkunci Excel tetap PermissionError → jalur ramah
     # yang sudah ada di bawah.
-    try:
-        os.replace(tmp_out, src)
-    except OSError as exc:
+    # v2.19.3 — RETRY: kunci TRANSIEN (antivirus memindai hasil tulis baru,
+    # OneDrive sync, Excel baru saja ditutup) sering lepas <1 dtk → 4×
+    # percobaan × 0,4 dtk. Kunci PERMANEN (file memang dibuka Excel —
+    # lolos pre-check karena dibuka SETELAHNYA) → pesan ramah + lokasi tmp
+    # utk pemulihan manual (asli tetap utuh — atomik: replace sukses
+    # SEKALIGUS atau TIDAK SAMA SEKALI).
+    last_perm: PermissionError | None = None
+    for _attempt in range(4):
+        try:
+            os.replace(tmp_out, src)
+            last_perm = None
+            break
+        except PermissionError as exc:
+            last_perm = exc
+            _log(logger, f"[source_writer] replace gagal (kunci transien?) — "
+                         f"percobaan {_attempt + 1}/4: {exc}")
+            time.sleep(0.4)
+    if last_perm is not None:
         raise SourceWriteError(
-            f"Gagal mengganti file asli dgn hasil tulis: {exc}. "
-            f"File hasil ada di {tmp_out}; asli MUNGKIN masih utuh. "
-            f"Backup: {bak_msg}.") from exc
+            f"Gagal mengganti file asli dgn hasil tulis: {last_perm}\n"
+            f"Umumnya: file '{src.name}' sedang DIBUKA di Excel/program lain "
+            f"(mengunci file). TUTUP dulu (Excel: File → Close / keluar "
+            f"Excel), lalu klik \"Simpan koreksi\" ulang.\n"
+            f"File HASIL (sudah berisi koreksi) aman tersimpan di: "
+            f"{tmp_out} — file asli TIDAK berubah; bisa ditukar manual "
+            f"(rename) bila perlu.\n"
+            f"Backup: {bak_msg}.") from last_perm
     _log(logger, f"[source_writer] SIMPAN OK (via XML) — {cells_written} sel "
                  f"hari + TOTAL {'diupdate' if total_updated else 'tidak ada'}")
 
