@@ -526,7 +526,7 @@ class TestFilterHeaderAnomaliView:
         view, ctx = self._view()
         hdr = view._table.horizontalHeader()
         app = _qapp()
-        assert view._table.model().rowCount() == 1  # 1 grup AYAM anomali
+        assert view._table.model().rowCount() == 3  # 2 grup (AYAM+BEBEK) + pemisah (Normal ikut, v2.19.8)
         df_cols = list(view._table.model().dataframe.columns)
         logical = df_cols.index("NAMA BARANG")
         hdr._open_menu(logical)
@@ -540,13 +540,14 @@ class TestFilterHeaderAnomaliView:
         menu._apply_now()
         app.processEvents()
         # WIRING: state ctx ter-set lewat funnel (key "item" di HF_COLS).
-        # vals=[] → active_filters["item"] = [] (filter kosong = no-op).
-        assert ctx.active_filters["item"] == []
-        # render ulang terjadi (rowCount tetap 1 karena filter kosong).
+        # v2.19.8 — Normal ikut: funnel punya AYAM + BEBEK; uncheck AYAM
+        # → vals=['BEBEK'] (BEBEK masih tercentang) → filter item=['BEBEK'].
+        assert ctx.active_filters["item"] == ["BEBEK"]
+        # render ulang terjadi (filter ['BEBEK'] → hanya BEBEK grup tampil).
         assert view._table.model().rowCount() == 1
-        # funnel aktif via _hf_state — [] dikembalikan sebagai None
-        # (semantik _hf_state: list kosong = tanpa filter).
-        assert view._hf_state("NAMA BARANG") is None
+        # funnel aktif via _hf_state — ['BEBEK'] dikembalikan apa adanya
+        # (semantik _hf_state: list non-kosong = filter aktif).
+        assert view._hf_state("NAMA BARANG") == ["BEBEK"]
 
     def test_state_dari_drilldown_string(self):
         """set_filter string (drill-down) → _hf_state menormalkan list."""

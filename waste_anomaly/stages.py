@@ -285,11 +285,22 @@ def stage_02_stats(
 
     # Scale signal (heuristic — deteksi kelipatan 10x dari median)
     scale_ratio_arr = _safe_ratio(max_arr, median_aktif_arr)
+    # v2.19.8 — W-6 (audit): ganti band diskrit [8,12]∪[80,120]∪... yg
+    # punya dead zone (mis. ratio 172 ∈ (120,800) tak kena padahal pola
+    # 100× typo asli) dgn log10-rounding tolerance ±100% (log10(2)=0.301):
+    # 10× flags 5-20, 100× flags 50-200, 1000× flags 500-2000, dst. Floor
+    # sr>=8 utk hindari noise rendah. 172 → log10=2.236, round=2, diff=0.236
+    # < 0.301 → YES (100× typo) — sebelumnya luput.
+    import math as _math
+    _LOG10_2 = _math.log10(2.0)  # ~0.301 — tolerance ±100% sekitar 10^k
     def _scale_signal(sr):
         if sr >= 8:
-            for lo, hi in [(8, 12), (80, 120), (800, 1200), (8000, 12000)]:
-                if lo <= sr <= hi:
-                    return "YES"
+            try:
+                lg = _math.log10(sr)
+            except (ValueError, TypeError):
+                return "NO"
+            if abs(lg - round(lg)) <= _LOG10_2:
+                return "YES"
         return "NO"
     scale_signal_arr = np.array([_scale_signal(s) for s in scale_ratio_arr], dtype=object)
 
@@ -1103,11 +1114,15 @@ def stage_12_5_fingerprint(
     item_pivot = item_pivot.reset_index()
 
     # Compute SISTEMATIK FLAG per item
-    # daysActive = max Count Hari per item (kira-kira seberapa sering item ini waste)
-    # cabangActive = distinct NAMA RESTO yang punya waste untuk item ini
+    # v2.19.8 — W-5 (audit): daysActive pakai SUM Count Hari per item
+    # (total hari pelaporan lintas resto), BUKAN max. Threshold absolute
+    # (config SISTEMATIK_MIN_DAYS, default 5), BUKAN ceil(key_akhir/2) yg
+    # mati pada file pendek (key_akhir=31, data 7-9 hari → threshold 16
+    # tak tercapai). cabangActive ≥ 2 tetap (item muncul di ≥2 resto).
+    sistematik_min_days = int(config.get("SISTEMATIK_MIN_DAYS", 5))
     if "Count Hari" in df.columns and "NAMA RESTO" in df.columns:
         sistematik_df = df.groupby("NAMA BARANG", dropna=False).agg(
-            daysActive=("Count Hari", "max"),  # ambil max dari semua row per item
+            daysActive=("Count Hari", "sum"),  # v2.19.8 — sum lintas resto
             cabangActive=("NAMA RESTO", "nunique"),
             totalWaste=("TOTAL", "sum"),
         ).reset_index()
@@ -1117,13 +1132,12 @@ def stage_12_5_fingerprint(
         sistematik_df["cabangActive"] = 0
         sistematik_df["totalWaste"] = 0
 
-    # Sistematik threshold: daysActive >= ceil(KeyAkhir/2) AND cabangActive >= 2
-    sistematik_threshold_days = max(1, (int(key_akhir) + 1) // 2)  # ceil(KeyAkhir/2)
+    # Sistematik threshold: daysActive (sum) >= SISTEMATIK_MIN_DAYS AND cabangActive >= 2
     sistematik_df["SISTEMATIK"] = np.where(
-        (sistematik_df["daysActive"] >= sistematik_threshold_days) & (sistematik_df["cabangActive"] >= 2),
+        (sistematik_df["daysActive"] >= sistematik_min_days) & (sistematik_df["cabangActive"] >= 2),
         "YES", "NO"
     )
-    sistematik_df["SISTEMATIK DAYS THRESHOLD"] = sistematik_threshold_days
+    sistematik_df["SISTEMATIK DAYS THRESHOLD"] = sistematik_min_days
 
     # Merge fingerprint + sistematik ke df utama (left join on NAMA BARANG)
     # Pertama, drop kolom yang akan di-merge dari df kalau sudah ada (idempotent)

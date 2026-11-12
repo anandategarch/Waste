@@ -27,7 +27,10 @@
     "S2_SCORE2_MIN": 4,
     "S10_BOM_MIN": 0.1,
     "QUADRANT_THRESHOLD": 0.5,
-    "PROFIL_DAILY_MIN": 20
+    "PROFIL_DAILY_MIN": 20,
+    "SISTEMATIK_MIN_DAYS": 5,
+    "KRONIS_TOP_DECILE": 0.9,
+    "KRONIS_PEER_RATIO": 1.5
   },
   "non_handling_list": [
     "Alat/ Mesin",

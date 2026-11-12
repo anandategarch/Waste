@@ -267,7 +267,10 @@ class AppContext(QObject):
         return (self.data_version, af, self.score_min)
 
     def anomali_df(self) -> pd.DataFrame | None:
-        """df terfilter, hanya baris ANOMALY STATUS ≠ Normal, skor ≥ min.
+        """df terfilter utk tab Anomali. v2.19.8 — TAMPILKAN SEMUA BARIS
+        (termasuk Normal) supaya user bisa cek seluruh data, bukan hanya
+        anomali. Filter skor ≥ min tetap jalan (spinner "Skor ≥", default
+        0 = semua). Filter keterangan/status (funnel) tetap lokal grup.
 
         v2.9.0: LRU per tanda tangan filter (≤ 8 entri, objek sama dipakai
         ulang antar-refresh/antar-view Anomali & Hari Mencurigakan) —
@@ -283,8 +286,9 @@ class AppContext(QObject):
         if cached is not None:
             self._anomali_cache.move_to_end(key)
             return cached
-        if "ANOMALY STATUS" in df.columns:
-            df = df[df["ANOMALY STATUS"] != "Normal"]
+        # v2.19.8 — Normal TIDAK lagi dibuang (permintaan user: "tampilkan
+        # semua data jangan hanya yg perlu review atau anomali aja tapi
+        # semua data"). Filter skor ≥ min tetap jalan.
         if self.score_min > 0 and "ANOMALY SCORE" in df.columns:
             df = df[pd.to_numeric(df["ANOMALY SCORE"], errors="coerce")
                     .fillna(0) >= self.score_min]

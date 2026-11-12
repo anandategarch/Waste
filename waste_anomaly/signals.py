@@ -279,6 +279,38 @@ def compute_signals(
         )
     out["ANOMALY REASONS"] = reasons
 
+    # v2.19.8 — W-2 (audit): KRONIS guard. Baris dgn magnitude TINGGI
+    # (TOTAL top-decile + >50% di atas peer median) TAPI tanpa day-spike
+    # (score < 3 → Normal) dibump ke "Perlu Review" dgn alasan "Kronis
+    # Tinggi". Audit temukan: AYAM CINCANG TOT=46.868 (75% di atas peer)
+    # berstatus Normal padahal waste terbesar — label menyesatkan. Score
+    # TIDAK diubah (kronis = lensa magnitude, bukan sinyal spike) —
+    # konsistensi score<3 + status "Perlu Review" = exception disengaja.
+    try:
+        total_num = pd.to_numeric(out["TOTAL"], errors="coerce").fillna(0)
+        active_mask = total_num > 0
+        if active_mask.any() and "_TotalPeerRatio" in out.columns:
+            q = float(th.get("KRONIS_TOP_DECILE", 0.9))
+            r = float(th.get("KRONIS_PEER_RATIO", 1.5))
+            q90 = total_num[active_mask].quantile(q)
+            tpr = pd.to_numeric(out["_TotalPeerRatio"], errors="coerce").fillna(0)
+            kronis_mask = (
+                (status == "Normal")
+                & active_mask.to_numpy()
+                & (total_num.to_numpy() > q90)
+                & (tpr.to_numpy() > r)
+            )
+            if kronis_mask.any():
+                status = np.where(kronis_mask, "Perlu Review", status)
+                out["ANOMALY STATUS"] = status
+                existing = reasons[kronis_mask]
+                reasons[kronis_mask] = np.where(
+                    existing != "", existing + " | Kronis Tinggi",
+                    "Kronis Tinggi")
+                out["ANOMALY REASONS"] = reasons
+    except Exception:  # noqa: BLE001 — kronis guard tak boleh crash pipeline
+        pass
+
     # ============================================================
     # KATEGORI ANOMALI
     # if MAX/AVG >= TH_SPIKE -> "Lonjakan Ekstrem (Spike)"

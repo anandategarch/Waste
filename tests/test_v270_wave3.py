@@ -161,9 +161,11 @@ class TestDefaultConfig:
     def test_thresholds_default_22_key(self):
         """v2.10.2: 22 → 25 key (+TH_CHANGE_HIGH/STABLE/MIN_ABS — ambang
         kategori perubahan tabel Anomali; 22 dari v2.10.0 +TH_HARI_HIST_RATIO).
-        v2.13.0: 25 → 26 (+PROFIL_DAILY_MIN — profil baris Tiap Hari)."""
+        v2.13.0: 25 → 26 (+PROFIL_DAILY_MIN — profil baris Tiap Hari).
+        v2.19.8: 26 → 29 (+SISTEMATIK_MIN_DAYS, +KRONIS_TOP_DECILE,
+        +KRONIS_PEER_RATIO — audit W-5 sistematik + W-2 kronis guard)."""
         from waste_anomaly.utils import _DEFAULT_CONFIG
-        assert len(_DEFAULT_CONFIG["thresholds"]) == 26
+        assert len(_DEFAULT_CONFIG["thresholds"]) == 29
 
     def test_default_menutup_semua_key_config_json(self):
         """Setiap key di config.json bawaan wajib punya default (Reset

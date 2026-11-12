@@ -114,6 +114,16 @@ _DEFAULT_CONFIG = {
         # v2.13.0 — profil baris: jumlah hari aktif minimum agar PROFIL
         # "Tiap Hari" (di bawahnya: "Kadang"; tepat 1: "Sekali Ini").
         "PROFIL_DAILY_MIN": 20,
+        # v2.19.8 — W-5: SISTEMATIK threshold absolute (sum Count Hari
+        # per item lintas resto >= ini + cabangActive >= 2). Default 5
+        # (sebelumnya ceil(key_akhir/2) yg mati pada file pendek).
+        "SISTEMATIK_MIN_DAYS": 5,
+        # v2.19.8 — W-2: KRONIS guard — baris Normal dgn TOTAL di
+        # KRONIS_TOP_DECILE (0.9 = top-10%) + TOTAL/PEER_MEDIAN >
+        # KRONIS_PEER_RATIO (1.5 = 50% di atas peer) dibump ke
+        # "Perlu Review (Kronis Tinggi)".
+        "KRONIS_TOP_DECILE": 0.9,
+        "KRONIS_PEER_RATIO": 1.5,
     },
     "non_handling_list": [
         "Alat/ Mesin", "Cancel Nota", "Eksternal", "Internal", "Over Stock",

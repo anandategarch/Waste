@@ -2170,10 +2170,9 @@ class AnomaliView(FollowupTableMixin, QWidget):
         safe = {k: v for k, v in af.items()
                 if k not in self._GRP_FILTER_KEYS}
         base = _apply_filters(ctx.df, safe) if safe else ctx.df
-        # Replikasi aturan ctx.anomali_df (state.py): baris Normal
-        # dibuang + ambang skor — TANPA filter keterangan/status.
-        if "ANOMALY STATUS" in base.columns:
-            base = base[base["ANOMALY STATUS"] != "Normal"]
+        # v2.19.8 — baris Normal TIDAK lagi dibuang (permintaan user:
+        # "tampilkan semua data"). Ambang skor (spinner "Skor ≥") tetap
+        # jalan — TANPA filter keterangan/status (lokal grup via funnel).
         if ctx.score_min > 0 and "ANOMALY SCORE" in base.columns:
             base = base[pd.to_numeric(base["ANOMALY SCORE"], errors="coerce")
                         .fillna(0) >= ctx.score_min]

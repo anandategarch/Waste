@@ -28,6 +28,8 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
+
 from . import stages
 from .day_focus import annotate_day_evidence
 from .loader import load_bom, load_database_satuan, load_rekap_mentah
@@ -247,6 +249,35 @@ def _run_pipeline(
     # sheet ber-JENIS non-waste (BOM/SO/stok) / tak-kanonik; file
     # standar W/S/T bersih → passthrough identitas (golden aman).
     df_rekap = normalize_rekap_values(df_rekap, logger=_log)
+
+    # v2.19.8 — W-1 (audit): auto-detect key_akhir vs rentang data aktual.
+    # File rekap "01-07 NOVEMBER" cuma berisi data hari 1-9, tapi key_akhir
+    # default 31 → S11 (last-day share) mati (hari 31 kosong), SISTEMATIK
+    # threshold ceil(31/2)=16 tak tercapai (max daysActive=9), S1 (MAX/AVG)
+    # inflated 4× (AVG dibagi 31 bukan 7). Deteksi + warning ramah (bukan
+    # auto-override — user mungkin sengaja key_akhir=31 utk bulan penuh).
+    try:
+        day_cols_present = [str(d) for d in range(1, key_akhir + 1)
+                            if str(d) in df_rekap.columns]
+        last_day_with_data = 0
+        for d_col in day_cols_present:
+            col = pd.to_numeric(df_rekap[d_col], errors="coerce")
+            if (col.fillna(0) != 0).any():
+                last_day_with_data = max(last_day_with_data, int(d_col))
+        if last_day_with_data > 0 and key_akhir > last_day_with_data:
+            _log(
+                f"WARNING key_akhir: key_akhir={key_akhir} dipakai, tapi data "
+                f"hanya sampai hari {last_day_with_data}. Sinyal S11 (last-day "
+                f"share) & SISTEMATIK threshold akan bias; S1 (MAX/AVG) "
+                f"inflated (AVG ÷{key_akhir} bukan ÷{last_day_with_data}). "
+                f"Pertimbangkan key_akhir={last_day_with_data} utk akurasi "
+                f"penuh (tab Pipeline → ubah Key Akhir → Mulai ulang).",
+                2)
+            schema_warnings.append(
+                f"key_akhir={key_akhir} > hari-data-terakhir={last_day_with_data}"
+                f" — S11/SISTEMATIK mati, S1 inflated.")
+    except Exception as exc:  # noqa: BLE001 — deteksi tak boleh crash pipeline
+        _log(f"[key_akhir-detect] skip ({exc})", 2)
 
     # ---- VALIDASI SKEMA (F8 v2.4.0) ----
     # Anti degradasi senyap: header lowercase/missing dulunya diproses

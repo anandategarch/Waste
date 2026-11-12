@@ -163,7 +163,7 @@ class TestA1HapusFilterJujur:
         funnel TOTAL=[140] = 1 grup tampil; TOTAL=[100] = 0 grup."""
         view, ctx, app = _view_anomali(tmp_path)
         n_all = view._table.model().rowCount()
-        assert n_all == 1, "fixture: 1 grup anomali AYAM (dulu 2 baris)"
+        assert n_all == 3, "fixture: 2 grup (AYAM + BEBEK) + 1 pemisah (Normal ikut, v2.19.8)"
         assert view._cb_change.isEnabled(), "baseline aktif → combo aktif"
         # combo kategori: 'Naik Tinggi' = grup AYAM (+56% vs 90 bulan lalu)
         idx = [i for i in range(view._cb_change.count())
@@ -199,7 +199,7 @@ class TestA1HapusFilterJujur:
         view._on_clear_filters()  # had_global False → _refresh_table langsung
         app.processEvents()
         assert view._cb_change.currentIndex() == 0
-        assert view._table.model().rowCount() == 1  # 1 grup (dulu 2 baris)
+        assert view._table.model().rowCount() == 3  # 2 grup + pemisah (Normal ikut)
 
 
 # ============================================================
@@ -226,8 +226,8 @@ class TestA2DatasetBaru:
         app.processEvents()
         assert view._cb_change.currentIndex() == 0, (
             "dataset baru harus me-reset combo kategori (audit A2)")
-        assert view._table.model().rowCount() == 1, (
-            "1 grup AYAM tampil setelah reset combo (dulu 2 baris)")
+        assert view._table.model().rowCount() == 3, (
+            "2 grup (AYAM + BEBEK) + pemisah tampil setelah reset combo (Normal ikut, v2.19.8)")
 
 
 # ============================================================
