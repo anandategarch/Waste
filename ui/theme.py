@@ -45,6 +45,28 @@ UI_FONT_FAMILY = '"Segoe UI", "Tahoma", "DejaVu Sans", sans-serif'
 UI_FONT_PX = 12
 UI_HEADER_WEIGHT = 600
 
+# v2.19.4 — ZOOM Ctrl+scroll (permintaan user: "tambahin fitur buat zoom
+# in dan zoom out dengan cara ctrl scroll atas atau bawah"). Font UI
+# diskalakan DI RUNTIME (bukan lagi konstanta mati): px dasar aktif
+# disimpan _CURRENT_PX — dibaca _header_font (pengukur lantai lebar
+# kolom) supaya pengukuran tetap jujur saat zoom; QSS di-rebuild
+# build_qss(px) dengan token font-size diskalakan proporsional.
+_CURRENT_PX = UI_FONT_PX
+
+
+def current_font_px() -> int:
+    """Px font UI aktif (default UI_FONT_PX; berubah via ZoomManager)."""
+    return _CURRENT_PX
+
+
+def set_current_font_px(px: int) -> None:
+    """Set px font UI aktif (dipanggil ui.zoom.ZoomManager; clamp 8-28).
+
+    Px aktif dibaca _header_font() tiap pengukuran — BUKAN import konstanta
+    (import-time snapshot = basi setelah zoom berubah)."""
+    global _CURRENT_PX
+    _CURRENT_PX = max(8, min(28, int(px)))
+
 
 # v2.13.13 (gel-4 D25): rule :focus TOMBOL ditambahkan di QSS bawah —
 # tanpa itu, navigasi keyboard (Tab/Enter — jalur a11y) tak pernah
@@ -200,3 +222,33 @@ QGroupBox::title {{
     padding: 0 4px;
 }}
 """
+
+
+# v2.19.4 — QSS diskalakan utk zoom: token font-size di QSS di atas
+# diganti proporsional. Token yang diskalakan (INVENTORI — kalau QSS
+# menambah font-size baru, daftar ini harus ikut diupdate):
+#   - `font-size: {UI_FONT_PX}px;` (= 12px) → px baru: rule * (SEMUA
+#     widget) + QToolBar QToolButton — token DASAR.
+#   - `font-size: 11px;` → minor (proporsi lama 11/12, lantai 9px):
+#     QLabel#hint + QPlainTextEdit#log.
+# Substitusi MINOR DULU baru DASAR (urutan penting saat px baru = 11:
+# minor dulu supaya token dasar 12px tidak ikut terganda).
+# Padding/min-height TIDAK diskalakan (frame stabil, teks membesar —
+# pola sama dgn v2.17.1 zoom-out manual).
+def build_qss(base_px: int | None = None) -> str:
+    """Bangun QSS dgn font dasar diskalakan (zoom Ctrl+scroll v2.19.4).
+
+    base_px=None → pakai px AKTIF (current_font_px()) — dipakai pemanggil
+    yang ingin konsisten dgn zoom terakhir. Nilai lain → QSS dgn px itu
+    (dipakai ZoomManager saat mengubah zoom). Clamp 8-28 px.
+    """
+    if base_px is None:
+        base_px = current_font_px()
+    px = max(8, min(28, int(base_px)))
+    if px == UI_FONT_PX:
+        return QSS
+    minor = max(9, round(px * 11 / 12))
+    return (QSS
+            .replace("font-size: 11px;", f"font-size: {minor}px;")
+            .replace(f"font-size: {UI_FONT_PX}px;", f"font-size: {px}px;"))
+

@@ -285,32 +285,39 @@ class TestSourceWriterLock:
         return p
 
     def test_precheck_file_readonly(self, tmp_path, monkeypatch):
-        """File read-only (chmod 444) → SourceWriteError ramah 'TERKUNI'
-        SEBELUM kerja tulis (tanpa tmp file tercecer)."""
+        """File read-only: Windows → atribut dibersihkan otomatis (v2.19.4
+        baru) → write SUKSES; POSIX chmod 444 (no st_fileattributes →
+        _clear_readonly no-op) → SourceWriteError 'TERKUNI' SEBELUM tulis
+        (tanpa tmp file tercecer)."""
         import stat
         from waste_anomaly.source_writer import (
             SourceWriteError, write_day_edits)
         p = self._make_sheet(tmp_path)
         p.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
         try:
-            try:
-                write_day_edits(str(p), 2, {"3": 55.0}, logger=None,
-                                backup=False)
-                raised = None
-            except SourceWriteError as e:
-                raised = str(e)
-            assert raised is not None, "file read-only harus ditolak"
             if sys.platform.startswith("win"):
-                assert "TERKUNI" in raised
+                # v2.19.4: chmod 444 di Windows set readonly ATTR →
+                # _clear_readonly membersihkan → write berlanjut sukses.
+                res = write_day_edits(str(p), 2, {"3": 55.0}, logger=None,
+                                      backup=False)
+                assert res["ok"], "read-only attr dibersihkan → harus sukses"
+                leftovers = list(tmp_path.glob("*.tmp_write.*"))
+                assert not leftovers, f"tmp tercecer: {leftovers}"
             else:
                 # POSIX: os.open O_RDWR read-only → PermissionError juga
                 # (kecuali root — CI non-root).
                 import os as _os
                 if _os.geteuid() != 0:
+                    try:
+                        write_day_edits(str(p), 2, {"3": 55.0}, logger=None,
+                                        backup=False)
+                        raised = None
+                    except SourceWriteError as e:
+                        raised = str(e)
+                    assert raised is not None, "file read-only harus ditolak"
                     assert "TERKUNI" in raised
-            # TIDAK ada tmp file tercecer (pre-check jalan sebelum tulis).
-            leftovers = list(tmp_path.glob("*.tmp_write.*"))
-            assert not leftovers, f"tmp tercecer: {leftovers}"
+                leftovers = list(tmp_path.glob("*.tmp_write.*"))
+                assert not leftovers, f"tmp tercecer: {leftovers}"
         finally:
             p.chmod(0o644)
 
@@ -346,10 +353,11 @@ class TestSourceWriterLock:
         assert calls["n"] == 3  # 2 gagal + 1 sukses
 
     def test_replace_permanen_pesan_ramah(self, tmp_path, monkeypatch):
-        """os.replace SELALU PermissionError (file dibuka Excel — kunci
-        permanen) → SourceWriteError menyebut 'DIBUKA di Excel' + lokasi
-        tmp (pemulihan manual); file asli TIDAK berubah (verifikasi nilai
-        lama masih terbaca)."""
+        """os.replace SELALU PermissionError + open(src,'r+b') juga diblokir
+        (file dibuka Excel — kunci permanen, v2.19.4 fallback in-place juga
+        gagal) → SourceWriteError menyebut 'DIBUKA di Excel' + lokasi file
+        pemulihan (tmp_write — rename ke _KOREKSI juga diblokir karena
+        os.replace monkeypatched selalu gagal); file asli TIDAK berubah."""
         import openpyxl
         import waste_anomaly.source_writer as sw
         p = self._make_sheet(tmp_path)
@@ -358,6 +366,14 @@ class TestSourceWriterLock:
             sw.os, "replace",
             lambda *_a: (_ for _ in ()).throw(PermissionError(
                 5, "Access is denied (simulasi Excel terbuka)")))
+        # v2.19.4 — blok fallback in-place: open(src, "r+b") diblokir.
+        # Mode "rb"/"r" tetap lolos (openpyxl/zipfile baca tmp + verifikasi).
+        real_open = open
+        def blocked_open(path, mode="r", *a, **kw):
+            if "r+b" in mode and str(path) == str(p):
+                raise PermissionError(5, "Access denied (Excel terbuka)")
+            return real_open(path, mode, *a, **kw)
+        monkeypatch.setattr(sw, "open", blocked_open, raising=False)
         try:
             sw.write_day_edits(str(p), 2, {"3": 55.0}, logger=None,
                                backup=False)
@@ -366,7 +382,9 @@ class TestSourceWriterLock:
             raised = str(e)
         assert raised is not None
         assert "DIBUKA di Excel" in raised
-        assert "tmp_write" in raised  # lokasi file hasil utk pemulihan
+        # Lokasi file hasil utk pemulihan (tmp_write — rename ke _KOREKSI
+        # juga diblokir os.replace monkeypatched selalu gagal).
+        assert "tmp_write" in raised or "_KOREKSI" in raised
         # File asli utuh: nilai hari-3 masih 0 (belum dikoreksi).
         wb = openpyxl.load_workbook(str(p), read_only=True, data_only=True)
         ws = wb["REKAP MENTAH"]

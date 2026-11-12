@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence
+from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -60,6 +60,7 @@ from .view_hari import HariView
 from .view_periode import PeriodeView
 from .view_pipeline import PipelineView
 from .workers import ExportWorker
+from .zoom import ZoomManager
 from waste_anomaly.followup import followup_path
 
 def _build_help_html(config: dict | None = None) -> str:
@@ -88,7 +89,9 @@ def _build_help_html(config: dict | None = None) -> str:
 <p><b>Alur kerja:</b> tab <b>Pipeline</b> → pilih workbook → <b>Mulai Pipeline</b>
 → buka tab <b>Anomali</b> untuk mulai memburu anomali.</p>
 <p><b>Shortcut:</b> <b>Ctrl+1..Ctrl+6</b> pindah tab (sesuai urutan) ·
-<b>Ctrl+E</b> ekspor Excel · <b>F1</b> bantuan ini.</p>
+<b>Ctrl+E</b> ekspor Excel · <b>F1</b> bantuan ini ·
+<b>Ctrl+scroll atas/bawah</b> = zoom in/out tampilan (semua tabel/teks) ·
+<b>Ctrl+=</b> perbesar · <b>Ctrl+-</b> perkecil · <b>Ctrl+0</b> reset 100%.</p>
 <h3>Tab Pipeline (tempat semua dimulai)</h3>
 <ul>
 <li>Isi <b>Input Workbook</b>: tombol <b>Telusuri…</b> memilih file Excel rekap
@@ -269,6 +272,35 @@ class MainWindow(QMainWindow):
         self._build_body()
         self._build_statusbar()
         self._wire_context()
+
+        # v2.19.4 — zoom Ctrl+scroll (permintaan user "buat zoom in dan zoom
+        # out dengan cara ctrl scroll atas atau bawah"). ZoomManager pasang
+        # event filter app-wide + apply font+QSS tiap level berubah; shortcut
+        # keyboard utk a11y (trackpad tanpa roda).
+        # PENTING: connect ke BOUND METHOD, BUKAN lambda — lambda menangkap
+        # self (closure) → PySide6 pegang callable kuat → MainWindow bocor
+        # gc (test_v21314 D24). Bound method = receiver lemah (Qt weak).
+        self._zoom = ZoomManager(QApplication.instance(), self)
+        sc_in_a = QShortcut(QKeySequence("Ctrl++"), self)
+        sc_in_a.activated.connect(self._zoom_in)
+        sc_in_b = QShortcut(QKeySequence("Ctrl+="), self)
+        sc_in_b.activated.connect(self._zoom_in)
+        sc_out = QShortcut(QKeySequence("Ctrl+-"), self)
+        sc_out.activated.connect(self._zoom_out)
+        sc_reset = QShortcut(QKeySequence("Ctrl+0"), self)
+        sc_reset.activated.connect(self._zoom_reset)
+
+    def _zoom_in(self) -> None:
+        """v2.19.4 — shortcut Ctrl+= / Ctrl++ → perbesar tampilan."""
+        self._zoom.zoom(1)
+
+    def _zoom_out(self) -> None:
+        """v2.19.4 — shortcut Ctrl+- → perkecil tampilan."""
+        self._zoom.zoom(-1)
+
+    def _zoom_reset(self) -> None:
+        """v2.19.4 — shortcut Ctrl+0 → reset zoom ke 100%."""
+        self._zoom.reset()
 
     # ------------------------------------------------------------
     # BANGUN UI

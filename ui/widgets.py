@@ -68,6 +68,7 @@ from .theme import (
     STATUS_COLORS,
     UI_FONT_FAMILY,
     UI_FONT_PX,
+    current_font_px,
 )
 
 
@@ -108,15 +109,17 @@ _HF_HIDE_GUARD_S = 0.6
 
 
 def _header_font() -> QFont:
-    """Font judul kolom SEBAGAIMANA DILUKIS QSS — family chain + 13px +
-    weight 600 (theme: UI_FONT_*). Dipakai _auto_columns utk lantai
-    lebar jujur: ``self.font()`` TIDAK mewarisi font QSS (di Windows
-    default 9pt vs QSS 13px → pengukuran kurang ~8% → ekor judul
-    terpotong funnel; terbukti piksel: "ANOMALY SCORE" 111 vs 124)."""
+    """Font judul kolom SEBAGAIMANA DILUKIS QSS — family chain + px
+    AKTIF (zoom v2.19.4: current_font_px(), bukan konstanta import-time
+    — px bisa berubah saat Ctrl+scroll) + weight 600 (theme: UI_FONT_*).
+    Dipakai _auto_columns utk lantai lebar jujur: ``self.font()`` TIDAK
+    mewarisi font QSS (di Windows default 9pt vs QSS 12px → pengukuran
+    kurang ~8% → ekor judul terpotong funnel; terbukti piksel:
+    "ANOMALY SCORE" 111 vs 124)."""
     fam = [p.strip().strip('"') for p in UI_FONT_FAMILY.split(",")]
     f = QFont()
     f.setFamilies(fam)
-    f.setPixelSize(UI_FONT_PX)
+    f.setPixelSize(current_font_px())
     f.setWeight(QFont.Weight.DemiBold)
     return f
 
@@ -1040,6 +1043,26 @@ class DataTable(QTableView):
                     self.setRowHeight(r, need)
         finally:
             self._in_fit = False
+
+    def zoom_refresh(self) -> None:
+        """v2.19.4 — Ctrl+scroll zoom: font berubah → pengukuran px
+        (lebar kolom + tinggi baris di cache fit) SEMUA basi.
+
+        Font dasar aktif berubah (theme.set_current_font_px) → cache fit
+        dibuang & _auto_columns mengukur ULANG dgn fontMetrics baru
+        (tinggi baris wrap ikut benar). Tabel kosong/tanpa data → hanya
+        buang cache (no-op aman; pengukuran berikutnya pakai font baru).
+        Dipanggil ui.zoom.ZoomManager utk SEMUA QTableView anak jendela
+        (duck-typing via hasattr — tabel non-DataTable tak punya cache).
+        """
+        self._fit_cache.clear()
+        try:
+            if (self._model is not None and self._model.rowCount() > 0):
+                self._auto_columns()
+        except RuntimeError:
+            # widget sudah di-destroy saat zoom (C++ object gone) —
+            # diam (zoom tidak boleh crash app).
+            pass
 
     def _on_section_resized(self, logical: int, _old: int, _new: int) -> None:
         """Resize kolom (drag user / program) → jadwal refit tinggi baris.

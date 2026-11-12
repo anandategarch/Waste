@@ -25,6 +25,9 @@ shared.py::bundle_res_dir
 shared.py::fmt_id
 shared.py::friendly_file_error
 state.py::AppContext
+theme.py::build_qss
+theme.py::current_font_px
+theme.py::set_current_font_px
 view_anomali.py::AnomaliView
 view_anomali.py::DetailDialog
 view_anomali.py::DetailPanel
@@ -67,3 +70,5 @@ workers.py::RekapImportWorker
 workers.py::SaveEditsWorker
 workers.py::_build_grouped_layout_df
 workers.py::_extra_sheets
+zoom.py::ZoomManager
+zoom.py::px_for_pct

@@ -8,10 +8,17 @@ tapi tidak bisa mengoreksi nilai waste yang salah. Koreksi harus dilakukan
 manual di Excel lalu re-run pipeline. User minta: "bisa gak aku langsung
 revisi nilai dari program ketika pop up?" + "disimpan langsung ke file
 rekap mentahnya" + "jangan ada silent error, semua transparan dan akurat".
+v2.19.4: "kalau ubah nilai langsung timpa file nya jangan buat back up" →
+jalur UI default backup=False (langsung timpa file asli — user yakin
+perubahan, tidak mau .bak berpuluh-puluh). backup=True tetap tersedia utk
+operasi lain yang minta cadangan.
 
 Modul ini JUJUR & TRANSPARAN (anti silent-error):
-  - BACKUP otomatis sebelum tulis (timestamped .bak.xlsx) — file asli
-    TIDAK PERNAH ditimpa tanpa cadangan.
+  - TIMPA LANGSUNG file asli (permintaan user v2.19.4) — tanpa backup di
+    jalur UI default. Aman via rantai: tulis ke tmp → os.replace ATOMIK
+    (file utuh ATAU tmp utuh, tak pernah setengah). Total gagal menimpa
+    → file HASIL koreksi diselamatkan sbg <nama>_KOREKSI.xlsx (siap dibuka
+    Excel) + raise ramah — file asli TETAP utuh (atomik).
   - Setiap koreksi di-log eksplisit (file + konsol): siapa, baris Excel
     berapa, kolom hari berapa, nilai lama → nilai baru.
   - Validasi ketat: src_row integer ≥2 (header=row 1), day 1-31, nilai
@@ -19,7 +26,10 @@ Modul ini JUJUR & TRANSPARAN (anti silent-error):
   - Verifikasi post-write: baca ulang sel yang ditulis, bandingkan nilai
     yang dikembalikan engine vs nilai yang diminta — mismatch = raise
     (tulisan gagal diam-diam).
-  - File terkunci (dibuka di Excel) → error jelas, bukan crash.
+  - File terkunci (dibuka di Excel / read-only attr / AV scan) → error
+    jelas, bukan crash. v2.19.4: pre-check bersihkan atribut read-only
+    Windows dulu + retry backoff panjang (~9 dtk utk AV scan file 9MB) +
+    fallback in-place (replace diblokir, tulis boleh).
   - TOTAL (kolom 42) dihitung ulang = sum hari 1-31 supaya file tetap
     konsisten (TOTAL ≠ sum hari = korupsi data senyap).
 
@@ -32,13 +42,14 @@ Kontrak:
   DETAIL_COLS).
 
 API utama:
-  write_day_edits(source_path, src_row, day_edits, logger=None)
+  write_day_edits(source_path, src_row, day_edits, logger=None,
+                  backup=False)
     → {"ok": True, "cells_written": int, "total_updated": bool,
        "backup": str, "sheet": str, "changes": [...]}
     → raise SourceWriteError bila gagal (pesan ramah, ada konteks).
 
-  make_backup(source_path) → Path backup (dipakai write_day_edits; juga
-    bisa dipanggil manual sebelum operasi berbahaya).
+  make_backup(source_path) → Path backup (opsional; dipakai hanya bila
+    backup=True — bisa dipanggil manual sebelum operasi berbahaya).
 """
 from __future__ import annotations
 
@@ -46,6 +57,7 @@ import logging
 import os
 import re
 import shutil
+import stat
 import time
 import zipfile
 from datetime import datetime
@@ -95,9 +107,16 @@ def _assert_writable(src: Path,
     → PermissionError → raise pesan ramah LANGSUNG (sebelum backup/
     tmp/verifikasi jalan; tidak ada file tercecer).
 
+    v2.19.4 — bersihkan atribut READ-ONLY Windows DULU (sebab umum
+    WinError 5 yang BUKAN kunci Excel: file download/internet/salin CD
+    punya flag read-only → os.open O_RDWR ditolak padahal Excel TIDAK
+    membukanya). _clear_readonly hapus flag → os.open retry.
+
     Kegagalan OSError lain (platform eksotis) → diabaikan diam-diam:
     jalur os.replace asli tetap jadi sumber kebenaran terakhir.
     """
+    # v2.19.4 — read-only attr Windows dibersihkan otomatis (no-op POSIX).
+    _clear_readonly(src, logger=logger)
     try:
         fd = os.open(str(src), os.O_RDWR | getattr(os, "O_BINARY", 0))
     except PermissionError as exc:
@@ -105,8 +124,7 @@ def _assert_writable(src: Path,
         raise SourceWriteError(
             f"File '{src.name}' sedang TERKUNI — tidak bisa ditulis.\n"
             "Kemungkinan: (1) masih DIBUKA di Excel — paling sering; "
-            "(2) atribut read-only; (3) sedang disinkronkan OneDrive / "
-            "discan antivirus.\n"
+            "(2) sedang disinkronkan OneDrive / discan antivirus.\n"
             "Solusi: TUTUP dulu file-nya (Excel: File → Close, atau keluar "
             "Excel), lalu klik \"Simpan koreksi\" ulang.\n"
             "(File asli TIDAK tersentuh — pengecekan ini jalan sebelum "
@@ -115,6 +133,99 @@ def _assert_writable(src: Path,
         return
     else:
         os.close(fd)
+
+
+# v2.19.4 — RETRY backoff panjang utk os.replace. File besar (9MB) +
+# Windows Defender real-time scan bisa pegang handle detik-detikan saat
+# tmp baru ditulis → 4×0,4 dtk (v2.19.3) tak cukup. 8 jeda naik
+# (0,3→2,0 dtk) = ~9 dtk jendela total; kunci PERMANEN (Excel terbuka)
+# tak akan lepas → fallback in-place / rescue (lihat bawah).
+_REPLACE_RETRY_DELAYS: tuple[float, ...] = (
+    0.3, 0.5, 0.7, 1.0, 1.0, 1.5, 2.0, 2.0,
+)
+
+
+def _file_is_readonly(src: Path) -> bool:
+    """v2.19.4 — deteksi atribut READ-ONLY Windows (sebab umum WinError 5
+    yang BUKAN kunci Excel — file download/internet/salin CD punya flag
+    read-only). POSIX: st_fileattributes tak ada → False (chmod-perm
+    ditangani jalur OSError biasa)."""
+    try:
+        st = os.stat(str(src))
+    except OSError:
+        return False
+    attrs = getattr(st, "st_fileattributes", 0)
+    return bool(attrs & getattr(stat, "FILE_ATTRIBUTE_READONLY", 0x1))
+
+
+def _clear_readonly(src: Path,
+                    logger: Callable[[str], None] | None = None) -> bool:
+    """v2.19.4 — bersihkan atribut READ-ONLY Windows (PermissionError di
+    os.open utk file ber-flag read-only). Return True bila dibersihkan.
+    POSIX no-op (st_fileattributes tak ada)."""
+    if not _file_is_readonly(src):
+        return False
+    try:
+        os.chmod(str(src), stat.S_IWRITE | stat.S_IREAD)
+    except OSError as exc:
+        _log(logger, f"[source_writer] read-only terdeteksi tapi chmod "
+                     f"gagal: {exc}")
+        return False
+    _log(logger, "[source_writer] atribut READ-ONLY dihapus otomatis "
+                 "(file download/salin punya flag read-only).")
+    return True
+
+
+def _overwrite_in_place(tmp_out: Path, src: Path,
+                        logger: Callable[[str], None] | None = None) -> None:
+    """v2.19.4 — FALLBACK saat os.replace diblokir tapi tulis-file
+    diizinkan: buka file asli mode 'r+b', stream-salin isi tmp ke
+    dalamnya, truncate sisa, flush + fsync. Lalu hapus tmp.
+
+    NON-atomik (vs os.replace) — crash/listrik di tengah salin = file
+    asli rusak. Tapi replace sudah gagal; ini jalur terakhir sebelum
+    menyerah. fsync + truncate meminimalkan jendela kerentanan.
+
+    Raise OSError bila open-tulis ditolak (file terkunci Excel —
+    penanganan rescue di pemanggil).
+    """
+    chunk = 1024 * 1024  # 1 MB — buffer besar utk file 9MB (1 pass)
+    with open(src, "r+b") as dst_f, open(tmp_out, "rb") as src_f:
+        shutil.copyfileobj(src_f, dst_f, chunk)
+        dst_f.truncate()
+        dst_f.flush()
+        os.fsync(dst_f.fileno())
+    try:
+        tmp_out.unlink(missing_ok=True)
+    except OSError as exc:
+        _log(logger, f"[source_writer] tmp sisa (unlink gagal, abaikan): "
+                     f"{exc}")
+    _log(logger, "[source_writer] FALLBACK in-place sukses (replace "
+                 "diblokir tapi tulis langsung berhasil — file asli "
+                 "ditimpa penuh + fsync).")
+
+
+def _rescue_result_file(tmp_out: Path, src: Path,
+                        logger: Callable[[str], None] | None = None) -> Path:
+    """v2.19.4 — TOTAL gagal menimpa: file hasil (berisi koreksi) diberi
+    nama ramah <stem>_KOREKSI.xlsx di folder sama (siap dibuka Excel —
+    beda dgn .tmp_write.PID tak dikenal Windows). Bila rename pun
+    diblokir, tmp dipertahankan apa adanya (path dikembalikan).
+
+    Return: path file hasil koreksi (rescue kalau rename ok, tmp kalau
+    tidak) — ditampilkan ke user utk pemulihan manual.
+    """
+    rescue = src.with_name(f"{src.stem}_KOREKSI{src.suffix}")
+    if rescue == src:
+        # suffix kosong / nama aneh — jangan tabrak file asli.
+        return tmp_out
+    try:
+        os.replace(tmp_out, rescue)
+        return rescue
+    except OSError as exc:
+        _log(logger, f"[source_writer] rescue-rename ke {rescue.name} "
+                     f"gagal ({exc}) — tmp dipertahankan: {tmp_out.name}")
+        return tmp_out
 
 
 def make_backup(source_path: str | os.PathLike,
@@ -372,7 +483,7 @@ def write_day_edits(
     day_edits: dict[str, float | int | None],
     logger: Callable[[str], None] | None = None,
     config: dict | None = None,
-    backup: bool = True,
+    backup: bool = False,
 ) -> dict[str, Any]:
     """Tulis koreksi nilai hari 1-31 ke baris `src_row` sheet rekap sumber.
 
@@ -386,9 +497,11 @@ def write_day_edits(
                      salah menjanjikan "hapus sel"). Nilai harus numerik ≥0.
       logger       : callback pipeline-style (opsional).
       config       : config dict (opsional; default load_config()).
-      backup       : v2.16.1 — bila False, LEWATI pembuatan backup (user yakin
-                     perubahan, minta cepat). Default True (aman). Bila False,
-                     field "backup" di return = "" dan pesan error tak referensi
+      backup       : v2.16.1 — bila False (default sejak v2.19.4, permintaan
+                     user "kalau ubah nilai langsung timpa file nya jangan
+                     buat back up"), LEWATI pembuatan backup. True hanya bila
+                     pemanggil eksplisit minta cadangan. Bila False, field
+                     "backup" di return = "" dan pesan error tak referensi
                      backup (tidak ada cadangan utk pulih).
 
     Return dict:
@@ -663,39 +776,53 @@ def write_day_edits(
         except OSError:
             pass
         raise
-    # Ganti file asli dgn tmp — ATOMIK di Windows juga.
-    # v2.18.0 audit (H-2): shutil.move di Windows fallback ke copy2+unlink
-    # yang MEMOTONG file asli dulu ('wb') — crash/listrik penuh di tengah
-    # copy = file sumber HANCUR. os.replace = MoveFileExW REPLACE_EXISTING
-    # (atomik); file terkunci Excel tetap PermissionError → jalur ramah
-    # yang sudah ada di bawah.
-    # v2.19.3 — RETRY: kunci TRANSIEN (antivirus memindai hasil tulis baru,
-    # OneDrive sync, Excel baru saja ditutup) sering lepas <1 dtk → 4×
-    # percobaan × 0,4 dtk. Kunci PERMANEN (file memang dibuka Excel —
-    # lolos pre-check karena dibuka SETELAHNYA) → pesan ramah + lokasi tmp
-    # utk pemulihan manual (asli tetap utuh — atomik: replace sukses
-    # SEKALIGUS atau TIDAK SAMA SEKALI).
+    # Ganti file asli dgn tmp — ATOMIK di Windows (MoveFileExW
+    # REPLACE_EXISTING); crash/listrik penuh di tengah = file utuh ATAU
+    # tmp utuh, tak pernah setengah (anti hancur data senyap).
+    # v2.19.3 — RETRY utk kunci transien (AV scan / OneDrive / Excel
+    # baru ditutup). v2.19.4 — backoff LEBIH PANJANG (file 9MB + AV
+    # Defender bisa pegang handle detik-detikan) + FALLBACK in-place
+    # (replace diblokir tapi tulis boleh: ACL deny-delete / atribut
+    # aneh) + rescue <nama>_KOREKSI.xlsx bila TOTAL gagal (file hasil
+    # tetap terbuka Excel — beda dgn .tmp_write.PID tak dikenal Windows).
+    attempts = len(_REPLACE_RETRY_DELAYS) + 1
     last_perm: PermissionError | None = None
-    for _attempt in range(4):
+    for attempt in range(attempts):
         try:
             os.replace(tmp_out, src)
             last_perm = None
             break
         except PermissionError as exc:
             last_perm = exc
-            _log(logger, f"[source_writer] replace gagal (kunci transien?) — "
-                         f"percobaan {_attempt + 1}/4: {exc}")
-            time.sleep(0.4)
+            _log(logger, f"[source_writer] replace gagal (kunci transien?) "
+                         f"— percobaan {attempt + 1}/{attempts}: {exc}")
+            if attempt < len(_REPLACE_RETRY_DELAYS):
+                time.sleep(_REPLACE_RETRY_DELAYS[attempt])
     if last_perm is not None:
-        raise SourceWriteError(
-            f"Gagal mengganti file asli dgn hasil tulis: {last_perm}\n"
-            f"Umumnya: file '{src.name}' sedang DIBUKA di Excel/program lain "
-            f"(mengunci file). TUTUP dulu (Excel: File → Close / keluar "
-            f"Excel), lalu klik \"Simpan koreksi\" ulang.\n"
-            f"File HASIL (sudah berisi koreksi) aman tersimpan di: "
-            f"{tmp_out} — file asli TIDAK berubah; bisa ditukar manual "
-            f"(rename) bila perlu.\n"
-            f"Backup: {bak_msg}.") from last_perm
+        # v2.19.4 — FALLBACK: timpa file asli IN-PLACE (buka r+b + salin
+        # tmp + truncate + fsync). Berguna saat os.replace diblokir tapi
+        # open-tulis diizinkan (ACL deny-delete; beberapa state AV).
+        try:
+            _overwrite_in_place(tmp_out, src, logger=logger)
+            last_perm = None
+        except OSError as ip_exc:
+            _log(logger, f"[source_writer] fallback in-place gagal: {ip_exc}")
+            recovery = _rescue_result_file(tmp_out, src, logger=logger)
+            is_rescue = ("_KOREKSI" in recovery.name
+                         and recovery.suffix == src.suffix)
+            raise SourceWriteError(
+                f"Gagal menimpa file asli dgn hasil tulis: {last_perm}\n"
+                f"Umumnya: file '{src.name}' sedang DIBUKA di Excel/program "
+                f"lain (mengunci file). TUTUP dulu (Excel: File → Close / "
+                f"keluar Excel), lalu klik \"Simpan koreksi\" ulang.\n"
+                f"File HASIL (sudah berisi koreksi) aman tersimpan di:\n"
+                f"  {recovery}\n"
+                + ("— sudah diberi nama _KOREKSI.xlsx: bisa langsung dibuka "
+                   "di Excel, atau rename menggantikan file asli setelah "
+                   "Excel ditutup.\n" if is_rescue else
+                   "— bisa ditukar manual (rename) bila perlu.\n")
+                + f"File asli TIDAK berubah. Backup: {bak_msg}."
+            ) from ip_exc
     _log(logger, f"[source_writer] SIMPAN OK (via XML) — {cells_written} sel "
                  f"hari + TOTAL {'diupdate' if total_updated else 'tidak ada'}")
 
