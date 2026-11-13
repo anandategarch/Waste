@@ -188,6 +188,19 @@ def group_anomali_display(
     # SOURCE DATA GABUNGAN = kolom tampilan sampel user (isi join di atas)
     if "SOURCE DATA" in out.columns:
         out[SRC_GAB_COL] = out["SOURCE DATA"]
+    # v2.20.1 — KETERANGAN fallback ke JENIS bila kosong (permintaan user:
+    # "kolom jenis diganti jadi kolom KETERANGAN AJA"). Catatan SUSUT/TRIAL
+    # umumnya tak punya sub-alasan — jenisnya itulah keterangannya, jadi
+    # KETERANGAN kosong → tampilkan JENIS (SUSUT/TRIAL) supaya kolom
+    # KETERANGAN tak pernah blank & vocabularynya utuh (Alat/Mesin, Cancel
+    # Nota, Handling, Kualitas, Kualitas Eksternal, Kualitas Internal, Over
+    # Stock, SUSUT, TRIAL). Grup homogen-per-JENIS (JENIS = kunci grup) →
+    # fallback seragam per grup (tidak mengubah grup WASTE ber-alasan).
+    if "KETERANGAN" in out.columns and "JENIS" in out.columns:
+        ket = out["KETERANGAN"]
+        empty = ket.isna() | (ket.astype(str).str.strip() == "")
+        if bool(empty.any()):
+            out.loc[empty, "KETERANGAN"] = out.loc[empty, "JENIS"]
 
     # ---------- 3) skor MAX + status paling parah ----------
     if "ANOMALY SCORE" in df.columns:

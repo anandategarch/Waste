@@ -380,16 +380,16 @@ class TestKolomPctToBom:
         pct = list(dfm.columns).index("% to BOM")
         assert not t.isColumnHidden(pct), (
             "% to BOM harus tetap tampak di viewport sempit")
-        j = list(dfm.columns).index("JENIS")
-        # v2.18.7: JENIS keluar dari narrow_hide (permintaan user "kasih
-        # kolom tambahan itu jenis nya waste, susut atau trial" — jenis
-        # wajib terbaca di viewport sempit). Kolom skor juga keluar dari
-        # tabel — lebar bekas kolom skor membuat KETERANGAN umumnya MUAT
-        # di 740px kini (narrow_hide tetap terpasang utk viewport yang
-        # lebih sempit lagi; jaminan yang dipin: % to BOM + JENIS tampak).
-        assert not t.isColumnHidden(j), "JENIS kini selalu tampil (v2.18.7)"
-        # v2.19.0: layout sampel user — KETERANGAN bukan lagi kolom tabel
-        # (digabung per grup item×cabang); narrow_hide kini SOURCE DATA
+        k = list(dfm.columns).index("KETERANGAN")
+        # v2.20.1: kolom pertama tabel Anomali KETERANGAN (bukan JENIS) —
+        # alasan pencatatan (Alat/Mesin ... SUSUT, TRIAL) wajib terbaca di
+        # viewport sempit. JENIS tetap di df (kunci grup) tapi disembunyikan
+        # dari tabel; lebar bekas kolom skor membuat KETERANGAN umumnya
+        # MUAT di 740px (narrow_hide tetap terpasang utk viewport yang
+        # lebih sempit lagi; jaminan yang dipin: % to BOM + KETERANGAN).
+        assert not t.isColumnHidden(k), (
+            "KETERANGAN kini selalu tampil (v2.20.1 — ganti JENIS)")
+        # v2.19.0: layout sampel user — narrow_hide kini SOURCE DATA
         # GABUNGAN (kolom teks terpanjang) + PERUBAHAN.
         assert "SOURCE DATA GABUNGAN" in (t._narrow_hide or [])
         # LANTAI HEADER (anti-terpotong): tiap kolom tampak ≥ lebar

@@ -106,9 +106,11 @@ class TestV270FullRecord:
         # kolom non-tabel lain (skor tetap di df: ranking + pop-up).
         assert view._table.isColumnHidden(cols.index("ANOMALY SCORE"))
         assert not view._table.isColumnHidden(cols.index("TOTAL"))
-        # v2.18.7: JENIS selalu tampak (permintaan user "kasih kolom
-        # jenis nya waste, susut atau trial")
-        assert not view._table.isColumnHidden(cols.index("JENIS"))
+        # v2.20.1: KETERANGAN selalu tampak (ganti JENIS — permintaan user
+        # "kolom jenis diganti jadi kolom KETERANGAN AJA"); JENIS kini
+        # disembunyikan dari tabel Anomali (tetap di df: kunci grup).
+        assert not view._table.isColumnHidden(cols.index("KETERANGAN"))
+        assert view._table.isColumnHidden(cols.index("JENIS"))
 
     def test_sort_desc_tetap_berlaku(self):
         view, _ = _make_view()

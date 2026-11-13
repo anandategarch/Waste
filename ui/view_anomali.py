@@ -148,9 +148,18 @@ from .widgets import (
 # BARU.xlsx"): SATU BARIS per (JENIS × NAMA BARANG × NAMA RESTO) — semua
 # alasan/KETERANGAN & SOURCE DATA digabung (kolom SOURCE DATA GABUNGAN),
 # urutan 11 kolom persis sampel:
-#   JENIS · NAMA BARANG · NAMA RESTO · SOURCE DATA GABUNGAN · [TOTAL] ·
+#   KETERANGAN · NAMA BARANG · NAMA RESTO · SOURCE DATA GABUNGAN · [TOTAL] ·
 #   [% to BOM] · TOTAL BULAN LALU & % Selisih · Selisih Bulan Lalu ·
 #   PERUBAHAN · ANOMALY STATUS · PROFIL
+# v2.20.1 (permintaan user: "kolom jenis diganti jadi kolom KETERANGAN
+# AJA") — kolom pertama BUKAN lagi JENIS (WASTE/SUSUT/TRIAL) melainkan
+# KETERANGAN (alasan pencatatan: Alat/Mesin, Cancel Nota, Handling,
+# Kualitas, Kualitas Eksternal, Kualitas Internal, Over Stock, SUSUT,
+# TRIAL). SUSUT/TRIAL muncul di KETERANGAN via fallback (grouping.py:
+# KETERANGAN kosong → JENIS) sebab catatan SUSUT/TRIAL tak punya
+# sub-alasan — jenisnya itulah keterangannya. JENIS tetap di df model
+# (kunci grup + sort + funnel global 'jenis' di tab Hari) — hanya
+# disembunyikan dari tabel Anomali (visible_cols = TABLE_COLS).
 # [TOTAL]/[% to BOM] = ALIAS judul (nama kanonik df tetap TOTAL/% to BOM
 # — kontrak test_v280 index+1 utuh). 'TOTAL BULAN LALU & % Selisih' =
 # kolom NUMERIK berisi total bulan lalu; teks sel "1.969,1 (-30%)"
@@ -161,7 +170,7 @@ from .widgets import (
 # v2.6.1→v2.18.7 riwayat: 10→7 kolom, +"% to BOM", skor dihapus dari
 # tabel (tetap dasar ranking/sort/filter), JENIS selalu tampil.
 TABLE_COLS = [
-    "JENIS", "NAMA BARANG", "NAMA RESTO", SRC_GAB_COL,
+    "KETERANGAN", "NAMA BARANG", "NAMA RESTO", SRC_GAB_COL,
     "TOTAL", "% to BOM",
     LASTMONTH_COMBINED_COL, SELISIH_COL, "PERUBAHAN",
     "ANOMALY STATUS", "PROFIL",

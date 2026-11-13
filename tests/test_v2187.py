@@ -97,57 +97,77 @@ def _n_data(dfm: pd.DataFrame) -> int:
 
 
 # ============================================================
-# [J] KOLOM JENIS TAMPIL · KOLOM SKOR DIHAPUS
+# [J] KOLOM KETERANGAN TAMPIL · KOLOM SKOR DIHAPUS
 # ============================================================
 
-class TestJenisTampilSkorDihapus:
+class TestKeteranganTampilSkorDihapus:
 
     def test_table_cols_kontrak(self):
-        """v2.19.0 — layout sampel user 'SAMPEL TAMPILAN BARU.xlsx':
-        ANOMALY SCORE tetap keluar; 11 kolom sampel lengkap; KETERANGAN
-        & BULAN LALU/PERUBAHAN % digabung (SOURCE DATA GABUNGAN + kolom
-        gabungan total bulan lalu & selisih)."""
+        """v2.20.1 — kolom pertama tabel Anomali KETERANGAN (bukan JENIS):
+        alasan pencatatan (Alat/Mesin, Cancel Nota, ..., SUSUT, TRIAL).
+        ANOMALY SCORE tetap keluar; layout sampel user lengkap;
+        BULAN LALU/PERUBAHAN % digabung (SOURCE DATA GABUNGAN + kolom
+        gabungan total bulan lalu & selisih). JENIS tetap di df model
+        (kunci grup + sort + funnel global 'jenis' di tab Hari) —
+        disembunyikan dari tabel Anomali."""
         from ui.view_anomali import TABLE_COLS
         assert "ANOMALY SCORE" not in TABLE_COLS
-        for col in ("JENIS", "NAMA BARANG", "NAMA RESTO",
+        assert "KETERANGAN" in TABLE_COLS
+        assert "JENIS" not in TABLE_COLS  # v2.20.1: diganti KETERANGAN
+        for col in ("KETERANGAN", "NAMA BARANG", "NAMA RESTO",
                     "SOURCE DATA GABUNGAN", "TOTAL", "% to BOM",
                     "TOTAL BULAN LALU & % Selisih", "Selisih Bulan Lalu",
                     "PERUBAHAN", "ANOMALY STATUS", "PROFIL"):
             assert col in TABLE_COLS, col
         # kolom layout lama yang diganti/digabung
-        assert "KETERANGAN" not in TABLE_COLS
         assert "BULAN LALU" not in TABLE_COLS
         assert "PERUBAHAN %" not in TABLE_COLS
 
-    def test_jenis_selalu_tampil_skor_disembunyikan(self):
-        """JENIS tampak di tabel (bukan lagi narrow_hide); skor disembunyikan
-        sebagai kolom non-tabel TAPI tetap ada di df model (pop-up/ranking)."""
+    def test_keterangan_tampil_jenis_disembunyikan(self):
+        """KETERANGAN tampak di tabel (bukan narrow_hide); JENIS kini
+        disembunyikan dari tabel Anomali (tetap di df model utk kunci
+        grup/sort/funnel global); skor disembunyikan sebagai kolom
+        non-tabel TAPI tetap ada di df model (pop-up/ranking)."""
         view, _ = _make_view()
         dfm = view._table._model.dataframe
         cols = list(dfm.columns)
         assert "ANOMALY SCORE" in dfm.columns  # tetap di df (pop-up detail)
         assert view._table.isColumnHidden(cols.index("ANOMALY SCORE")), (
             "kolom skor harus disembunyikan (dihapus dari tabel)")
-        assert not view._table.isColumnHidden(cols.index("JENIS")), (
-            "kolom JENIS harus selalu tampak")
-        assert "JENIS" not in (view._table._narrow_hide or []), (
-            "JENIS tak boleh masuk narrow_hide lagi")
-        # v2.19.0: narrow_hide kini SOURCE DATA GABUNGAN + PERUBAHAN
-        # (KETERANGAN bukan lagi kolom tabel — digabung per grup).
+        assert "KETERANGAN" in dfm.columns
+        assert not view._table.isColumnHidden(cols.index("KETERANGAN")), (
+            "kolom KETERANGAN harus selalu tampak (v2.20.1)")
+        assert "KETERANGAN" not in (view._table._narrow_hide or []), (
+            "KETERANGAN tak boleh masuk narrow_hide")
+        # JENIS tetap di df (kunci grup + sort layout sampel) tapi
+        # disembunyikan dari tabel Anomali sebab kolom pertama kini
+        # KETERANGAN (permintaan user "kolom jenis diganti KETERANGAN").
+        assert "JENIS" in dfm.columns
+        assert view._table.isColumnHidden(cols.index("JENIS")), (
+            "kolom JENIS kini disembunyikan dari tabel Anomali (v2.20.1)")
+        # v2.19.0: narrow_hide kini SOURCE DATA GABUNGAN + PERUBAHAN.
         assert "SOURCE DATA GABUNGAN" in view._table._narrow_hide
         view.close()
 
-    def test_nilai_jenis_terbaca_waste_susut_trial(self):
-        """Isi kolom JENIS = jenis catatan baris (WASTE/SUSUT/TRIAL) —
-        nilai dibaca langsung dari tabel tanpa pop-up.
-        v2.19.3 — baris PEMISAH grup (NaN) dikecualikan."""
+    def test_nilai_keterangan_terbaca_vocabulary(self):
+        """Isi kolom KETERANGAN = alasan pencatatan (vocabulary user v2.20.1:
+        Alat/Mesin, Cancel Nota, Handling, Kualitas, Kualitas Eksternal,
+        Kualitas Internal, Over Stock, SUSUT, TRIAL) — nilai dibaca
+        langsung dari tabel tanpa pop-up. SUSUT/TRIAL muncul via fallback
+        KETERANGAN kosong -> JENIS (grouping.py). v2.19.3 — baris PEMISAH
+        grup (NaN) dikecualikan."""
         view, _ = _make_view()
         dfm = view._table.model().dataframe
-        jenis = ([v for v, s in zip(dfm["JENIS"].tolist(),
-                                    dfm["__SEP"].tolist())
-                  if s is not True]
-                 if "__SEP" in dfm.columns else dfm["JENIS"].tolist())
-        assert set(jenis) == {"WASTE", "SUSUT", "TRIAL"}
+        ket = ([v for v, s in zip(dfm["KETERANGAN"].tolist(),
+                                  dfm["__SEP"].tolist())
+                if s is not True]
+               if "__SEP" in dfm.columns else dfm["KETERANGAN"].tolist())
+        vocab = {"Alat/Mesin", "Cancel Nota", "Handling", "Kualitas",
+                 "Kualitas Eksternal", "Kualitas Internal", "Over Stock",
+                 "SUSUT", "TRIAL"}
+        assert set(ket) <= vocab, (
+            f"nilai KETERANGAN di luar vocabulary user: {set(ket) - vocab}")
+        assert set(ket), "KETERANGAN tak boleh kosong di tabel"
         view.close()
 
     def test_ranking_tetap_berdasar_skor(self):

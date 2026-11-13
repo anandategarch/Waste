@@ -139,7 +139,9 @@ class TestGuardTekanTunggal:
         view.show()
         app.processEvents()
         hdr = view._table.horizontalHeader()
-        logical = list(view._table.model().dataframe.columns).index("JENIS")
+        # v2.20.1: kolom pertama tabel Anomali KETERANGAN (bukan JENIS) —
+        # funnel dibuka di header KETERANGAN (JENIS kini disembunyikan).
+        logical = list(view._table.model().dataframe.columns).index("KETERANGAN")
         hdr._open_menu(logical)
         assert hdr._menu is not None and hdr._menu.isVisible()
         hdr._menu.hide()  # klik-di-luar → aboutToHide → guard tercatat

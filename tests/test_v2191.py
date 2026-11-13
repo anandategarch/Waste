@@ -92,12 +92,19 @@ class TestAKolomBaruTampak:
         tabel. Bug A: visible_cols dihitung dari df baris → kolom khusus
         grup (SOURCE DATA GABUNGAN dst.) hidden=True selamanya.
         Kolom baseline (TOTAL BULAN LALU & % Selisih, Selisih Bulan Lalu,
-        PERUBAHAN) hanya ada saat pembanding aktif — diuji test berikut."""
+        PERUBAHAN) hanya ada saat pembanding aktif — diuji test berikut.
+        v2.20.1: viewport di-resize LEBAR + _auto_columns supaya kolom
+        narrow_hide (SOURCE DATA GABUNGAN, PERUBAHAN) TAMPAK — KETERANGAN
+        kini lebih lebar dari JENIS (konten 'Kualitas Internal' vs
+        'WASTE'), viewport sempit menutup narrow_hide lebih dini."""
         from ui.view_anomali import TABLE_COLS
         view, _ = _make_view()
+        view.resize(1800, 700)
         view.show()
         _qapp().processEvents()
         t = view._table
+        t._auto_columns()
+        _qapp().processEvents()
         mdf = t.model().dataframe
         hidden = []
         for name in TABLE_COLS:
@@ -110,7 +117,7 @@ class TestAKolomBaruTampak:
         # kolom inti grup WAJIB ada di model (fixture lengkap):
         for name in ("JENIS", "NAMA BARANG", "NAMA RESTO",
                      "SOURCE DATA GABUNGAN", "TOTAL", "% to BOM",
-                     "ANOMALY STATUS", "PROFIL"):
+                     "ANOMALY STATUS", "PROFIL", "KETERANGAN"):
             assert name in mdf.columns, f"{name} hilang dari model grup"
         view.close()
 

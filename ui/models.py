@@ -140,18 +140,41 @@ _NEG_FG = QColor("#dc2626")
 # teks hitam default tetap kontras (tanpa ForegroundRole khusus).
 # Skala = p99 |nilai| kolom (robust — satu outlier ekstrem tak
 # memucatkan seluruh kolom; nilai ≥ p99 → merah penuh).
+#
+# v2.20.1 (permintaan user: "warna heat map lebih sensitif lagi dong
+# biar benar-benar beda di kolom Persen to bom") — DUA perubahan supaya
+# selaras perbedaan kecil jelas terlihat (dulu nilai 2% vs 10% vs 30%
+# sama-sama hijau pucat sebab ramp baru mulai menguning di t=0,35):
+#   1. GAMMA curve (pangkat < 1) diterapkan pada t SEBELUM interpolasi:
+#      t_eff = t ** _HEAT_GAMMA. Pangkat 0,5 (√t) MENDORONG nilai
+#      kecil/menengah ke rentang warna hangat — 2%→hijau-kuning, 10%→
+#      kuning, 25%→kuning-emas, 50%→oranye, 100%→merah (dulu semua
+#      hijau pucat). Endpoint tak tergeser: t=0→0, t=1→1 (gamma tak
+#      mengubah ujung — kontrak _heat_color(0/1) utuh).
+#   2. RAMP 5 stop (dulu 4) — rentang warna lebih halus & merata:
+#      hijau-pucat → kuning pucat → kuning emas → oranye → merah.
+# Skala p99 tetap (robust); gamma + ramp finer = sensitivitas naik
+# TANPA memucatkan kolom oleh 1 outlier.
+_HEAT_GAMMA = 0.5  # √t — dorong nilai kecil ke rentang warna hangat
 _HEAT_STOPS: tuple[tuple[float, tuple[int, int, int]], ...] = (
     (0.00, (214, 236, 216)),   # hijau pucat — |nilai| ≈ 0
-    (0.35, (252, 246, 189)),   # kuning pucat
-    (0.70, (249, 203, 122)),   # oranye — menengah-tinggi
+    (0.25, (253, 235, 170)),   # kuning pucat — nilai kecil mulai nyata
+    (0.50, (253, 200, 110)),   # kuning emas — menengah
+    (0.75, (250, 160, 95)),    # oranye — menengah-tinggi
     (1.00, (238, 112, 99)),    # merah — |nilai| ≥ p99 kolom
 )
 
 
 def _heat_color(t: float) -> QColor:
-    """Warna heatmap untuk intensitas t ∈ [0,1] — interpolasi linear
-    antar stop _HEAT_STOPS (t di-clamp; t<0 → 0, t>1 → 1)."""
+    """Warna heatmap untuk intensitas t ∈ [0,1].
+
+    t di-clamp ke [0,1], lalu diterapkan GAMMA (t ** _HEAT_GAMMA) supaya
+    nilai kecil/menengah memakai rentang warna hangat lebih banyak
+    (v2.20.1 — sensitivitas naik), lalu interpolasi linear antar stop
+    _HEAT_STOPS. Endpoint tetap: _heat_color(0)=hijau, _heat_color(1)=
+    merah (gamma tak menggeser ujung — 0**γ=0, 1**γ=1)."""
     t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else float(t))
+    t = t ** _HEAT_GAMMA
     for (t0, c0), (t1, c1) in zip(_HEAT_STOPS, _HEAT_STOPS[1:]):
         if t <= t1:
             f = 0.0 if t1 <= t0 else (t - t0) / (t1 - t0)
@@ -237,7 +260,10 @@ def build_column_tooltips(config: dict | None = None) -> dict[str, str]:
     "NAMA RESTO": "Kode & nama cabang/outlet yang mencatat data ini.",
     "NAMA BARANG": "Nama item barang.",
     "JENIS": "Jenis catatan: SUSUT, TRIAL, atau WASTE.",
-    "KETERANGAN": "Alasan pencatatan (mis. Alat/Mesin, Cancel Nota, Over Stock).",
+    "KETERANGAN": ("Alasan pencatatan: Alat/Mesin, Cancel Nota, Handling, "
+                   "Kualitas, Kualitas Eksternal, Kualitas Internal, Over "
+                   "Stock — atau SUSUT/TRIAL bila catatan itu tak punya "
+                   "sub-alasan (jenisnya itulah keterangannya)."),
     "SATUAN": "Satuan item (PCS, KG, LTR, ...).",
     "SOURCE DATA": "Asal baris data (sheet sumber).",
     "Status2": "Kosong = tidak ada nilai sama sekali; Isi = ada nilainya.",
