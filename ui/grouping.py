@@ -463,8 +463,9 @@ def insert_group_separators(
     sheet Excel 'Anomali Grup').
 
     Syarat: ``df`` SUDAH diurut supaya baris grup bertetangga (pemanggil
-    mem-sort by JENIS, NAMA BARANG, NAMA RESTO; model.sort memakai mergesort
-    stable → sort by salah satu kunci grup tetap menjaga kedekatan grup).
+    mem-sort by GROUP_KEYS = KETERANGAN, NAMA BARANG, NAMA RESTO;
+    model.sort memakai mergesort STABLE sejak v2.21.1 → sort by salah
+    satu kunci grup tetap menjaga kedekatan grup).
 
     Baris pemisah: SELURUH kolom NaN + ``__SEP``=True (Python bool —
     kontrak model: render kosong, tak selectable, record()=None; funnel &

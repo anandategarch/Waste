@@ -383,7 +383,8 @@ class TestDetailPanelStage:
 class TestUpdateView:
     def test_refresh_menampilkan_baris_staging(self):
         """ctx.add_update → UpdateView.refresh menampilkan baris dgn
-        kolom file/item/resto/hari/status."""
+        kolom file/keterangan/item/resto/hari/status (v2.21.1 kolom
+        'Keterangan' disisip setelah 'File sumber' — index 2)."""
         _qapp()
         from ui.state import AppContext
         from ui.view_update import UpdateView
@@ -395,16 +396,19 @@ class TestUpdateView:
                 "source": "/tmp/REKAP MENTAH_TEGAR.xlsx", "src_rows": [5],
                 "day_edits": {"5": 55.0}, "day_orig": {"5": 100.0},
                 "jenis": "WASTE", "barang": "AYAM", "resto": "R1",
+                "keterangan": "Handling",
             })
             # updates_changed memicu refresh (connected di __init__).
             _qapp().processEvents()
             assert view._table.rowCount() == 1
             # Kolom File = nama file saja.
             assert view._table.item(0, 1).text() == "REKAP MENTAH_TEGAR.xlsx"
-            # Kolom Item = "WASTE · AYAM".
-            assert "AYAM" in view._table.item(0, 2).text()
-            # Kolom Status = "⏳ Pending".
-            assert "Pending" in view._table.item(0, 6).text()
+            # v2.21.1 — kolom Keterangan (index 2).
+            assert view._table.item(0, 2).text() == "Handling"
+            # Kolom Item = "WASTE · AYAM" (index 3).
+            assert "AYAM" in view._table.item(0, 3).text()
+            # Kolom Status = "⏳ Pending" (index 7).
+            assert "Pending" in view._table.item(0, 7).text()
         finally:
             view.deleteLater()
 

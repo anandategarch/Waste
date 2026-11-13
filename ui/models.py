@@ -355,7 +355,7 @@ def build_column_tooltips(config: dict | None = None) -> dict[str, str]:
              "Selisih = bulan ini − pembanding tanggal sama."),
     # --- v2.19.0: tampilan grup tab Anomali (sampel user) ---
     "SOURCE DATA GABUNGAN": ("Semua asal data baris gabungan ini (satu baris "
-                             "per item×cabang — semua alasan/KETERANGAN "
+                             "per keterangan×item×cabang — asal data anggota "
                              "digabung; klik-ganda utk rincian per baris di "
                              "pop-up detail)."),
     LASTMONTH_COMBINED_COL: ("Total bulan lalu + persen selisih vs bulan ini "
@@ -1038,7 +1038,14 @@ class PandasTableModel(QAbstractTableModel):
             else:
                 key = col.astype(str).str.lower()
             sorted_df = base_df.assign(_k=key).sort_values(
-                "_k", ascending=ascending, na_position="last"
+                "_k", ascending=ascending, na_position="last",
+                kind="mergesort"  # v2.21.1 — WAJIB stable: baris kunci
+                # sama harus tetap bertetangga sesuai urutan grup
+                # sebelumnya, kalau tidak pemisah antar (KETERANGAN,
+                # NAMA BARANG) ter-fragment (quicksort default tak
+                # stabil — audit v2.21.1: klik header KETERANGAN di
+                # dataset 6 ket×40 item×30 resto membanjiri tabel dgn
+                # ±1.081 pemisah palsu, seharusnya 239).
             ).drop(columns="_k")
             if sep_mode and name in self._sep_group_keys:
                 # mergesort stable → baris dgn nilai kunci sama tetap

@@ -46,8 +46,13 @@ from .widgets import Card, WLabel, busy_feedback
 from .workers import BatchUpdateWorker
 
 # Kolom tabel staging (urutan = tampil).
+# v2.21.1 — kolom 'Keterangan' (alasan pencatatan grup — sejajar layout
+# tabel Anomali sejak v2.21.0): entri staging beda klaster alasan
+# (Handling vs Cancel Nota vs SUSUT …) utk item×resto sama kini
+# TERBEDAKAN — dulu semuanya tampil sebagai baris ber-label sama
+# (audit v2.21.1; entri lama tanpa kunci 'keterangan' → kolom kosong).
 _COLS = (
-    "#", "File sumber", "Item", "Resto", "Baris Excel",
+    "#", "File sumber", "Keterangan", "Item", "Resto", "Baris Excel",
     "Hari (lama → baru)", "Status", "Ditambahkan",
 )
 
@@ -172,12 +177,13 @@ class UpdateView(QWidget):
         hdr.setStretchLastSection(False)
         hdr.setSectionResizeMode(0, hdr.ResizeMode.ResizeToContents)  # #
         hdr.setSectionResizeMode(1, hdr.ResizeMode.Stretch)           # File
-        hdr.setSectionResizeMode(2, hdr.ResizeMode.ResizeToContents)  # Item
-        hdr.setSectionResizeMode(3, hdr.ResizeMode.ResizeToContents)  # Resto
-        hdr.setSectionResizeMode(4, hdr.ResizeMode.ResizeToContents)  # Baris
-        hdr.setSectionResizeMode(5, hdr.ResizeMode.Stretch)           # Hari
-        hdr.setSectionResizeMode(6, hdr.ResizeMode.ResizeToContents)  # Status
-        hdr.setSectionResizeMode(7, hdr.ResizeMode.ResizeToContents)  # Ditambahkan
+        hdr.setSectionResizeMode(2, hdr.ResizeMode.ResizeToContents)  # Keterangan
+        hdr.setSectionResizeMode(3, hdr.ResizeMode.ResizeToContents)  # Item
+        hdr.setSectionResizeMode(4, hdr.ResizeMode.ResizeToContents)  # Resto
+        hdr.setSectionResizeMode(5, hdr.ResizeMode.ResizeToContents)  # Baris
+        hdr.setSectionResizeMode(6, hdr.ResizeMode.Stretch)           # Hari
+        hdr.setSectionResizeMode(7, hdr.ResizeMode.ResizeToContents)  # Status
+        hdr.setSectionResizeMode(8, hdr.ResizeMode.ResizeToContents)  # Ditambahkan
         cl.addWidget(self._table, 1)
 
         lay.addWidget(card)
@@ -198,21 +204,22 @@ class UpdateView(QWidget):
             self._table.insertRow(i)
             self._set_cell(i, 0, str(i + 1))
             self._set_cell(i, 1, Path(e.get("source", "")).name)
+            self._set_cell(i, 2, str(e.get("keterangan", "") or ""))
             self._set_cell(
-                i, 2,
+                i, 3,
                 f"{e.get('jenis', '')} · {e.get('barang', '')}".strip(" ·"))
-            self._set_cell(i, 3, str(e.get("resto", "") or ""))
+            self._set_cell(i, 4, str(e.get("resto", "") or ""))
             rows = e.get("src_rows") or []
             self._set_cell(
-                i, 4,
+                i, 5,
                 ", ".join(f"#{r}" for r in rows) if rows else "—")
             self._set_cell(
-                i, 5,
+                i, 6,
                 _fmt_day_edits(e.get("day_edits") or {}, e.get("day_orig") or {}))
             status = e.get("status", "pending")
             status_txt, color = _status_render(status, e.get("error"))
-            self._set_cell(i, 6, status_txt, color)
-            self._set_cell(i, 7, str(e.get("added_at", "")))
+            self._set_cell(i, 7, status_txt, color)
+            self._set_cell(i, 8, str(e.get("added_at", "")))
         # Info label: jumlah pending/done/failed.
         n_total = len(entries)
         n_done = sum(1 for e in entries if e.get("status") == "done")

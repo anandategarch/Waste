@@ -43,7 +43,7 @@ def bundle_res_dir() -> Path:
     return _bundle_dir()
 
 
-APP_VERSION = "2.20.0"
+APP_VERSION = "2.21.1"
 APP_TITLE = "Waste Anomaly Detection"
 
 # v2.13.15 (gel-6 D11) — SATU AMBANG BARIS LOG RUN untuk SEMUA penampang
@@ -200,15 +200,21 @@ def _apply_filters(df: pd.DataFrame, filters: dict | None) -> pd.DataFrame:
         if isinstance(val, list):
             if key == "keterangan":
                 wanted = {_norm_text(v) for v in val}
+                # v2.21.1 — map(_norm_text) LANGSUNG (bukan
+                # astype(str) dulu): NaN/None baris → "" — sama dgn
+                # NaN pilihan '(kosong)' funnel (_norm_text(nan)="").
+                # Dulu astype(str) mengubah NaN baris jadi teks "nan"
+                # → pilihan '(kosong)' tak pernah cocok (0 baris di
+                # tab Hari/KPI).
                 filtered = filtered[
-                    filtered[col].astype(str).map(_norm_text).isin(wanted)
+                    filtered[col].map(_norm_text).isin(wanted)
                 ]
             else:
                 filtered = filtered[filtered[col].isin(val)]
         elif key == "keterangan":
             target = _norm_text(val)
             filtered = filtered[
-                filtered[col].astype(str).map(_norm_text) == target
+                filtered[col].map(_norm_text) == target
             ]
         else:
             filtered = filtered[filtered[col] == val]

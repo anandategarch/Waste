@@ -10,9 +10,10 @@ Mengunci 3 perbaikan v2.19.2 atas laporan user:
     1-anggota editable (jalur v2.16.0 pulih); multi-anggota tulis ke semua.
 
 [B] SHEET 'Anomali Grup' (layout SAMPEL TAMPILAN BARU.xlsx):
-    Exporter menulis sheet baru dgn 11 kolom sampel, urut (JENIS, NAMA
-    BARANG, NAMA RESTO), BARIS KOSONG pemisah antar grup (JENIS, NAMA
-    BARANG). [TOTAL]/[% to BOM] alias; format ribuan & persen.
+    Exporter menulis sheet baru dgn 11 kolom sampel, urut (KETERANGAN,
+    NAMA BARANG, NAMA RESTO — kunci pertama KETERANGAN sejak v2.21.0),
+    BARIS KOSONG pemisah antar grup (KETERANGAN, NAMA BARANG).
+    [TOTAL]/[% to BOM] alias; format ribuan & persen.
 
 [C] TOMBOL 'Pilih REKAP MENTAH' (bukan 'Olah & Jalankan'):
     Label diperjelas supaya dikenali user (sebelumnya terasa "hilang").

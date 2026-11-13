@@ -368,4 +368,4 @@ class TestVersi:
         from waste_anomaly import __version__
         from waste_anomaly.utils import load_config
         assert APP_VERSION == __version__ == \
-            load_config().get("version") == "2.20.0"
+            load_config().get("version") == "2.21.1"

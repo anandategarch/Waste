@@ -33,6 +33,9 @@ view_anomali.py::AnomaliView
 view_anomali.py::DetailDialog
 view_anomali.py::DetailPanel
 view_anomali.py::_NoWheelFilter
+view_anomali.py::_keterangan_group_mask
+view_anomali.py::_keterangan_is_fallback
+view_anomali.py::_norm_ket
 view_anomali.py::_rec_val
 view_anomali.py::_summary_rows
 view_anomali.py::_workbook_is_folder_temp

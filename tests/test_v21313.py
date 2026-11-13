@@ -1053,4 +1053,4 @@ class TestSweepD25QssFocus:
         # keyboard-visible: rule fokus tombol LEBIH BANYAK dari era lama
         assert QSS.count(":focus") >= 4
         from ui.shared import APP_VERSION
-        assert APP_VERSION == "2.20.0"  # pin versi file test ke-5 (gel-4; dinaikkan v2.15.0)
+        assert APP_VERSION == "2.21.1"  # pin versi file test ke-5 (gel-4; dinaikkan v2.15.0)

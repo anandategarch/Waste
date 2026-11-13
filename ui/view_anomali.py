@@ -303,6 +303,60 @@ _SUMMARY_SPECS: list[tuple[str, tuple[str, ...], object]] = [
 ]
 
 
+def _norm_ket(v) -> str:
+    """Normalisasi ringan nilai keterangan utk perbandingan (v2.21.1):
+    NaN/None → '', lainnya str + strip."""
+    if v is None:
+        return ""
+    if isinstance(v, float) and v != v:
+        return ""
+    return str(v).strip()
+
+
+def _keterangan_is_fallback(rec) -> bool:
+    """v2.21.1 — True bila KETERANGAN record = nilai FALLBACK grup.
+
+    Fallback (grouping.py v2.21.0): baris ber-keterangan kosong membawa
+    keterangan efektif = JENIS ('SUSUT'/'TRIAL'). Grup seperti ini punya
+    KETERANGAN == JENIS representatifnya — nilai yg TAK pernah ada di
+    kolom KETERANGAN baris mentah → filter global dgn nilai itu (mis.
+    tombol 'Fokus alasan ini') memmatch 0 baris mentah (tab Hari/KPI
+    kosong) — tombol/funnel harus menjauhinya."""
+    if rec is None:
+        return False
+    k = _norm_ket(rec.get("KETERANGAN"))
+    j = _norm_ket(rec.get("JENIS"))
+    return bool(k) and k == j
+
+
+def _keterangan_group_mask(shown: "pd.DataFrame", vals) -> "object":
+    """v2.21.1 — mask baris grup utk filter GLOBAL 'keterangan'
+    (fungsi murni — dipakai _grp_global_mask; fallback-aware).
+
+    - Nilai grup dicocokkan LANGSUNG: sejak v2.21.0 KETERANGAN = kunci
+      grup → nilainya TUNGGAL per grup (bukan join 'A | B' era v2.20.x
+      — split '|' kini mati & dibuang).
+    - Pilihan '(kosong)' funnel (nilai NaN/'' pada vals) mencocokkan
+      klaster FALLBACK: grup ber-KETERANGAN == JENIS representatifnya
+      (baris ber-keterangan kosong → keterangan efektif = JENIS:
+      SUSUT/TRIAL). Tanpa ini, tab Anomali 0 baris saat user
+      memfilter '(kosong)' di tab Hari (grup tak pernah NaN
+      pasca-fallback → 'nan' tak pernah cocok).
+    Return None bila kolom keterangan tak ada (df eksotis)."""
+    if shown is None or len(shown) == 0 or "KETERANGAN" not in shown.columns:
+        return None
+    vals = list(vals or [])
+    want_empty = any(_norm_ket(v) == "" for v in vals)
+    vs = {_norm_ket(v) for v in vals}
+    vs.discard("")
+    ket = shown["KETERANGAN"].map(_norm_ket)
+    m = ket.isin(vs)
+    if want_empty and "JENIS" in shown.columns:
+        jen = shown["JENIS"].map(_norm_ket)
+        m = m | ((ket != "") & (ket == jen))
+    return m
+
+
 def _rec_val(rec: pd.Series, col: str):
     """Nilai kolom baris; None bila hilang/NaN (pd.isna None-safe)."""
     v = rec.get(col)
@@ -333,6 +387,10 @@ def _summary_rows(rec: pd.Series) -> list[tuple[str, str, str]]:
             parts = [str(_rec_val(rec, c)).strip()
                      for c in cols if _rec_val(rec, c) is not None]
             parts = [p for p in parts if p and p not in ("nan", "None")]
+            # v2.21.1 — grup fallback: KETERANGAN = JENIS → 'SUSUT ·
+            # SUSUT' redundan → dedup nilai kembar.
+            if len(parts) == 2 and parts[0] == parts[1]:
+                parts = parts[:1]
             shown = " · ".join(parts)
         elif how == "_num0":
             v = _rec_val(rec, cols[0])
@@ -974,11 +1032,17 @@ class DetailPanel(Card):
             b.clicked.connect(lambda _=False, v=rec.get("NAMA BARANG"):
                               self._ctx.set_filter("item", v))
             bl.addWidget(b)
-        # v2.19.0: 'Fokus alasan' disembunyikan utk record GRUP —
-        # KETERANGAN grup = JOIN banyak alasan ("A | B"), nilainya tak
-        # pernah cocok dgn filter keterangan baris-detail.
-        if (not is_group and rec.get("KETERANGAN") is not None
-                and str(rec.get("KETERANGAN")) not in ("", "nan")):
+        # v2.21.1 — 'Fokus alasan ini' disembunyikan utk record GRUP
+        # multi-anggota (satu nilai utk banyak baris mentah) DAN utk
+        # keterangan FALLBACK (= JENIS: 'SUSUT'/'TRIAL'): nilai itu tak
+        # pernah ada di KETERANGAN baris mentah (barisnya kosong) →
+        # filter global level-baris memmatch 0 baris → tab Hari/KPI
+        # kosong padahal tabel grup masih tampil. Keterangan ASLI
+        # (mis. 'Handling') pada grup 1-anggota tetap boleh difokuskan.
+        if (not is_group
+                and rec.get("KETERANGAN") is not None
+                and str(rec.get("KETERANGAN")) not in ("", "nan")
+                and not _keterangan_is_fallback(rec)):
             b = QPushButton("🏷 Fokus alasan ini")
             b.clicked.connect(lambda _=False, v=str(rec.get("KETERANGAN")).strip():
                               self._ctx.set_filter("keterangan", v))
@@ -1400,7 +1464,11 @@ class DetailPanel(Card):
         jenis = _s("JENIS")
         barang = _s("NAMA BARANG")
         resto = _s("NAMA RESTO")
-        label = " · ".join(p for p in (jenis, barang, resto) if p)
+        keterangan = _s("KETERANGAN")
+        # v2.21.1 — label identitas staging = KETERANGAN · BARANG ·
+        # RESTO (identitas grup tab Anomali sejak v2.21.0; jenis rep
+        # bisa menyesatkan utk grup ber-JENIS campuran).
+        label = " · ".join(p for p in (keterangan, barang, resto) if p)
         rows_txt = ", ".join(f"#{r}" for r in src_rows)
         changes_txt = "\n".join(
             f"  Hari {d}: {fmt_cell(day_orig.get(d, 0.0))} → "
@@ -1438,6 +1506,10 @@ class DetailPanel(Card):
             "jenis": jenis,
             "barang": barang,
             "resto": resto,
+            # v2.21.1 — keterangan grup (utk kolom 'Keterangan' tab
+            # Update nilai: entri beda klaster alasan j terbedakan;
+            # entry lama tanpa kunci ini → kolom kosong).
+            "keterangan": keterangan,
         }
         idx = self._ctx.add_update(entry)
         n_total = self._ctx.pending_count()
@@ -2182,24 +2254,28 @@ class AnomaliView(FollowupTableMixin, QWidget):
             return 31
 
     # v2.19.1 (audit bug B+C) — kolom TURUNAN grup yang TIDAK boleh
-    # difilter di level baris: nilai KETERANGAN grup = JOIN alasan anggota
-    # ('Handling | Cancel Nota' — tak pernah cocok dgn nilai baris tunggal
-    # → tabel 0 baris), ANOMALY STATUS grup = paling parah (worst-of-group
-    # → filter baris memangkas TOTAL grup diam-diam: grup 2-anggota
-    # 100+40 tampil TOTAL 40). Keduanya difilter LEVEL GRUP: isin pada
-    # df grup SETELAH agregasi (pola combo 'Perubahan:' v2.19.0).
-    # Kunci grup (NAMA RESTO/NAMA BARANG/JENIS) tetap GLOBAL level-baris —
-    # isin kunci ≡ isin grup, TOTAL utuh, sinkron antar-tab tetap hidup.
+    # difilter di level baris: nilai KETERANGAN grup sejak v2.21.0 =
+    # KUNCI grup (nilai TUNGGAL — bisa fallback 'SUSUT'/'TRIAL' dari
+    # baris ber-keterangan kosong), ANOMALY STATUS grup = paling parah
+    # (worst-of-group → filter baris memangkas TOTAL grup diam-diam:
+    # grup 2-anggota 100+40 tampil TOTAL 40). Keduanya difilter LEVEL
+    # GRUP: isin pada df grup SETELAH agregasi (pola combo 'Perubahan:'
+    # v2.19.0). Kunci grup (KETERANGAN/NAMA BARANG/NAMA RESTO) tetap
+    # GLOBAL level-baris — isin kunci ≡ isin grup, TOTAL utuh, sinkron
+    # antar-tab tetap hidup. JENIS BUKAN lagi kunci grup (v2.21.0):
+    # filter jenis global memangkas KEANGGOTAAN grup (baris non-JENIS
+    # terfilter keluar SEBELUM agregasi → TOTAL grup berubah) —
+    # semantik baris, disengaja & konsisten tab Hari.
     _GRP_FILTER_COLS = frozenset({"KETERANGAN", "ANOMALY STATUS"})
     _GRP_FILTER_KEYS = frozenset({"keterangan", "status"})
 
     def _on_header_filter(self, col: str, key: str, values) -> None:
         """Override mixin — funnel KETERANGAN/ANOMALY STATUS = LOKAL grup.
 
-        Funnel di tab ini menawarkan nilai KOLOM TAMPILAN (join/worst
-        grup — menu dibaca dari df model), jadi filternya harus isin pada
-        df grup, BUKAN set_filter global level-baris (nilai join tak
-        pernah match baris → 0 baris; status memangkas TOTAL).
+        Funnel di tab ini menawarkan nilai KOLOM TAMPILAN (nilai grup /
+        worst-of-group — menu dibaca dari df model), jadi filternya harus
+        isin pada df grup, BUKAN set_filter global level-baris (nilai
+        tak match baris → 0 baris; status memangkas TOTAL).
         Interaksi funnel kolom ini = AMBIL ALIH dim dari filter global
         (anti-loop: tanpa ini, membersihkan lokal membuat filter global
         — dipasang dari tab Hari — muncul kembali; baris yang barusan
@@ -2228,7 +2304,7 @@ class AnomaliView(FollowupTableMixin, QWidget):
         tersaring level grup oleh _anomali_source_df + _grp_global_mask).
         Utk kasus global, nilai yg dikembalikan = nilai grup yg SEDANG
         TAMPIL (cache per-render _grp_paint_vals) supaya menu funnel
-        membuka dgn centangan yg benar (nilai join — bukan nilai baris
+        membuka dgn centangan yg benar (nilai grup — bukan nilai baris
         global yg tak pernah match)."""
         if col in self._GRP_FILTER_COLS:
             v = self._hfilters.get(col)
@@ -2243,13 +2319,16 @@ class AnomaliView(FollowupTableMixin, QWidget):
         return FollowupTableMixin._hf_state(self, col)
 
     def _grp_global_mask(self, shown: pd.DataFrame, col: str):
-        """Mask level-grup utk filter GLOBAL dim kolom turunan (v2.19.1).
+        """Mask level-grup utk filter GLOBAL dim kolom turunan (v2.19.1;
+        keterangan fallback-aware v2.21.1).
 
         Filter global keterangan/status dipasang dari tab HARI (level
         baris di sana). Di view grup, penerapannya:
-        - KETERANGAN  : keanggotaan alasan dalam JOIN grup — grup yang
-          MELIBATKAN alasan terpilih tampil (TOTAL utuh; isin nilai
-          tunggal pada join tak pernah match → 0 baris).
+        - KETERANGAN  : nilai grup TUNGGAL (kunci grup v2.21.0 — bukan
+          lagi join 'A | B') dicocokkan langsung via
+          _keterangan_group_mask; pilihan '(kosong)' (NaN) mencocokkan
+          klaster fallback (keterangan = JENIS baris kosong) supaya
+          tab Anomali & tab Hari sepakat soal baris kosong.
         - ANOMALY STATUS: worst-of-group (nilai yg TAMPIL di kolom) in
           vals — konsisten dgn kolom tampilan.
         Return None bila dim tak difilter global (funnel lokal sudah
@@ -2266,9 +2345,7 @@ class AnomaliView(FollowupTableMixin, QWidget):
         else:
             return None
         if col == "KETERANGAN":
-            vs = {str(x) for x in vals}
-            parts = shown[col].astype(str).str.split(r"\s*\|\s*")
-            return parts.map(lambda ps: any(p in vs for p in ps))
+            return _keterangan_group_mask(shown, vals)
         return shown[col].isin(vals)
 
     def _anomali_source_df(self) -> pd.DataFrame | None:
@@ -2528,9 +2605,10 @@ class AnomaliView(FollowupTableMixin, QWidget):
         # lagi) — kolom non-tabel disembunyikan via visible_cols. Record
         # terpilih / double-klik tetap membawa SEMUA kolom (12 sinyal,
         # ANOMALY REASONS, peer, MAX, ...) ke pop-up detail + drill-down.
-        # v2.19.0: df tampilan = AGRAGASI GRUP per (JENIS×NAMA BARANG×NAMA
-        # RESTO) — sampel user "SAMPEL TAMPILAN BARU.xlsx" (lihat
-        # _display_df override + ui/grouping.py).
+        # v2.19.0: df tampilan = AGRAGASI GRUP per (KETERANGAN×NAMA BARANG×
+        # NAMA RESTO — kunci pertama KETERANGAN sejak v2.21.0) — sampel
+        # user "SAMPEL TAMPILAN BARU.xlsx" (lihat _display_df override +
+        # ui/grouping.py).
         # v2.12.0: objek display di-memo per objek df → cache fit DataTable
         # tetap kena (kontrak 'konsumen hanya membaca' utk objek LRU/enriched
         # tetap utuh — grup dibangun dari salinan).

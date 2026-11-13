@@ -203,8 +203,10 @@ def export_to_excel(
     v2.19.2: ``grouped_layout_df`` (opsional) = DataFrame grup hasil
     group_anomali_display; ditulis sbg sheet 'Anomali Grup' SETELAH
     'Anomali Prioritas' & SEBELUM 'Per Cabang'. Layout SAMPEL TAMPILAN
-    BARU: grup per NAMA BARANG + baris kosong pemisah (lihat
-    _write_grouped_layout_sheet). None/kosong → di-skip graceful.
+    BARU: grup per (KETERANGAN×NAMA BARANG×NAMA RESTO — v2.21.0 kunci
+    pertama KETERANGAN) + baris kosong pemisah antar (KETERANGAN,
+    NAMA BARANG) (lihat _write_grouped_layout_sheet).
+    None/kosong → di-skip graceful.
     """
     output_path = Path(output_path)
     try:
@@ -281,8 +283,9 @@ def export_to_excel(
         _write(wb, anomali_name, df_anomali, freeze="A2", status_col=status_col if has_status else None)
 
         # ---- 2b. Anomali Grup (layout SAMPEL TAMPILAN BARU v2.19.2) ----
-        # Satu baris per (JENIS×NAMA BARANG×NAMA RESTO), urut, baris KOSONG
-        # pemisah antar grup (JENIS, NAMA BARANG). Dipakai utk tampilan ringkas
+        # Satu baris per (KETERANGAN×NAMA BARANG×NAMA RESTO — v2.21.0
+        # kunci pertama KETERANGAN), urut, baris KOSONG pemisah antar
+        # grup (KETERANGAN, NAMA BARANG). Dipakai utk tampilan ringkas
         # per item seperti sampel user. Di-skip bila grouped_layout_df tak
         # diberikan / kosong / streaming mode (mode streaming tak mendukung
         # formatter per-cell — fitur ini ditunda di data ekstrem).

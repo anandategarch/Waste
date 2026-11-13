@@ -468,8 +468,12 @@ class AppContext(QObject):
           src_rows  : list[int] nomor baris fisik sheet (anggota grup).
           day_edits : dict[str, float] hari→nilai-baru.
           day_orig  : dict[str, float] hari→nilai-lama (utk tampilan).
-          label     : str ringkas (mis. "WASTE · AYAM · R1").
+          label     : str ringkas (mis. "Handling · AYAM · R1" —
+                      keterangan·barang·resto sejak v2.21.1).
           jenis/barang/resto : str komponen label.
+          keterangan : str alasan grup (v2.21.1 — kolom 'Keterangan'
+                      tab Update nilai; fallback = nilai JENIS utk
+                      baris ber-keterangan kosong).
           added_at  : str timestamp.
 
         Return index entry di pending_updates (utk highlight baris baru).
