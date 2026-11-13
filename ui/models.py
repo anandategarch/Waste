@@ -533,7 +533,10 @@ class PandasTableModel(QAbstractTableModel):
         # Anomali): kolom __SEP=True → baris kosong visual. Opt-in via
         # set_separator_column; data()/flags()/record()/sort() separator-aware.
         self._sep_col: str | None = None
-        self._sep_group_keys: tuple[str, ...] = ("JENIS", "NAMA BARANG")
+        # v2.21.0 — default kunci pemisah ikut grouping SEP_KEYS baru
+        # (KETERANGAN, NAMA BARANG); pemanggil eksplisit (view Anomali)
+        # mem-pass SEP_KEYS — default ini murni nilai awal konsisten.
+        self._sep_group_keys: tuple[str, ...] = ("KETERANGAN", "NAMA BARANG")
         # v2.20.0 — heatmap kolom (opt-in, default MATI — view lain tak
         # terdampak): background sel dari |nilai|, skala p99 kolom.
         self._heat_col: str | None = None
@@ -627,7 +630,7 @@ class PandasTableModel(QAbstractTableModel):
     # ------------------------------------------------------------
     def set_separator_column(
         self, name: str | None,
-        group_keys: tuple[str, ...] = ("JENIS", "NAMA BARANG"),
+        group_keys: tuple[str, ...] = ("KETERANGAN", "NAMA BARANG"),
     ) -> None:
         """Pasang kolom penanda baris pemisah grup (mis. '__SEP').
 

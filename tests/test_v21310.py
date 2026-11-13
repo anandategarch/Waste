@@ -159,20 +159,22 @@ class TestA1HapusFilterJujur:
         Dulu: _on_clear_filters tak menyentuh combo → _refresh_table_impl
         re-apply currentData() → tabel tetap terfilter kategori padahal
         tooltip menjanjikan 'Hapus SEMUA filter yang sedang aktif'.
-        v2.19.0 — tampilan GRUP: 2 baris AYAM anomali → 1 grup (TOTAL=140);
-        funnel TOTAL=[140] = 1 grup tampil; TOTAL=[100] = 0 grup."""
+        v2.21.0 — tampilan GRUP per KETERANGAN: 4 grup keterangan;
+        combo 'Naik Tinggi' = grup (Cancel Nota, AYAM) 40 vs 10 = +300%;
+        funnel TOTAL=[140] (nilai gabungan lama) → 0 grup."""
         view, ctx, app = _view_anomali(tmp_path)
         n_all = view._table.model().rowCount()
-        assert n_all == 3, "fixture: 2 grup (AYAM + BEBEK) + 1 pemisah (Normal ikut, v2.19.8)"
+        assert n_all == 7, "fixture: 4 grup keterangan + 3 pemisah (Normal ikut, v2.19.8)"
         assert view._cb_change.isEnabled(), "baseline aktif → combo aktif"
-        # combo kategori: 'Naik Tinggi' = grup AYAM (+56% vs 90 bulan lalu)
+        # combo kategori: 'Naik Tinggi' = grup (Cancel Nota, AYAM) +300%
         idx = [i for i in range(view._cb_change.count())
                if view._cb_change.itemData(i) == "Naik Tinggi"][0]
         view._cb_change.setCurrentIndex(idx)   # view tampil → sinyal render
         app.processEvents()
         assert view._table.model().rowCount() == 1
-        # funnel LOKAL TOTAL=100 → 0 grup (TOTAL grup=140, bukan 100)
-        view._on_header_filter("TOTAL", "TOTAL", [100.0])
+        # funnel LOKAL TOTAL=140 → 0 grup (nilai gabungan lama — grup
+        # kini terpisah 100/40 per keterangan)
+        view._on_header_filter("TOTAL", "TOTAL", [140.0])
         app.processEvents()
         assert view._table.model().rowCount() == 0
         # CLEAR: janji tooltip diuji — SEMUA (funnel + combo)
@@ -189,7 +191,7 @@ class TestA1HapusFilterJujur:
         → render LANGSUNG dari tombol (bukan lewat filters_changed) —
         combo kategori tetap harus direset PRA-render (blok sinyal mencegah
         render ganda; jalur had_global=False).
-        v2.19.0 — tampilan GRUP: 1 grup AYAM (TOTAL=140) di dataset ini."""
+        v2.21.0 — grup 'Naik Tinggi' = (Cancel Nota, AYAM) 40 vs 10."""
         view, _, app = _view_anomali(tmp_path)
         idx = [i for i in range(view._cb_change.count())
                if view._cb_change.itemData(i) == "Naik Tinggi"][0]
@@ -199,7 +201,7 @@ class TestA1HapusFilterJujur:
         view._on_clear_filters()  # had_global False → _refresh_table langsung
         app.processEvents()
         assert view._cb_change.currentIndex() == 0
-        assert view._table.model().rowCount() == 3  # 2 grup + pemisah (Normal ikut)
+        assert view._table.model().rowCount() == 7  # 4 grup + 3 pemisah
 
 
 # ============================================================
@@ -212,7 +214,7 @@ class TestA2DatasetBaru:
         me-reset ke 'Semua'. Dulu: combo mewarisi kategori run lama →
         tabel diam-diah hanya menampilkan subset (HariView kembar-nya
         justru me-reset _cb_mode — asimetri).
-        v2.19.0 — tampilan GRUP: 1 grup AYAM (TOTAL=140) di dataset ini."""
+        v2.21.0 — tampilan GRUP per KETERANGAN: 4 grup keterangan."""
         view, ctx, app = _view_anomali(tmp_path)
         idx = [i for i in range(view._cb_change.count())
                if view._cb_change.itemData(i) == "Naik Tinggi"][0]
@@ -226,8 +228,8 @@ class TestA2DatasetBaru:
         app.processEvents()
         assert view._cb_change.currentIndex() == 0, (
             "dataset baru harus me-reset combo kategori (audit A2)")
-        assert view._table.model().rowCount() == 3, (
-            "2 grup (AYAM + BEBEK) + pemisah tampil setelah reset combo (Normal ikut, v2.19.8)")
+        assert view._table.model().rowCount() == 7, (
+            "4 grup keterangan + 3 pemisah tampil setelah reset combo (Normal ikut, v2.19.8)")
 
 
 # ============================================================

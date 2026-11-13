@@ -285,26 +285,26 @@ class TestAnomaliFunnelLokal:
     def test_funnel_kolom_numerik_lokal(self):
         """TOTAL (non-mapping) → mask isin lokal: tabel menyusut, state
         ctx TIDAK tersentuh (KPI/global tetap), daftar follow-up utuh.
-        v2.19.0 — tampilan GRUP: TOTAL grup AYAM = 100+40 = 140 (sum).
-        Filter TOTAL=[140] → 1 grup tampil; TOTAL=[40] → 0 grup.
-        v2.19.8 — Normal kini TAMPIL (semua data): sebelum filter = 2
-        grup (AYAM TOTAL=140 + BEBEK TOTAL=0); filter [140] → 1 grup AYAM."""
+        v2.21.0 — tampilan GRUP per KETERANGAN: grup (Handling, AYAM)
+        TOTAL=100 & (Cancel Nota, AYAM) TOTAL=40 TERPISAH (dulu sum 140).
+        v2.19.8 — Normal kini TAMPIL (semua data): sebelum filter = 4
+        grup keterangan + 3 pemisah; filter [100] → 1 grup Handling-AYAM."""
         view, ctx = self._view()
         app = _qapp()
-        assert view._table.model().rowCount() == 3  # 2 grup + 1 pemisah (Normal ikut)
-        view._on_header_filter("TOTAL", "TOTAL", [140.0])
+        assert view._table.model().rowCount() == 7  # 4 grup + 3 pemisah
+        view._on_header_filter("TOTAL", "TOTAL", [100.0])
         app.processEvents()
         m = view._table.model()
         assert m.rowCount() == 1
-        assert float(m.record(0)["TOTAL"]) == 140.0  # TOTAL grup (sum anggota)
+        assert float(m.record(0)["TOTAL"]) == 100.0  # TOTAL grup Handling
         # state global tak tersentuh
         assert not any(ctx.active_filters.values()), (
             "filter lokal menulis ke state ctx (harusnya tampilan saja)")
-        assert view._hf_state("TOTAL") == [140.0]
-        # lepas (None) → kembali 3 baris (2 grup + 1 pemisah)
+        assert view._hf_state("TOTAL") == [100.0]
+        # lepas (None) → kembali 7 baris (4 grup + 3 pemisah)
         view._on_header_filter("TOTAL", "TOTAL", None)
         app.processEvents()
-        assert view._table.model().rowCount() == 3
+        assert view._table.model().rowCount() == 7
 
     def test_mask_memo_objek_stabil(self):
         """A→B→A: objek hasil mask A dipakai ulang (kunci cache fit).
@@ -325,33 +325,32 @@ class TestAnomaliFunnelLokal:
 
     def test_centang_yang_tampil_hanya_yang_tampil(self):
         """Mask lokal ikut menyempitkan '☑ Centang yang tampil'.
-        v2.19.0 — tampilan GRUP: filter TOTAL=[140] → 1 grup AYAM tampil
-        (semua anggota AYAM). _on_check_all = masukkan SEMUA fp anggota
-        grup yg tampil.
-        v2.19.8 — Normal ikut tampil: AYAM grup = 3 anggota (2 anomali
-        + 1 Normal TOTAL=0, sum=140). check_all → 3 fp AYAM."""
+        v2.21.0 — tampilan GRUP per KETERANGAN: filter TOTAL=[100] → 1
+        grup (Handling, AYAM) tampil (1 anggota). _on_check_all =
+        masukkan SEMUA fp anggota grup yg tampil."""
         from waste_anomaly.followup import fingerprint_series
         view, ctx = self._view()
         app = _qapp()
         df = ctx.anomali_df()
-        # AYAM grup members (Normal ikut — sum TOTAL=140, 3 anggota).
-        df_ayam = df[df["NAMA BARANG"] == "AYAM"]
-        fps_ayam = fingerprint_series(df_ayam).astype(str).tolist()
-        view._on_header_filter("TOTAL", "TOTAL", [140.0])  # grup AYAM tampil
+        # anggota grup (Handling, AYAM) — 1 baris.
+        df_h = df[(df["NAMA BARANG"] == "AYAM")
+                  & (df["KETERANGAN"] == "Handling")]
+        fps_h = fingerprint_series(df_h).astype(str).tolist()
+        view._on_header_filter("TOTAL", "TOTAL", [100.0])  # grup Handling tampil
         app.processEvents()
         view._on_check_all()
         app.processEvents()
-        # check_all → SEMUA fp anggota grup AYAM yg tampil.
-        assert sorted(ctx.followup_keys) == sorted(fps_ayam)
+        # check_all → SEMUA fp anggota grup Handling-AYAM yg tampil.
+        assert sorted(ctx.followup_keys) == sorted(fps_h)
 
     def test_tombol_hapus_filter(self):
         """✕ Hapus Filter: lepas global + lokal + skor sekaligus.
-        v2.19.0 — tampilan GRUP: 1 grup AYAM (TOTAL=140) di dataset ini.
-        v2.19.8 — Normal ikut tampil: 2 grup (AYAM TOTAL=140 + BEBEK
-        TOTAL=0) setelah clear filter."""
+        v2.21.0 — tampilan GRUP per KETERANGAN: 4 grup keterangan di
+        dataset ini (Handling/CN/Over Stock × AYAM + Handling × BEBEK).
+        v2.19.8 — Normal ikut tampil."""
         view, ctx = self._view()
         app = _qapp()
-        view._on_header_filter("TOTAL", "TOTAL", [140.0])   # lokal
+        view._on_header_filter("TOTAL", "TOTAL", [100.0])   # lokal
         app.processEvents()
         ctx.set_filter("jenis", ["WASTE"])                    # global
         app.processEvents()
@@ -360,7 +359,7 @@ class TestAnomaliFunnelLokal:
         app.processEvents()
         assert not view._hfilters
         assert not any(ctx.active_filters.values())
-        assert view._table.model().rowCount() == 3  # 2 grup + 1 pemisah (Normal ikut)
+        assert view._table.model().rowCount() == 7  # 4 grup + 3 pemisah
         assert view._spin_score.value() == 0
 
     def test_dataset_baru_reset_filter_lokal(self):

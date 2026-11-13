@@ -642,17 +642,23 @@ class TestAnomaliViewChange:
                   "TOTAL BULAN LALU & % Selisih", "Selisih Bulan Lalu"):
             assert c in cols
         mie = view._table._model.dataframe
-        # v2.19.0: tampilan GRUP — kedua baris fixture = SATU grup
-        # (WASTE·MIE·KWGGAL): TOTAL 580+94=674 vs BULAN LALU 160+94=254
-        # → naik +165% = Naik Tinggi; kolom gabungan = total bulan lalu.
-        assert len(mie) == 1
-        g = mie.iloc[0]
-        assert abs(g["BULAN LALU"] - 254.0) < 0.01
-        assert abs(g["TOTAL"] - 674.0) < 0.01
-        assert g["PERUBAHAN"] == "Naik Tinggi"
-        assert abs(g["Selisih Bulan Lalu"] - 420.0) < 0.01
-        assert abs(g["TOTAL BULAN LALU & % Selisih"] - 254.0) < 0.01
-        assert "Handling" in str(g["KETERANGAN"])  # join alasan grup
+        # v2.21.0: tampilan GRUP per KETERANGAN — kedua baris fixture
+        # (WASTE·MIE·KWGGAL, alasan Handling & Cancel Nota) kini DUA grup:
+        # Handling: TOTAL 580 vs BULAN LALU 160 → Naik Tinggi (Selisih
+        # 420); Cancel Nota: TOTAL 94 vs BULAN LALU 94 → Stabil.
+        assert len(mie) == 3  # 2 grup + 1 baris pemisah
+        h = mie[mie["KETERANGAN"] == "Handling"].iloc[0]
+        assert abs(h["BULAN LALU"] - 160.0) < 0.01
+        assert abs(h["TOTAL"] - 580.0) < 0.01
+        assert h["PERUBAHAN"] == "Naik Tinggi"
+        assert abs(h["Selisih Bulan Lalu"] - 420.0) < 0.01
+        assert abs(h["TOTAL BULAN LALU & % Selisih"] - 160.0) < 0.01
+        c = mie[mie["KETERANGAN"] == "Cancel Nota"].iloc[0]
+        assert abs(c["BULAN LALU"] - 94.0) < 0.01
+        assert abs(c["TOTAL"] - 94.0) < 0.01
+        assert c["PERUBAHAN"] == "Stabil"
+        assert abs(c["Selisih Bulan Lalu"] - 0.0) < 0.01
+        assert str(h["KETERANGAN"]) == "Handling"  # nilai tunggal grup
 
     def test_tanpa_pembanding_kolom_tak_ada(self):
         _qapp()
@@ -674,9 +680,9 @@ class TestAnomaliViewChange:
         assert view._cb_change.isEnabled()
         assert view._cb_change.count() == 7  # Semua + 6 kategori
         n_all = len(view._table._model.dataframe)
-        # v2.19.0: filter kategori kini LEVEL GRUP — 'Naik Tinggi' memilih
-        # grup dgn kategori itu TANPA memangkas anggotanya (TOTAL tetap
-        # 674 penuh; dulu level-baris memangkas TOTAL diam-diah).
+        # v2.19.0: filter kategori LEVEL GRUP — 'Naik Tinggi' memilih grup
+        # dgn kategori itu TANPA memangkas anggotanya (v2.21.0: fixture = 2
+        # grup keterangan — grup Naik Tinggi = Handling dgn TOTAL utuh 580).
         # (Sinyal combo mengandung guard isVisible — view offscreen tak
         # terlihat → panggil handler langsung, meniru kondisi terlihat.)
         idx = [i for i in range(view._cb_change.count())
@@ -684,13 +690,12 @@ class TestAnomaliViewChange:
         view._cb_change.setCurrentIndex(idx)
         view._on_change_filter()
         df = view._table._model.dataframe
-        # Fixture = SATU grup ber-kategori Naik Tinggi → tetap tampil utuh.
         assert len(df) == 1
         assert (df["PERUBAHAN"] == "Naik Tinggi").all()
-        assert abs(df["TOTAL"].iloc[0] - 674.0) < 0.01  # TOTAL utuh grup
-        # Kategori yang tak cocok (Stabil) → 0 grup tampil.
+        assert abs(df["TOTAL"].iloc[0] - 580.0) < 0.01  # TOTAL utuh grup
+        # Kategori yang tak cocok (Turun Tinggi) → 0 grup tampil.
         idx = [i for i in range(view._cb_change.count())
-               if view._cb_change.itemData(i) == "Stabil"][0]
+               if view._cb_change.itemData(i) == "Turun Tinggi"][0]
         view._cb_change.setCurrentIndex(idx)
         view._on_change_filter()
         assert len(view._table._model.dataframe) == 0

@@ -39,7 +39,9 @@ def _qapp():
 
 
 def _df_groups() -> pd.DataFrame:
-    """3 baris → 2 grup: AYAM (2 anggota, alasan beda) + BEBEK (1 anggota)."""
+    """3 baris → 2 grup (v2.21.0 grouping per KETERANGAN dulu):
+    (Cancel Nota, AYAM, R1) 2 anggota same-keterangan (100 + 40) +
+    (Cancel Nota, BEBEK, R2) 1 anggota."""
     from waste_anomaly.rekap_import import SRC_ROW_COL
 
     def _row(jenis, barang, resto, ket, day, total, src_row):
@@ -55,7 +57,7 @@ def _df_groups() -> pd.DataFrame:
 
     return pd.DataFrame([
         _row("SUSUT", "AYAM", "R1", "Cancel Nota", 100, 100, 2),
-        _row("SUSUT", "AYAM", "R1", "Internal", 40, 40, 3),    # same item+resto
+        _row("SUSUT", "AYAM", "R1", "Cancel Nota", 40, 40, 3),  # same ket
         _row("SUSUT", "BEBEK", "R2", "Cancel Nota", 30, 30, 4),
     ])
 
@@ -89,7 +91,8 @@ class TestSrcRowsGrouping:
         assert sr[0] == 4  # __SRC_ROW baris BEBEK
 
     def test_multi_member_semua_src_rows(self):
-        """Grup multi-anggota → __SRC_ROWS = tuple SEMUA anggota."""
+        """Grup multi-anggota (v2.21.0: same KETERANGAN×barang×resto) →
+        __SRC_ROWS = tuple SEMUA anggota."""
         from ui.grouping import SRC_ROWS_COL, group_anomali_display
         from waste_anomaly.followup import fingerprint_series
         df = _df_groups()
@@ -98,7 +101,7 @@ class TestSrcRowsGrouping:
         ayam = g[g["NAMA BARANG"] == "AYAM"].iloc[0]
         sr = ayam[SRC_ROWS_COL]
         assert isinstance(sr, tuple) and len(sr) == 2
-        assert set(sr) == {2, 3}  # kedua baris AYAM (Cancel + Internal)
+        assert set(sr) == {2, 3}  # kedua baris AYAM (same-keterangan)
 
     def test_src_rows_paralel_fps(self):
         """__SRC_ROWS & __FPS sepanjang anggota grup (paralel)."""
@@ -144,9 +147,11 @@ class TestGroupedLayoutSheet:
         wb = openpyxl.load_workbook(str(out), read_only=True)
         assert "Anomali Grup" in wb.sheetnames
         ws = wb["Anomali Grup"]
-        # 11 header sampel (meski kolom BULAN LALU tak ada data — header tetap)
+        # 11 header sampel (v2.21.0: kolom pertama KETERANGAN — konsisten
+        # tabel tab Anomali; meski kolom BULAN LALU tak ada data — header
+        # tetap)
         header = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
-        assert header[:4] == ["JENIS", "NAMA BARANG", "NAMA RESTO",
+        assert header[:4] == ["KETERANGAN", "NAMA BARANG", "NAMA RESTO",
                               "SOURCE DATA GABUNGAN"]
         assert "[TOTAL]" in header and "[% to BOM]" in header
         assert "ANOMALY STATUS" in header and "PROFIL" in header
@@ -154,8 +159,8 @@ class TestGroupedLayoutSheet:
         wb.close()
 
     def test_baris_kosong_pemisah_antar_grup(self, tmp_path):
-        """Baris KOSONG disisipkan antar grup (JENIS, NAMA BARANG), BUKAN
-        di depan grup pertama."""
+        """Baris KOSONG disisipkan antar grup (KETERANGAN, NAMA BARANG),
+        BUKAN di depan grup pertama."""
         import openpyxl
         out = self._export(tmp_path)
         wb = openpyxl.load_workbook(str(out), read_only=True)
@@ -167,15 +172,15 @@ class TestGroupedLayoutSheet:
         blanks = [i for i, r in enumerate(rows)
                   if all(v is None or v == "" for v in r)]
         assert len(blanks) >= 1  # minimal 1 pemisah antar 2 grup
-        # Baris setelah pemisah = grup baru (NAMA BARANG berbeda).
+        # Baris setelah pemisah = grup baru (KETERANGAN×BARANG berbeda).
         first_blank = blanks[0]
         prev_barang = rows[first_blank - 1][1]
         next_barang = rows[first_blank + 1][1]
         assert prev_barang != next_barang
         wb.close()
 
-    def test_urut_per_jenis_barang_resto(self, tmp_path):
-        """Baris diurutkan (JENIS, NAMA BARANG, NAMA RESTO)."""
+    def test_urut_per_keterangan_barang_resto(self, tmp_path):
+        """Baris diurutkan (KETERANGAN, NAMA BARANG, NAMA RESTO)."""
         import openpyxl
         out = self._export(tmp_path)
         wb = openpyxl.load_workbook(str(out), read_only=True)

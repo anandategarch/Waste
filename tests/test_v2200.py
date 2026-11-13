@@ -53,6 +53,18 @@ def _qapp():
 # Fixture data
 # ============================================================
 
+def _row(barang, resto, total, bom, ket="Handling"):
+    """Baris bergaya output pipeline (dipakai _rank_df + test v2.21.0)."""
+    data = {str(d): 0.0 for d in range(1, 32)}
+    data["5"] = float(total)
+    return {
+        "SOURCE DATA": "X", "JENIS": "WASTE", "KETERANGAN": ket,
+        "NAMA BARANG": barang, "NAMA RESTO": resto, "SATUAN": "PCS",
+        "ANOMALY STATUS": "Normal", "TOTAL BOM": bom,
+        "ANOMALY SCORE": 0, **data, "TOTAL": float(total),
+    }
+
+
 def _rank_df() -> pd.DataFrame:
     """4 item × beberapa resto — kasus ranking berbeda per baris.
 
@@ -60,18 +72,10 @@ def _rank_df() -> pd.DataFrame:
     BEBEK : R1 tanpa BOM ('Cek') → hanya peringkat Total; R2 Top 1 % BOM.
     CUMI  : 2 resto TOTAL SAMA (duplikat) → berbagi Top 1.
     UDANG : 4 resto → peringkat 4 (R1) tak berlabel ('-').
-    SAPI  : multi-anggota (R1 = 60+40 = 100 SUM grup) → Top 1 Total.
+    SAPI  : multi-anggota same-KETERANGAN (R1 = 60+40 = 100 SUM grup) →
+            Top 1 Total (v2.21.0: grouping per KETERANGAN — multi-anggota
+            = same keterangan×barang×resto).
     """
-    def _row(barang, resto, total, bom, ket="Handling"):
-        data = {str(d): 0.0 for d in range(1, 32)}
-        data["5"] = float(total)
-        return {
-            "SOURCE DATA": "X", "JENIS": "WASTE", "KETERANGAN": ket,
-            "NAMA BARANG": barang, "NAMA RESTO": resto, "SATUAN": "PCS",
-            "ANOMALY STATUS": "Normal", "TOTAL BOM": bom,
-            "ANOMALY SCORE": 0, **data, "TOTAL": float(total),
-        }
-
     return pd.DataFrame([
         _row("AYAM", "R1", 100.0, 1000.0),
         _row("AYAM", "R2", 50.0, 1000.0),
@@ -85,7 +89,7 @@ def _rank_df() -> pd.DataFrame:
         _row("UDANG", "R3", 3.0, 100.0),
         _row("UDANG", "R4", 4.0, 100.0),
         _row("SAPI", "R1", 60.0, 1000.0),
-        _row("SAPI", "R1", 40.0, 1000.0, ket="Cancel Nota"),
+        _row("SAPI", "R1", 40.0, 1000.0),  # same-keterangan → 1 grup
         _row("SAPI", "R2", 50.0, 1000.0),
     ])
 
@@ -187,14 +191,56 @@ class TestGroupRanking:
         assert rk[("UDANG", "R4")] == "Top 1 Total & % BOM"
 
     def test_multi_anggota_total_sum(self):
-        """Grup 2-anggota (SAPI R1 60+40) → TOTAL grup = SUM (100)
-        yang ikut peringkat — bukan TOTAL anggota per baris."""
+        """Grup 2-anggota same-KETERANGAN (SAPI R1 60+40) → TOTAL grup =
+        SUM (100) yang ikut peringkat — bukan TOTAL anggota per baris
+        (v2.21.0: multi-anggota kini = same keterangan×barang×resto —
+        alasan beda TERPISAH grup, lihat test split di bawah)."""
         out = self._grouped()
         sapi = out[(out["NAMA BARANG"] == "SAPI")
                    & (out["NAMA RESTO"] == "R1")]
         assert len(sapi) == 1
         assert float(sapi["TOTAL"].iloc[0]) == 100.0
         assert sapi["RANGKING WASTE"].iloc[0] == "Top 1 Total & % BOM"
+
+    def test_keterangan_bedah_terpisah_grup(self):
+        """v2.21.0 (permintaan user: "grouping pakai keterangan terus nama
+        barang") — baris sama barang×resto tapi KETERANGAN BEDA → DUA grup
+        terpisah (dulu digabung satu grup per JENIS dgn keterangan
+        di-join). TOTAL & % to BOM dihitung per grup masing2."""
+        from ui.grouping import group_anomali_display
+        df = pd.DataFrame([
+            _row("SAPI", "R1", 60.0, 1000.0),
+            _row("SAPI", "R1", 40.0, 1000.0, ket="Cancel Nota"),
+        ])
+        out = group_anomali_display(df, None, {}, key_akhir=31)
+        assert len(out) == 2
+        rk = out.set_index("KETERANGAN")["TOTAL"]
+        assert float(rk["Handling"]) == 60.0
+        assert float(rk["Cancel Nota"]) == 40.0
+        # % to BOM per grup (bukan 100/1000 gabungan)
+        pct = out.set_index("KETERANGAN")["% to BOM"]
+        assert abs(float(pct["Handling"]) - 0.06) < 1e-9
+        assert abs(float(pct["Cancel Nota"]) - 0.04) < 1e-9
+
+    def test_ranking_kelas_per_keterangan(self):
+        """v2.21.0 — kelas peringkat RANGKING WASTE = (KETERANGAN, NAMA
+        BARANG) (dulu (JENIS, NAMA BARANG)): TopTotal/TopBOM dihitung
+        HANYA dari grup ber-keterangan sama — grup keterangan lain tak
+        saling merebut peringkat."""
+        from ui.grouping import group_anomali_display
+        df = pd.DataFrame([
+            # (Handling, AYAM): R1 30, R2 10 → Top 1 = R1
+            _row("AYAM", "R1", 30.0, 1000.0),
+            _row("AYAM", "R2", 10.0, 1000.0),
+            # (Cancel Nota, AYAM): R3 50 — LEBIH BESAR dari semua grup
+            # Handling tapi beda kelas → Top 1 kelasnya sendiri
+            _row("AYAM", "R3", 50.0, 1000.0, ket="Cancel Nota"),
+        ])
+        out = group_anomali_display(df, None, {}, key_akhir=31)
+        rk = out.set_index(["KETERANGAN", "NAMA RESTO"])["RANGKING WASTE"]
+        assert rk[("Handling", "R1")] == "Top 1 Total & % BOM"
+        assert rk[("Handling", "R2")] == "Top 2 Total & % BOM"
+        assert rk[("Cancel Nota", "R3")] == "Top 1 Total & % BOM"
 
     def test_posisi_kolom_kanan_profil(self):
         """RANGKING WASTE = kolom paling kanan layout depan (kanan

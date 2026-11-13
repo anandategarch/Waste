@@ -173,19 +173,21 @@ class TestKeteranganTampilSkorDihapus:
     def test_ranking_tetap_berdasar_skor(self):
         """v2.19.3 — DITULIS ULANG JUJUR: urutan DEFAULT tabel kini
         LAYOUT SAMPEL TAMPILAN BARU (permintaan user: grup per item +
-        baris kosong pemisah): urut (JENIS, NAMA BARANG, NAMA RESTO),
-        bukan skor turun. Sort by skor TETAP tersedia (SortControl/klik
-        judul — model.sort separator-aware)."""
+        baris kosong pemisah): urut (KETERANGAN, NAMA BARANG, NAMA RESTO)
+        (v2.21.0 — kunci pertama JENIS → KETERANGAN, permintaan user
+        "grouping pakai keterangan terus nama barang"), bukan skor turun.
+        Sort by skor TETAP tersedia (SortControl/klik judul — model.sort
+        separator-aware)."""
         view, _ = _make_view()
         dfm = view._table._model.dataframe
-        # Default: urut grup — TEH(SUSUT) < KOPI(TRIAL) < MIE(WASTE)
-        # (JENIS alfabetis) + pemisah kosong antar grup.
-        jenis_vals = ([v for v, s in zip(dfm["JENIS"].tolist(),
-                                         dfm["__SEP"].tolist())
-                       if s is not True]
-                      if "__SEP" in dfm.columns
-                      else dfm["JENIS"].tolist())
-        assert jenis_vals == sorted(jenis_vals)
+        # Default: urut grup — TEH(Alat/Mesin) < MIE(Cancel Nota) <
+        # KOPI(Handling) (KETERANGAN alfabetis) + pemisah kosong antar grup.
+        ket_vals = ([v for v, s in zip(dfm["KETERANGAN"].tolist(),
+                                      dfm["__SEP"].tolist())
+                     if s is not True]
+                    if "__SEP" in dfm.columns
+                    else dfm["KETERANGAN"].tolist())
+        assert ket_vals == sorted(ket_vals)
         if "__SEP" in dfm.columns:
             assert any(v is True for v in dfm["__SEP"].tolist()), (
                 "layout sampel: baris pemisah antar grup harus ada")

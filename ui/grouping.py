@@ -2,14 +2,26 @@
 
 Redesain tampilan tab Anomali atas permintaan user ("redesain tampilan
 tab anomali seperti tampilan di file SAMPEL TAMPILAN BARU.xlsx"): tabel
-kini SATU BARIS per pasangan (JENIS × NAMA BARANG × NAMA RESTO) — dulu
-satu baris per kombinasi (JENIS × BARANG × RESTO × KETERANGAN × SOURCE
-DATA) sehingga item yang sama terpecah banyak baris.
+kini SATU BARIS per pasangan (KETERANGAN × NAMA BARANG × NAMA RESTO).
 
-Sampel user (11 kolom, urutan persis):
-    JENIS · NAMA BARANG · NAMA RESTO · SOURCE DATA GABUNGAN · [TOTAL] ·
-    [% to BOM] · TOTAL BULAN LALU & % Selisih · Selisih Bulan Lalu ·
-    PERUBAHAN · ANOMALY STATUS · PROFIL
+v2.21.0 (permintaan user: "grouping nya sekarang kan pakai nama barang
+ya? oke sekarang ganti jadi grouping pakai keterangan terus nama barang
+... misal keterangan Alat/Mesin = 1 group dan di group lagi per nama
+barang"): kunci grup pertama diganti JENIS → KETERANGAN — tabel terurut
+per (KETERANGAN, NAMA BARANG, NAMA RESTO): semua baris ber-alasan sama
+(mis. Alat/Mesin) membentuk satu klaster besar, di dalamnya terkelompok
+per nama barang, di dalamnya per cabang. Efek: grup WASTE ber-alasan
+berbeda (mis. Handling vs Cancel Nota) kini TERPISAH (dulu digabung satu
+grup per JENIS dgn keterangan di-join 'Handling | Cancel Nota'); grup
+SUSUT/TRIAL ber-keterangan kosong tetap terkelompok via fallback nilai
+JENIS (v2.20.1, kini dihitung PER BARIS sebelum groupby — lihat
+_make_effective_ket). JENIS tetap hadir di df grup via baris
+representatif (kolom _REP_COLS) utk pop-up detail & identitas.
+
+Sampel user (11 kolom, urutan persis — v2.20.1 kolom pertama KETERANGAN):
+    KETERANGAN · NAMA BARANG · NAMA RESTO · SOURCE DATA GABUNGAN ·
+    [TOTAL] · [% to BOM] · TOTAL BULAN LALU & % Selisih · Selisih Bulan
+    Lalu · PERUBAHAN · ANOMALY STATUS · PROFIL
 
 Agregasi murni di LAPISAN TAMPILAN (view) — pipeline/skor/sinyal tetap
 dihitung per baris detail seperti sebelumnya (kontrak export & test
@@ -18,9 +30,10 @@ kosong, tidak pernah raise.
 
 Aturan agregasi per grup (penjelasan lengkap tiap kolom di kolom komentar
 fungsi group_anomali_display): SUM utk TOTAL/hari/BULAN LALU, join unik
-utk SOURCE DATA/KETERANGAN/ANOMALY REASONS, MAX utk skor, status paling
-parah, baris representatif (skor tertinggi) utk kolom peer, statistik
-hari dihitung ulang dari matriks terjumlah, PROFIL dari hari aktif.
+utk SOURCE DATA/ANOMALY REASONS (KETERANGAN = KUNCI grup — nilai tunggal,
+tak perlu join), MAX utk skor, status paling parah, baris representatif
+(skor tertinggi) utk kolom peer + JENIS, statistik hari dihitung ulang
+dari matriks terjumlah, PROFIL dari hari aktif.
 """
 from __future__ import annotations
 
@@ -41,7 +54,11 @@ from waste_anomaly.profile import (
 _DEFAULT_PROFIL_DAILY_MIN = 20
 
 # Kunci grup tampilan (urutan kolom identitas sampel user).
-GROUP_KEYS = ["JENIS", "NAMA BARANG", "NAMA RESTO"]
+# v2.21.0 — KETERANGAN dulu (permintaan user: "grouping pakai keterangan
+# terus nama barang"): keterangan = klaster level-1, nama barang level-2,
+# cabang level-3. JENIS keluar dari kunci (tetap dibawa via baris
+# representatif — _REP_COLS) supaya grup WASTE ber-alasan beda TERPISAH.
+GROUP_KEYS = ["KETERANGAN", "NAMA BARANG", "NAMA RESTO"]
 
 # Nama kolom keluaran khusus tampilan grup (kontrak view/model/test).
 SRC_GAB_COL = "SOURCE DATA GABUNGAN"
@@ -61,10 +78,13 @@ SRC_ROWS_COL = "__SRC_ROWS"
 # kolom NaN + __SEP=True → model merender baris KOSONG (tak selectable,
 # record()=None, tak masuk funnel/klik).
 SEP_COL = "__SEP"
-# Kunci grup pemisah = label item (JENIS + NAMA BARANG) — pemisah disisipkan
-# saat label item BERUBAH antar baris bertetangga (urutan grup dijamin
-# oleh sort (JENIS, NAMA BARANG, NAMA RESTO)).
-SEP_KEYS = ("JENIS", "NAMA BARANG")
+# Kunci grup pemisah = label item (KETERANGAN + NAMA BARANG) — pemisah
+# disisipkan saat label item BERUBAH antar baris bertetangga (urutan grup
+# dijamin oleh sort (KETERANGAN, NAMA BARANG, NAMA RESTO)). v2.21.0: kunci
+# pertama JENIS → KETERANGAN (permintaan user: pemisah antar klaster-alasan
+# × barang — "keterangan Alat/Mesin = 1 group, di group lagi per nama
+# barang").
+SEP_KEYS = ("KETERANGAN", "NAMA BARANG")
 
 # Urutan status dari paling ringan → paling parah (worst-of-group).
 _STATUS_RANK = {"Normal": 0, "Perlu Review": 1, "Potensi Anomali": 2,
@@ -75,8 +95,15 @@ _STATUS_NAME = {v: k for k, v in _STATUS_RANK.items()}
 # tertinggi) — grup peer per KETERANGAN memang beda antar anggota, satu
 # angka wajib dipilih utk pop-up detail; pilihan paling relevan utk
 # investigasi = anggota terburuk grup.
+# v2.21.0 — "JENIS" ikut representatif: JENIS bukan lagi kunci grup
+# (digantikan KETERANGAN), tapi tetap dibutuhkan df grup utk pop-up
+# detail (baris "Jenis & alasan catatan"), tooltip kamus, dan kontrak
+# test v2.20.1 ("JENIS tetap di df model, hanya disembunyikan dari
+# tabel"). Grup bisa ber-JENIS campuran (jarang — mis. WASTE ber-ket
+# eksplisit 'SUSUT' + baris SUSUT ber-ket kosong fallback 'SUSUT') →
+# representatif = anggota terburuk — konsisten pola kolom rep lain.
 _REP_COLS = [
-    "SATUAN", "TOTAL BOM",
+    "JENIS", "SATUAN", "TOTAL BOM",
     "PEER COUNT", "PEER MEDIAN TOTAL", "PEER MEDIAN MAX",
     "TOTAL / PEER MEDIAN", "MAX / PEER MEDIAN MAX",
     "MAX / BOM", "TOTAL / BOM",
@@ -127,7 +154,14 @@ def group_anomali_display(
     key_akhir: int = 31,
     has_baseline: bool = False,
 ) -> pd.DataFrame:
-    """Agregasi df anomali → tampilan per (JENIS, NAMA BARANG, NAMA RESTO).
+    """Agregasi df anomali → tampilan per (KETERANGAN, NAMA BARANG, NAMA RESTO).
+
+    v2.21.0 — kunci pertama JENIS → KETERANGAN (permintaan user:
+    "grouping pakai keterangan terus nama barang ... misal keterangan
+    Alat/Mesin = 1 group dan di group lagi per nama barang"). KETERANGAN
+    kosong per baris diisi JENIS DULU (fallback v2.20.1, kini level-baris
+    — supaya baris SUSUT/TRIAL tanpa sub-alasan tetap membentuk klaster
+    'SUSUT'/'TRIAL' dan tak menyatu dgn grup lain ber-ket kosong).
 
     Args:
         df: df baris-detail hasil filter + enrich BULAN LALU (level baris).
@@ -157,6 +191,20 @@ def group_anomali_display(
         key_akhir = 31
 
     keys = GROUP_KEYS
+    # ---------- 0) keterangan EFEKTIF per baris (v2.21.0) ----------
+    # Fallback KETERANGAN kosong → JENIS (SUSUT/TRIAL tak punya sub-alasan
+    # — jenisnya itulah keterangannya). Dihitung PER BARIS SEBELUM groupby
+    # (v2.20.1 dulu level-grup pasca-agregasi): dgn KETERANGAN sbg KUNCI
+    # grup, baris kosong harus dipetakan ke klaster 'SUSUT'/'TRIAL' masing2
+    # — kalau tidak semua baris kosong nyatu jadi SATU grup NaN lintas
+    # jenis. Non-mutasi: assign ke salinan lokal (kontrak 'konsumen hanya
+    # membaca' — df pemanggil tak tersentuh).
+    if "JENIS" in df.columns:
+        ket = df["KETERANGAN"]
+        empty = ket.isna() | (ket.astype(str).str.strip() == "")
+        if bool(empty.any()):
+            df = df.assign(
+                KETERANGAN=ket.where(~empty, df["JENIS"]))
     days = [c for c in _day_columns(df) if int(c) <= key_akhir]
     g = df.groupby(keys, dropna=False, sort=False)
 
@@ -166,21 +214,39 @@ def group_anomali_display(
         agg["TOTAL"] = "sum"
     for c in days:
         agg[c] = "sum"
-    if "BULAN LALU" in df.columns:
-        agg["BULAN LALU"] = "sum"
-    # v2.19.1 (audit bug D): agg KOSONG (df tanpa TOTAL/hari/BULAN LALU —
-    # fixture sintetis / df parsial) membuat g.agg({}) melempar
-    # ValueError "No objects to concatenate" — pelanggaran kontrak
-    # defensif docstring ini sendiri. Kerangka grup dibangun via
-    # g.size() (jumlah anggota per grup) lalu kolom hitungannya dibuang.
+    # v2.21.0 — BULAN LALU TAK di-sum per anggota: nilai baris-level
+    # (change_vs_history) = baseline per (resto×barang×jenis×KETERANGAN);
+    # anggota grup same-(jenis,ket) (mis. beda SATUAN/SOURCE DATA) join ke
+    # baris baseline YANG SAMA → sum per anggota MENGGAHKAN (dobel —
+    # audit interaksi layout v2.21.0). Karena anggota grup kini PASTI
+    # seketerangan (KETERANGAN = kunci grup), kunci join per grup =
+    # kombinasi JENIS anggotanya → BULAN LALU grup = SUM SATU nilai per
+    # (grup × JENIS) — dihitung sendiri di bawah.
     if agg:
         out = g.agg(agg).reset_index()
     else:
         out = g.size().to_frame("__n").reset_index().drop(columns="__n")
 
+    # ---------- 1b) BULAN LALU grup (per JENIS berbeda — v2.21.0) ------
+    if "BULAN LALU" in df.columns:
+        try:
+            bl_keys = keys + (["JENIS"] if "JENIS" in df.columns else [])
+            tmp = df[bl_keys + ["BULAN LALU"]].drop_duplicates(
+                subset=bl_keys, keep="first")
+            t = (tmp.groupby(keys, dropna=False, sort=False)["BULAN LALU"]
+                 .sum().reset_index())
+            out = out.merge(t, on=keys, how="left", sort=False)
+        except Exception:  # noqa: BLE001 — defensif: perilaku lama (sum
+            # per anggota — df eksotis tanpa struktur standar)
+            t = g["BULAN LALU"].sum().reset_index()
+            out = out.merge(t, on=keys, how="left", sort=False)
+
     # ---------- 2) join teks unik (merge on keys — tahan NaN) ----------
-    for col, sep in (("SOURCE DATA", ", "), ("KETERANGAN", " | "),
-                     ("ANOMALY REASONS", " | ")):
+    # v2.21.0 — KETERANGAN TAK lagi di-join: kini KUNCI grup (nilai tunggal
+    # per grup by construction — join cuma membuah tabrakan nama kolom ganda
+    # di reset_index). Funnel/normalisasi nilai tunggal justru lebih bersih
+    # (dulu join 'Handling | Cancel Nota' tak match nilai baris tunggal).
+    for col, sep in (("SOURCE DATA", ", "), ("ANOMALY REASONS", " | ")):
         if col in df.columns:
             t = (g[col].agg(lambda s: _join_unique(s, sep))
                  .reset_index())
@@ -188,19 +254,6 @@ def group_anomali_display(
     # SOURCE DATA GABUNGAN = kolom tampilan sampel user (isi join di atas)
     if "SOURCE DATA" in out.columns:
         out[SRC_GAB_COL] = out["SOURCE DATA"]
-    # v2.20.1 — KETERANGAN fallback ke JENIS bila kosong (permintaan user:
-    # "kolom jenis diganti jadi kolom KETERANGAN AJA"). Catatan SUSUT/TRIAL
-    # umumnya tak punya sub-alasan — jenisnya itulah keterangannya, jadi
-    # KETERANGAN kosong → tampilkan JENIS (SUSUT/TRIAL) supaya kolom
-    # KETERANGAN tak pernah blank & vocabularynya utuh (Alat/Mesin, Cancel
-    # Nota, Handling, Kualitas, Kualitas Eksternal, Kualitas Internal, Over
-    # Stock, SUSUT, TRIAL). Grup homogen-per-JENIS (JENIS = kunci grup) →
-    # fallback seragam per grup (tidak mengubah grup WASTE ber-alasan).
-    if "KETERANGAN" in out.columns and "JENIS" in out.columns:
-        ket = out["KETERANGAN"]
-        empty = ket.isna() | (ket.astype(str).str.strip() == "")
-        if bool(empty.any()):
-            out.loc[empty, "KETERANGAN"] = out.loc[empty, "JENIS"]
 
     # ---------- 3) skor MAX + status paling parah ----------
     if "ANOMALY SCORE" in df.columns:
@@ -277,17 +330,22 @@ def group_anomali_display(
         out["% to BOM"] = [(r if r == r else "Cek") for r in ratio]
     # else: nilai baris representatif sudah dibawa rep_cols (fallback).
 
-    # ---------- 6b) RANGKING WASTE grup (v2.20.0) ----------
+    # ---------- 6b) RANGKING WASTE grup (v2.20.0; kunci v2.21.0) ----------
     # Permintaan user (M code 'TambahRangkingFast'): analisa peringkat
     # waste — Top 3 Total & Top 3 % BOM per item LINTAS CABANG. Lapis
     # GRUP: TopTotal/TopBOM dihitung dari TOTAL grup & % to BOM grup
     # (tabel Anomali = satu baris per item×cabang — total cabang = sum
     # anggotanya), MENIMPA nilai baris representatif (_REP_COLS membawa
     # ranking anggota ber-TOTAL baris; grup multi-anggota berbeda).
-    # Label = sumber tunggal waste_anomaly.signals.ranking_waste_label
-    # (pencocokan nilai persis List.PositionOf M — duplikat berbagi
-    # peringkat). Defensif: error apapun → kolom rep lama dipakai.
-    if len(out) and {"JENIS", "NAMA BARANG"} <= set(out.columns):
+    # v2.21.0 — kelas peringkat kini (KETERANGAN, NAMA BARANG) (dulu
+    # (JENIS, NAMA BARANG)) — konsisten dgn layout grup baru: baris
+    # tabel bersaing dgn saudara keterangan×barang yang sama lintas
+    # cabang (grup terpisah per keterangan tak saling berebut
+    # peringkat). Label = sumber tunggal
+    # waste_anomaly.signals.ranking_waste_label (pencocokan nilai persis
+    # List.PositionOf M — duplikat berbagi peringkat). Defensif: error
+    # apapun → kolom rep lama dipakai.
+    if len(out) and {"KETERANGAN", "NAMA BARANG"} <= set(out.columns):
         try:
             from waste_anomaly.signals import ranking_waste_label
             tot_all = (pd.to_numeric(out["TOTAL"], errors="coerce")
@@ -296,7 +354,7 @@ def group_anomali_display(
                        if "% to BOM" in out.columns else None)
             labels = pd.Series("-", index=out.index, dtype=object)
             for _key, sub in out.groupby(
-                    ["JENIS", "NAMA BARANG"], sort=False, dropna=False):
+                    ["KETERANGAN", "NAMA BARANG"], sort=False, dropna=False):
                 tv = [] if tot_all is None else sorted(
                     (v for v in tot_all.loc[sub.index].tolist() if v == v),
                     reverse=True)[:3]

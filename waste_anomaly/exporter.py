@@ -85,15 +85,18 @@ STREAMING_THRESHOLD_DEFAULT = 35_000
 
 
 # ============================================================
-# GROUPED LAYOUT SHEET — SAMPEL TAMPILAN BARU (v2.19.2)
+# GROUPED LAYOUT SHEET — SAMPEL TAMPILAN BARU (v2.19.2; layout v2.21.0)
 # ============================================================
 # Sheet tambahan "Anomali Grup" mengikuti sampel user: SATU BARIS per
-# pasangan (JENIS × NAMA BARANG × NAMA RESTO), urut menurut (JENIS, NAMA
-# BARANG, NAMA RESTO), dgn BARIS KOSONG pemisah antar grup (JENIS, NAMA
-# BARANG). 11 kolom persis sampel:
-#   JENIS · NAMA BARANG · NAMA RESTO · SOURCE DATA GABUNGAN · [TOTAL] ·
+# pasangan (KETERANGAN × NAMA BARANG × NAMA RESTO), urut menurut
+# (KETERANGAN, NAMA BARANG, NAMA RESTO), dgn BARIS KOSONG pemisah antar
+# grup (KETERANGAN, NAMA BARANG). 11 kolom persis sampel:
+#   KETERANGAN · NAMA BARANG · NAMA RESTO · SOURCE DATA GABUNGAN · [TOTAL] ·
 #   [% to BOM] · TOTAL BULAN LALU & % Selisih · Selisih Bulan Lalu ·
 #   PERUBAHAN · ANOMALY STATUS · PROFIL
+# v2.21.0 — kunci pertama JENIS → KETERANGAN (permintaan user: "grouping
+# pakai keterangan terus nama barang" — konsisten dgn tabel tab
+# Anomali; JENIS tidak lagi kolom sheet, dibawa hanya di df grup).
 #
 # DataFrame grup dibangun pemanggil (ui/workers.py via ui.grouping
 # .group_anomali_display) lalu diteruskan ke export_to_excel lewat param
@@ -109,7 +112,7 @@ LASTMONTH_COMBINED_COL_NAME = "TOTAL BULAN LALU & % Selisih"
 SELISIH_COL_NAME = "Selisih Bulan Lalu"
 
 _GROUPED_COLS = [
-    "JENIS", "NAMA BARANG", "NAMA RESTO", SRC_GAB_COL_NAME,
+    "KETERANGAN", "NAMA BARANG", "NAMA RESTO", SRC_GAB_COL_NAME,
     "TOTAL", "% to BOM",
     LASTMONTH_COMBINED_COL_NAME, SELISIH_COL_NAME, "PERUBAHAN",
     "ANOMALY STATUS", "PROFIL",
@@ -583,14 +586,16 @@ def _write_grouped_layout_sheet(
     df: pd.DataFrame,
     status_col: str | None = "ANOMALY STATUS",
 ):
-    """Tulis sheet 'Anomali Grup' — layout SAMPEL TAMPILAN BARU (v2.19.2).
+    """Tulis sheet 'Anomali Grup' — layout SAMPEL TAMPILAN BARU (v2.19.2;
+    kunci v2.21.0 KETERANGAN dulu).
 
-    Satu baris per (JENIS × NAMA BARANG × NAMA RESTO), urut menurut
-    (JENIS, NAMA BARANG, NAMA RESTO), dgn BARIS KOSONG pemisah antar grup
-    (JENIS, NAMA BARANG). 11 kolom sampel; [TOTAL]/Selisih dgn pemisah
-    ribuan, [% to BOM] format persen, 'TOTAL BULAN LALU & % Selisih' sebagai
-    teks 'nilai (±X%)' gaya Indonesia (replika fmt_lastmonth_combined).
-    ANOMALY STATUS diberi warna status (sama sheet Anomali Prioritas).
+    Satu baris per (KETERANGAN × NAMA BARANG × NAMA RESTO), urut menurut
+    (KETERANGAN, NAMA BARANG, NAMA RESTO), dgn BARIS KOSONG pemisah antar
+    grup (KETERANGAN, NAMA BARANG). 11 kolom sampel; [TOTAL]/Selisih dgn
+    pemisah ribuan, [% to BOM] format persen, 'TOTAL BULAN LALU & %
+    Selisih' sebagai teks 'nilai (±X%)' gaya Indonesia (replika
+    fmt_lastmonth_combined). ANOMALY STATUS diberi warna status (sama
+    sheet Anomali Prioritas).
 
     ``df`` = DataFrame grup hasil group_anomali_display (pemanggil membangun).
     Kolom internal (__SRC_ROW/__FPS/__SRC_ROWS) dibuang pemanggil sebelum
@@ -623,8 +628,9 @@ def _write_grouped_layout_sheet(
     combined_df_col = LASTMONTH_COMBINED_COL_NAME  # nama di df (bila ada)
     delta_col = "PERUBAHAN %"
 
-    # Sort by (JENIS, NAMA BARANG, NAMA RESTO) — stable mergesort.
-    sort_keys = [k for k in ("JENIS", "NAMA BARANG", "NAMA RESTO")
+    # Sort by (KETERANGAN, NAMA BARANG, NAMA RESTO) — stable mergesort
+    # (v2.21.0 — kunci pertama JENIS → KETERANGAN, konsisten tabel).
+    sort_keys = [k for k in ("KETERANGAN", "NAMA BARANG", "NAMA RESTO")
                  if k in df.columns]
     sdf = (df.sort_values(sort_keys, na_position="last", kind="mergesort")
            if sort_keys else df)
@@ -652,14 +658,15 @@ def _write_grouped_layout_sheet(
             col_data[src_col] = sdf[src_col].tolist()
     delta_series = (sdf[delta_col].tolist() if delta_col in sdf.columns
                     else [None] * len(sdf))
-    jenis_series = (sdf["JENIS"].tolist() if "JENIS" in sdf.columns
-                    else [None] * len(sdf))
+    ket_series = (sdf["KETERANGAN"].tolist()
+                  if "KETERANGAN" in sdf.columns
+                  else [None] * len(sdf))
     barang_series = (sdf["NAMA BARANG"].tolist() if "NAMA BARANG" in sdf.columns
                      else [None] * len(sdf))
     for i in range(len(sdf)):
-        cur_key = (jenis_series[i], barang_series[i])
+        cur_key = (ket_series[i], barang_series[i])
         if not first_row and cur_key != prev_key:
-            # Baris KOSONG pemisah antar grup (JENIS, NAMA BARANG).
+            # Baris KOSONG pemisah antar grup (KETERANGAN, NAMA BARANG).
             ws.append([None] * len(headers))
             n_body += 1
         first_row = False

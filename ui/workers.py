@@ -92,15 +92,18 @@ def _build_grouped_layout_df(
 ) -> pd.DataFrame | None:
     """v2.19.2 — bangun DataFrame grup utk sheet 'Anomali Grup'.
 
-    Memakai ui.grouping.group_anomali_display (agregasi per JENIS×NAMA
-    BARANG×NAMA RESTO — sama dgn tampilan tab Anomali). Mencakup SEMUA baris
-    (bukan hanya anomali) — sesuai sampel SAMPEL TAMPILAN BARU.xlsx yg
-    menampilkan seluruh item×cabang. has_baseline=False (kolom BULAN LALU
-    diisi bila df sudah ber-annotate change_vs_history; selain itu kosong).
+    Memakai ui.grouping.group_anomali_display (agregasi per KETERANGAN×
+    NAMA BARANG×NAMA RESTO — sama dgn tampilan tab Anomali; v2.21.0 kunci
+    pertama JENIS → KETERANGAN, permintaan user "grouping pakai keterangan
+    terus nama barang"). Mencakup SEMUA baris (bukan hanya anomali) —
+    sesuai sampel SAMPEL TAMPILAN BARU.xlsx yg menampilkan seluruh
+    item×cabang. has_baseline=False (kolom BULAN LALU diisi bila df sudah
+    ber-annotate change_vs_history; selain itu kosong).
     """
     if df is None or df.empty:
         return None
-    if not all(k in df.columns for k in ("JENIS", "NAMA BARANG", "NAMA RESTO")):
+    if not all(k in df.columns for k in
+               ("KETERANGAN", "NAMA BARANG", "NAMA RESTO")):
         return None
     from .grouping import group_anomali_display
     fps = fingerprint_series(df)

@@ -145,8 +145,8 @@ from .widgets import (
 )
 
 # Kolom tabel anomali — LAYOUT SAMPEL USER v2.19.0 ("SAMPEL TAMPILAN
-# BARU.xlsx"): SATU BARIS per (JENIS × NAMA BARANG × NAMA RESTO) — semua
-# alasan/KETERANGAN & SOURCE DATA digabung (kolom SOURCE DATA GABUNGAN),
+# BARU.xlsx"): SATU BARIS per (KETERANGAN × NAMA BARANG × NAMA RESTO) —
+# semua alasan & SOURCE DATA digabung (kolom SOURCE DATA GABUNGAN),
 # urutan 11 kolom persis sampel:
 #   KETERANGAN · NAMA BARANG · NAMA RESTO · SOURCE DATA GABUNGAN · [TOTAL] ·
 #   [% to BOM] · TOTAL BULAN LALU & % Selisih · Selisih Bulan Lalu ·
@@ -158,8 +158,13 @@ from .widgets import (
 # TRIAL). SUSUT/TRIAL muncul di KETERANGAN via fallback (grouping.py:
 # KETERANGAN kosong → JENIS) sebab catatan SUSUT/TRIAL tak punya
 # sub-alasan — jenisnya itulah keterangannya. JENIS tetap di df model
-# (kunci grup + sort + funnel global 'jenis' di tab Hari) — hanya
+# (dibawa baris representatif grup; dipakai pop-up detail) — hanya
 # disembunyikan dari tabel Anomali (visible_cols = TABLE_COLS).
+# v2.21.0 (permintaan user: "grouping pakai keterangan terus nama barang
+# ... misal keterangan Alat/Mesin = 1 group dan di group lagi per nama
+# barang") — kunci GRUP diganti (JENIS, BARANG, RESTO) → (KETERANGAN,
+# BARANG, RESTO): urutan tabel per klaster alasan, di dalamnya per
+# barang, di dalamnya per cabang; pemisah antar (KETERANGAN, BARANG).
 # [TOTAL]/[% to BOM] = ALIAS judul (nama kanonik df tetap TOTAL/% to BOM
 # — kontrak test_v280 index+1 utuh). 'TOTAL BULAN LALU & % Selisih' =
 # kolom NUMERIK berisi total bulan lalu; teks sel "1.969,1 (-30%)"
@@ -2164,9 +2169,10 @@ class AnomaliView(FollowupTableMixin, QWidget):
         return self._cb_followup.currentData() == "fu"
 
     # ------------------------------------------------------------
-    # v2.19.0 — TAMPILAN GRUP per (JENIS × NAMA BARANG × NAMA RESTO)
-    # (sampel user "SAMPEL TAMPILAN BARU.xlsx"). Override mixin baris-
-    # tunggal: ✓ grup = SEMUA sidik jari anggota sekaligus.
+    # v2.21.0 — TAMPILAN GRUP per (KETERANGAN × NAMA BARANG × NAMA RESTO)
+    # (permintaan user: "grouping pakai keterangan terus nama barang").
+    # Override mixin baris-tunggal: ✓ grup = SEMUA sidik jari anggota
+    # sekaligus.
     # ------------------------------------------------------------
     def _key_akhir(self) -> int:
         """Hari terakhir periode run (penyebut AVG grup; fallback 31)."""
@@ -2308,10 +2314,10 @@ class AnomaliView(FollowupTableMixin, QWidget):
         Memo LRU per objek df (pola mixin — objek stabil → cache fit
         DataTable kena antar-state); ✓ grup disegarkan tiap pemakaian.
         Bila df TAK punya kunci grup (fixture minimal), fallback jalur
-        mixin baris-tunggal supaya tabel tetap tampil (defensif)."""
+        mixin baris-tunggal supaya tabel tetap tampil (defensif).
+        v2.21.0 — kunci grup = GROUP_KEYS grouping.py (KETERANGAN dulu)."""
         if df is None or df.empty or not all(
-                k in df.columns for k in ("JENIS", "NAMA BARANG",
-                                          "NAMA RESTO")):
+                k in df.columns for k in GROUP_KEYS):
             return FollowupTableMixin._display_df(self, df)
         key = id(df)
         entry = self._disp_cache.get(key)
@@ -2336,11 +2342,12 @@ class AnomaliView(FollowupTableMixin, QWidget):
     def _separated_df(self, shown: pd.DataFrame) -> pd.DataFrame:
         """v2.19.3 — df tampilan GRUP urut-sampel + BARIS PEMISAH kosong.
 
-        Urut (JENIS, NAMA BARANG, NAMA RESTO) lalu sisip pemisah antar
-        grup (JENIS, NAMA BARANG) — layout SAMPEL TAMPILAN BARU.xlsx di
-        TABEL tab Anomali (permintaan user: "insert blank line after each
-        item label"). Memo LRU per objek shown (pola _display_df) — objek
-        df ber-pemisah STABIL antar-refresh → cache fit DataTable tetap
+        Urut (KETERANGAN, NAMA BARANG, NAMA RESTO) lalu sisip pemisah antar
+        grup (KETERANGAN, NAMA BARANG) — layout SAMPEL TAMPILAN BARU.xlsx di
+        TABEL tab Anomali (v2.21.0 kunci pertama JENIS → KETERANGAN —
+        permintaan user: "grouping pakai keterangan terus nama barang").
+        Memo LRU per objek shown (pola _display_df) — objek df
+        ber-pemisah STABIL antar-refresh → cache fit DataTable tetap
         kena (kontrak perf v2.9.0). Defensif: grouping/tanpa kunci grup /
         error → shown apa adanya (tabel tetap jalan tanpa spasi).
         """
@@ -2588,12 +2595,15 @@ class AnomaliView(FollowupTableMixin, QWidget):
         # v2.19.3 — TABEL layout SAMPEL TAMPILAN BARU (permintaan user:
         # "tampilan di tab anomali kok gak ada spasi nya ... insert blank
         # line after each item label dari kolom jenis dan nama barang"):
-        # urut per GRUP ITEM (JENIS, NAMA BARANG, NAMA RESTO) — bukan skor
-        # turun (dulu) — + BARIS KOSONG pemisah antar grup (JENIS, NAMA
-        # BARANG). Sort by skor/angka lain tetap tersedia via SortControl /
-        # klik judul (model.sort separator-aware: sort kolom non-grup =
-        # tabel polos ter-ranked; sort kolom grup = pemisah disisip ulang;
-        # "(urut default)" mengembalikan layout grup+spasi).
+        # urut per GRUP ITEM (KETERANGAN, NAMA BARANG, NAMA RESTO) — bukan
+        # skor turun (dulu) — + BARIS KOSONG pemisah antar grup
+        # (KETERANGAN, NAMA BARANG). v2.21.0: kunci pertama JENIS →
+        # KETERANGAN (permintaan user: "grouping pakai keterangan terus
+        # nama barang"). Sort by skor/angka lain tetap tersedia via
+        # SortControl / klik judul (model.sort separator-aware: sort
+        # kolom non-grup = tabel polos ter-ranked; sort kolom grup =
+        # pemisah disisip ulang; "(urut default)" mengembalikan layout
+        # grup+spasi).
         # MEMO LRU per objek shown (pola _disp_cache) — objek df ber-pemisah
         # STABIL antar-refresh supaya cache fit DataTable tetap kena
         # (kontrak perf v2.9.0; insert membangun df baru tiap kali tanpa memo).

@@ -62,6 +62,8 @@ def _df_2grup() -> pd.DataFrame:
             **data, "TOTAL": float(total),
         }
 
+    # v2.21.0: 3 grup per KETERANGAN dulu — (Cancel Nota, AYAM, R1),
+    # (Cancel Nota, BEBEK, R1), (Internal, AYAM, R2).
     return pd.DataFrame([
         _row("SUSUT", "Cancel Nota", "AYAM", "R1", 100.0,
              "Prioritas Tinggi", 100),
@@ -95,22 +97,28 @@ def _make_view():
 class TestInsertGroupSeparators:
     def test_pemisah_antar_grup_bukan_pertama_terakhir(self):
         from ui.grouping import insert_group_separators, SEP_COL
+        # v2.21.0: sort by kunci grup baru (KETERANGAN dulu) supaya baris
+        # grup bertetangga — pemisah antar (KETERANGAN, NAMA BARANG).
         df = _df_2grup().sort_values(
-            ["JENIS", "NAMA BARANG", "NAMA RESTO"], kind="mergesort")
+            ["KETERANGAN", "NAMA BARANG", "NAMA RESTO"], kind="mergesort")
         out = insert_group_separators(df)
         seps = out[SEP_COL].tolist()
         # Tidak sebelum grup pertama, tidak setelah grup terakhir.
         assert seps[0] is False and seps[-1] is False
-        # Pemisah tepat di antara AYAM → BEBEK.
-        assert sum(1 for v in seps if v is True) == 1
-        assert out.iloc[1]["JENIS"] != out.iloc[2]["JENIS"]  # sebelum sep = AYAM
-        assert pd.isna(out.iloc[1 + 1]["NAMA BARANG"])  # baris sep = NaN semua
-        assert out.iloc[1 + 2]["NAMA BARANG"] == "BEBEK"
+        # 3 grup (CN-AYAM, CN-BEBEK, Internal-AYAM) → 2 pemisah.
+        assert sum(1 for v in seps if v is True) == 2
+        assert out.iloc[0]["NAMA BARANG"] == "AYAM"  # grup pertama
+        # pemisah pertama tepat antara (CN, AYAM) → (CN, BEBEK): barang
+        # berubah; pemisah kedua antara (CN, BEBEK) → (Internal, AYAM).
+        assert pd.isna(out.iloc[1]["NAMA BARANG"])  # baris sep = NaN semua
+        assert out.iloc[2]["NAMA BARANG"] == "BEBEK"
+        assert pd.isna(out.iloc[3]["NAMA BARANG"])  # sep kedua
+        assert out.iloc[4]["KETERANGAN"] == "Internal"
 
     def test_pemisah_kolom_semua_nan(self):
         from ui.grouping import insert_group_separators, SEP_COL
         df = _df_2grup().sort_values(
-            ["JENIS", "NAMA BARANG", "NAMA RESTO"], kind="mergesort")
+            ["KETERANGAN", "NAMA BARANG", "NAMA RESTO"], kind="mergesort")
         out = insert_group_separators(df)
         sep_row = out[out[SEP_COL] == True].iloc[0]  # noqa: E712
         for c in out.columns:
@@ -120,10 +128,10 @@ class TestInsertGroupSeparators:
     def test_idempoten(self):
         from ui.grouping import insert_group_separators
         df = _df_2grup().sort_values(
-            ["JENIS", "NAMA BARANG", "NAMA RESTO"], kind="mergesort")
+            ["KETERANGAN", "NAMA BARANG", "NAMA RESTO"], kind="mergesort")
         once = insert_group_separators(df)
         twice = insert_group_separators(once)
-        assert len(once) == len(twice) == 4  # 3 data + 1 pemisah
+        assert len(once) == len(twice) == 5  # 3 data + 2 pemisah
 
     def test_grup_tunggal_tanpa_pemisah(self):
         from ui.grouping import insert_group_separators, SEP_COL
@@ -132,12 +140,12 @@ class TestInsertGroupSeparators:
         assert len(out) == 1 and SEP_COL in out.columns
 
     def test_nan_berurutan_bukan_pemisah_palsu(self):
-        """Dua baris NaN JENIS berurutan ≠ grup berubah (pandas ne NaN≠NaN
-        — guard fillna sentinel)."""
+        """Dua baris NaN KETERANGAN berurutan ≠ grup berubah (pandas ne
+        NaN≠NaN — guard fillna sentinel)."""
         from ui.grouping import insert_group_separators, SEP_COL
         df = pd.DataFrame([
-            {"JENIS": None, "NAMA BARANG": "X", "TOTAL": 1},
-            {"JENIS": None, "NAMA BARANG": "X", "TOTAL": 2},
+            {"KETERANGAN": None, "NAMA BARANG": "X", "TOTAL": 1},
+            {"KETERANGAN": None, "NAMA BARANG": "X", "TOTAL": 2},
         ])
         out = insert_group_separators(df)
         assert not any(v is True for v in out[SEP_COL].tolist())
@@ -152,7 +160,7 @@ class TestModelSeparator:
         from ui.models import PandasTableModel
         from ui.grouping import insert_group_separators, SEP_COL, SEP_KEYS
         df = _df_2grup().sort_values(
-            ["JENIS", "NAMA BARANG", "NAMA RESTO"], kind="mergesort")
+            ["KETERANGAN", "NAMA BARANG", "NAMA RESTO"], kind="mergesort")
         disp = insert_group_separators(df)
         m = PandasTableModel(disp)
         m.set_separator_column(SEP_COL, group_keys=SEP_KEYS)
@@ -198,7 +206,10 @@ class TestModelSeparator:
         nb = list(m.dataframe.columns).index("NAMA BARANG")
         m.sort(nb, Qt.AscendingOrder)
         seps = [v for v in m.dataframe["__SEP"].tolist() if v is True]
-        assert len(seps) == 1  # AYAM → BEBEK masih 2 grup
+        # v2.21.0: 3 grup → sort by NAMA BARANG (kolom grup — stable
+        # mergesort) → pemisah disisip ulang antar (KETERANGAN, BARANG):
+        # urutan sort [AYAM(CN), AYAM(Internal), BEBEK(CN)] → 2 pemisah.
+        assert len(seps) == 2
 
 
 # ============================================================

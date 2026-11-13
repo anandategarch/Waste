@@ -514,19 +514,19 @@ class TestFilterHeaderAnomaliView:
         return view, ctx
 
     def test_wiring_ctx_dan_render_ulang(self):
-        # v2.19.0 — tampilan GRUP per (JENIS×NAMA BARANG×NAMA RESTO):
+        # v2.21.0 — tampilan GRUP per (KETERANGAN×NAMA BARANG×NAMA RESTO):
         # fixture _df_bandung 4 baris (2 AYAM anomali + 1 AYAM Normal +
-        # 1 BEBEK Normal) → setelah filter anomali + grouping = 1 grup
-        # AYAM·R1·WASTE. Funnel wiring tetap utuh: klik funnel → state
-        # ctx berubah → render ulang. Uncheck SATU nilai tunggal di kolom
-        # = vals=[] = filter kosong (kontrak _apply_filters: list kosong
-        # = tak ada filter → semua baris tampil); test fokus verifikasi
-        # WIRING (state ctx ter-set + render terjadi), bukan filter
-        # semantik (fixture terlalu kecil utk pengujian baris-berkurang).
+        # 1 BEBEK Normal) → 4 grup keterangan + 3 pemisah. Funnel wiring
+        # tetap utuh: klik funnel → state ctx berubah → render ulang.
+        # Uncheck SATU nilai tunggal di kolom = vals=[] = filter kosong
+        # (kontrak _apply_filters: list kosong = tak ada filter → semua
+        # baris tampil); test fokus verifikasi WIRING (state ctx ter-set
+        # + render terjadi), bukan filter semantik (fixture terlalu kecil
+        # utk pengujian baris-berkurang).
         view, ctx = self._view()
         hdr = view._table.horizontalHeader()
         app = _qapp()
-        assert view._table.model().rowCount() == 3  # 2 grup (AYAM+BEBEK) + pemisah (Normal ikut, v2.19.8)
+        assert view._table.model().rowCount() == 7  # 4 grup keterangan + 3 pemisah (Normal ikut, v2.19.8)
         df_cols = list(view._table.model().dataframe.columns)
         logical = df_cols.index("NAMA BARANG")
         hdr._open_menu(logical)
