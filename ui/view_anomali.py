@@ -49,6 +49,20 @@ v2.18.7 (3 permintaan user):
   tak tersentuh). Saat aktif, lepas centang ✓ = baris langsung
   hilang dari tabel (hook mixin _followup_filter_active →
   _on_followup_changed me-render ulang, bukan segarkan ✓ in-place).
+
+v2.20.0 (3 permintaan user):
+- "kolom % to bom bisa gak diberi warna semacam heat map ... absolute
+  dulu ... tampilkan nilai asli" — heatmap background '% to BOM' dari
+  |nilai| (skala p99 kolom, ramp hijau→kuning→oranye→merah; teks tetap
+  nilai asli bertanda — model.set_heat_column).
+- "tambahkan cuman analisa rangking waste ya" (kode Power Query user
+  'TambahRangkingFast') — kolom baru RANGKING WASTE paling kanan tabel
+  (kanan PROFIL; PROFIL dirapatkan _WIDTH_CAPS): label grup Top 3 Total
+  & Top 3 % BOM per item lintas cabang (ui/grouping.py 6b + sumber label
+  tunggal waste_anomaly.signals.ranking_waste_label).
+- "tambah fitur juga aku bisa hide dan unhide kolom di tab anomali" —
+  tombol '⇔ Kolom': menu centangan per kolom + 'Tampilkan semua kolom'
+  (jalur visible_cols — persisten lintas auto-fit; data tetap di model).
 """
 from __future__ import annotations
 
@@ -57,7 +71,8 @@ from collections import OrderedDict
 from pathlib import Path
 
 import pandas as pd
-from PySide6.QtCore import QEvent, QObject, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, Qt, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -67,6 +82,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -149,7 +165,18 @@ TABLE_COLS = [
     "TOTAL", "% to BOM",
     LASTMONTH_COMBINED_COL, SELISIH_COL, "PERUBAHAN",
     "ANOMALY STATUS", "PROFIL",
+    # v2.20.0 — RANGKING WASTE paling kanan (permintaan user: kolom baru
+    # "disebelah kanan sendiri aja atau kanan nya profil"; PROFIL dirapatkan
+    # via _WIDTH_CAPS supaya muat). Nilai = label grup dari kode Power
+    # Query user 'TambahRangkingFast' (Top 3 Total & Top 3 % BOM per item
+    # lintas cabang — ui/grouping.py section 6b).
+    "RANGKING WASTE",
 ]
+# v2.20.0 — batas lebar kolom tampilan (PROFIL dirapatkan — permintaan
+# user "kolom profil rapatkan aja"): nilai PROFIL pendek ('Tiap Hari',
+# 'Kadang', 'Sekali Ini', '— Baru') tak butuh kolom lebar; ruangnya
+# diserahkan ke RANGKING WASTE di kanannya.
+_WIDTH_CAPS = {"PROFIL": 150}
 # Alias judul tampilan sampel user ([TOTAL] / [% to BOM]) — dipasang di
 # _refresh_table_impl via model.set_header_map (data/sort/record tetap
 # nama kanonik; alias WAJIB ikut visible_cols supaya kolom tak tersembunyi
@@ -1743,6 +1770,19 @@ class AnomaliView(FollowupTableMixin, QWidget):
         self._cb_change.currentIndexChanged.connect(
             lambda _i: self._on_change_filter())
         cl.addWidget(self._cb_change)
+        # v2.20.0 (permintaan user: "tambah fitur juga aku bisa hide dan
+        # unhide kolom di tab anomali") — tombol menu kolom: centang =
+        # tampil, lepas centang = sembunyikan (data tetap ada di model —
+        # hanya setColumnHidden; record pop-up detail tetap lengkap).
+        self._btn_cols = QPushButton("⇔ Kolom", ctrl)
+        self._btn_cols.setToolTip(
+            "Sembunyikan / tampilkan kolom tabel Anomali:\n"
+            "• lepas centang = kolom disembunyikan (data tetap ada —\n"
+            "  pop-up detail & ekspor tidak terpengaruh);\n"
+            "• 'Tampilkan semua kolom' mengembalikan semuanya.\n"
+            "Berguna utk fokus kolom tertentu di layar sempit.")
+        self._btn_cols.clicked.connect(self._on_column_menu)
+        cl.addWidget(self._btn_cols)
         self._lbl_count = WLabel("", ctrl)
         self._lbl_count.setObjectName("hint")
         cl.addWidget(self._lbl_count, 1)
@@ -1818,6 +1858,11 @@ class AnomaliView(FollowupTableMixin, QWidget):
         self._table.model().set_check_column(CHECK_COL)
         self._table.model().set_row_key_column(FP_COL)
         self._table.model().check_toggled.connect(self._on_check_toggled)
+        # v2.20.0 — heatmap kolom '% to BOM' (permintaan user: "diberi warna
+        # semacam heat map ... diabsolutekan dulu ... tampilkan nilai asli"):
+        # background sel dari |nilai| (campur +/-), teks tetap nilai asli.
+        # Skala dihitung ulang otomatis tiap set_dataframe (p99 |nilai|).
+        self._table.model().set_heat_column("% to BOM")
         # v2.12.3: funnel filter + opsi sort di header tabel.
         # v2.12.4: SEMUA kolom ber-funnel (skip kolom ✓ + identitas __FP);
         # kolom mapping = state global ctx, lainnya = filter lokal view.
@@ -1901,6 +1946,11 @@ class AnomaliView(FollowupTableMixin, QWidget):
         # kolom mapping tetap global). {kolom: nilai terpilih} — hanya
         # menyaring TAMPILAN tabel ini (KPI + Follow Up tak tersentuh).
         self._hfilters: dict[str, list] = {}
+        # v2.20.0 — kolom TABEL yang disembunyikan user (tombol '⇔ Kolom'):
+        # nama kanonik TABLE_COLS; visible_cols di _refresh_table_impl
+        # mengurangi keduanya (kanonik + alias). Data TETAP di model df —
+        # hanya setColumnHidden (pop-up detail/ekspor tak tersentuh).
+        self._hidden_cols: set[str] = set()
         # v2.12.4: memo hasil mask per (objek display, state filter) —
         # objek mask stabil per state → cache fit DataTable tetap kena
         # (pola _disp_cache LRU; A→B→A memakai ulang objek A).
@@ -1985,6 +2035,70 @@ class AnomaliView(FollowupTableMixin, QWidget):
         """v2.18.7 — combo "Tampilkan:" (Semua / ✓ Sudah masuk Follow Up)
         → saring tabel (lokal view, tanpa state — pola _on_change_filter)."""
         self._refresh_table()
+
+    # ------------------------------------------------------------
+    # v2.20.0 — sembunyi/tampil kolom tabel (tombol '⇔ Kolom')
+    # ------------------------------------------------------------
+    def _on_column_menu(self) -> None:
+        """Buka menu kolom (dibangun _build_column_menu) di bawah tombol."""
+        menu = self._build_column_menu()
+        btn = self._btn_cols
+        menu.exec(btn.mapToGlobal(QPoint(0, btn.height())))
+        # v2.18.0 audit (UI-6): menu parented tak pernah dihapus otomatis
+        # (per klik) — pensiunkan pasca exec (pola funnel/_on_context_menu).
+        menu.deleteLater()
+
+    def _build_column_menu(self) -> QMenu:
+        """Menu kolom: centang = tampil, lepas = sembunyikan.
+
+        Daftar = TABLE_COLS yang ada di dataset (kolom banding opsional
+        tak tampil bila pembanding belum ada). Dibangun TERPISAH dari
+        eksekusi supaya testable tanpa loop event modal (_on_column_menu
+        memanggil ini lalu exec). Klik aksi menutup menu (perilaku
+        bawaan QMenu) → refresh tabel lewat sinyal toggled."""
+        mdf = self._table.model().dataframe
+        cols = [c for c in TABLE_COLS if c in mdf.columns]
+        menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+        for name in cols:
+            title = _TABLE_ALIASES.get(name, name)
+            act = QAction(title, menu)
+            act.setCheckable(True)
+            act.setChecked(name not in self._hidden_cols)
+            tip = COLUMN_TOOLTIPS.get(name)
+            if tip:
+                act.setToolTip(tip)
+            act.toggled.connect(
+                lambda on, n=name: self._set_column_hidden(n, not on))
+            menu.addAction(act)
+        menu.addSeparator()
+        act_all = QAction("Tampilkan semua kolom", menu)
+        act_all.setToolTip("Kembalikan SEMUA kolom tabel yang sempat "
+                           "disembunyikan.")
+        act_all.triggered.connect(lambda: self._show_all_columns())
+        menu.addAction(act_all)
+        return menu
+
+    def _set_column_hidden(self, name: str, hidden: bool) -> None:
+        """Sembunyikan/tampilkan SATU kolom (nama kanonik TABLE_COLS).
+
+        Jalur mekanis: nama dibuang dari visible_cols pada render
+        berikutnya → DataTable._auto_columns menyembunyikan + TIDAK
+        mengukur lebar kolom itu (persisten lintas re-fit, beda dari
+        setColumnHidden manual yang ditimpa ulang tiap auto-fit)."""
+        if hidden:
+            self._hidden_cols.add(name)
+        else:
+            self._hidden_cols.discard(name)
+        if self._ctx.df is not None:
+            self._refresh_table()
+
+    def _show_all_columns(self) -> None:
+        """Kembalikan semua kolom tabel yang disembunyikan."""
+        if self._hidden_cols:
+            self._hidden_cols.clear()
+            if self._ctx.df is not None:
+                self._refresh_table()
 
     def _reset_view_controls(self) -> None:
         """v2.13.10 (gel-1 A1+A2) — override hook mixin: reset combo
@@ -2453,9 +2567,15 @@ class AnomaliView(FollowupTableMixin, QWidget):
         # Alias judul WAJIB ikut (set_dataframe mencocokkan nama JUDUL/
         # alias — pola view_followup v2.12.3) tanpa merusak SortControl
         # (entri non-kanonik dibuang sejak v2.19.0).
-        visible = [CHECK_COL] + [c for c in TABLE_COLS if c in shown.columns] + [
-            _TABLE_ALIASES[c] for c in TABLE_COLS
-            if c in shown.columns and c in _TABLE_ALIASES]
+        # v2.20.0: kolom yang disembunyikan user (tombol '⇔ Kolom') dibuang
+        # dari daftar — mekanisme visible_cols dipakai (bukan setColumnHidden
+        # manual) supaya status sembunyi PERSISTEN lintas auto-fit tabel.
+        visible = ([CHECK_COL]
+                   + [c for c in TABLE_COLS
+                      if c in shown.columns and c not in self._hidden_cols]
+                   + [_TABLE_ALIASES[c] for c in TABLE_COLS
+                      if c in shown.columns and c in _TABLE_ALIASES
+                      and c not in self._hidden_cols])
         # v2.19.3 — TABEL layout SAMPEL TAMPILAN BARU (permintaan user:
         # "tampilan di tab anomali kok gak ada spasi nya ... insert blank
         # line after each item label dari kolom jenis dan nama barang"):
@@ -2471,7 +2591,8 @@ class AnomaliView(FollowupTableMixin, QWidget):
         disp = self._separated_df(shown)
         self._table.set_dataframe(disp, sort_desc=None,
                                   narrow_hide=[SRC_GAB_COL, "PERUBAHAN"],
-                                  visible_cols=visible)
+                                  visible_cols=visible,
+                                  width_caps=_WIDTH_CAPS)
         # Aktifkan render separator (baris kosong) di model — SETELAH
         # set_dataframe (setter tak memicu render ulang; data()/flags()
         # membaca kolom __SEP per baris).

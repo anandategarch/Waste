@@ -257,4 +257,4 @@ class TestVersiSync:
         from waste_anomaly import __version__
         cfg = json.loads(
             (REPO / "waste_anomaly" / "config.json").read_text(encoding="utf-8"))
-        assert APP_VERSION == __version__ == cfg.get("version") == "2.18.7"
+        assert APP_VERSION == __version__ == cfg.get("version") == "2.20.0"

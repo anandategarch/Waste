@@ -824,6 +824,7 @@ class DataTable(QTableView):
         self._last_fit_w = -1  # v2.6.1: lebar viewport saat fit terakhir
         self._narrow_hide: list[str] = []  # v2.6.1: kolom boleh-disebunyikan
         self._visible_cols: list[str] | None = None  # v2.7.0: kolom tampak (V26-C1)
+        self._width_caps: dict[str, int] = {}  # v2.20.0: batas lebar per kolom
         self._no_wrap = False  # v2.12.1: tabel lebar/raksasa — wrap mati, tinggi seragam
         self._in_fit = False  # v2.7.0 (V26-M4): guard umpan-balik sectionResized
         # v2.9.0 (perf): cache hasil _auto_columns+_refit_rows LRU per objek
@@ -1300,7 +1301,8 @@ class DataTable(QTableView):
     def set_dataframe(self, df: pd.DataFrame | None,
                       sort_desc: str | None = None,
                       narrow_hide: list[str] | None = None,
-                      visible_cols: list[str] | None = None) -> None:
+                      visible_cols: list[str] | None = None,
+                      width_caps: dict[str, int] | None = None) -> None:
         """Tampilkan df; ``sort_desc`` = nama kolom utk sort default DESC.
 
         ``narrow_hide`` (v2.6.1): nama kolom yang BOLEH disembunyikan —
@@ -1314,9 +1316,17 @@ class DataTable(QTableView):
         ``double_clicked`` lalu mengembalikan record PENUH (semua kolom) —
         panel detail / drill-down mendapat data lengkap. None/[] = semua
         kolom tampak (perilaku lama — view lain tak terdampak).
+
+        ``width_caps`` (v2.20.0): batas atas lebar px per nama judul
+        kolom (header alias dihitung) — mis. PROFIL dirapatkan supaya
+        kolom RANGKING WASTE muat (permintaan user "kolom profil rapatkan
+        aja"). Lantai header ikut di-clamp ke batas (header tetap
+        terbaca penuh selama batas ≥ lebar judul). None/{} = tanpa
+        batas (perilaku lama).
         """
         self._narrow_hide = list(narrow_hide or [])
         self._visible_cols = list(visible_cols) if visible_cols else None
+        self._width_caps = {str(k): int(v) for k, v in (width_caps or {}).items()}
         self._sort_desc = sort_desc  # v2.19.3 — utk apply_default_order
         self._model.set_dataframe(df)
         # V26-M3: tabel raksasa (>3000 baris) — _refit_rows di-skip demi
@@ -1346,7 +1356,8 @@ class DataTable(QTableView):
         fit: dict | None = None
         if df is not None:
             key = (id(df), len(df), tuple(map(str, df.columns)),
-                   tuple(self._visible_cols or ()), tuple(self._narrow_hide))
+                   tuple(self._visible_cols or ()), tuple(self._narrow_hide),
+                   tuple(sorted(self._width_caps.items())))  # v2.20.0
             cand = self._fit_cache.get(key)
             if cand is not None and cand["ref"]() is df:
                 self._fit_cache.move_to_end(key)
@@ -1534,6 +1545,18 @@ class DataTable(QTableView):
                     text = text[:60]
                 w = max(w, fm.horizontalAdvance(text) + 26)
             widths.append(min(w, cap))
+        # v2.20.0 — batas lebar per kolom (width_caps): PROFIL dirapatkan
+        # (permintaan user) supaya kolom baru RANGKING WASTE di kanannya
+        # muat tanpa memaksa scrollbar. Lantai ikut di-clamp — header
+        # tetap utuh selama batas ≥ lebar judulnya.
+        if self._width_caps:
+            for c in range(n_cols):
+                if c in vis_hidden:
+                    continue
+                wc = self._width_caps.get(names[c])
+                if wc is not None and wc > 0:
+                    floors[c] = min(floors[c], wc)
+                    widths[c] = min(widths[c], wc)
         if not widths:
             return
         avail = self.viewport().width() - 4

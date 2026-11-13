@@ -373,29 +373,47 @@ def compute_signals(
 # HELPER: RANKING WASTE
 # ============================================================
 
-def _compute_ranking(row: pd.Series) -> str:
-    """Setara RankingWaste logic di M code.
-    Top 3 dalam group (JENIS, NAMA BARANG) berdasarkan TOTAL & % BOM.
-    """
-    current_total = row.get("TOTAL")
-    current_bom_ratio = row.get("Rill % to BOM")
-    top_total_list = row.get("TopTotal")
-    top_bom_list = row.get("TopBOM")
+def ranking_waste_label(total, rill_pct, top_totals, top_boms) -> str:
+    """Label RANGKING WASTE — padanan langkah 'TambahRangkingFast' M code.
 
-    # Position in top list (1-based); 0 kalau tidak ada
+    Sumber TUNGGAL label (v2.20.0 — dipakai DUA lapis):
+    - row-level (signals._compute_ranking): ``top_totals``/``top_boms`` =
+      kolom TopTotal/TopBOM per (JENIS, NAMA BARANG) dari stage_07
+      (M fidelity — dikunci regression fixture).
+    - grup-level (ui.grouping.group_anomali_display): ``top_totals``/
+      ``top_boms`` = top-3 TOTAL grup & % to BOM grup per item lintas
+      resto (tampilan tabel Anomali satu baris per item×cabang).
+
+    Pencocokan NILAI persis ``List.PositionOf`` M: posisi = indeks
+    kemunculan PERTAMA nilai di list top (nilai duplikat → pemilik nilai
+    sama berbagi peringkat yang sama).
+
+    Args:
+        total: TOTAL baris/grup (None/NaN = tak ikut peringkat Total).
+        rill_pct: rasio vs BOM (None/NaN/≤0 = tak ikut peringkat % BOM).
+        top_totals: list nilai TOTAL tertinggi (≤3, desc) di grup item.
+        top_boms: list rasio % BOM tertinggi (≤3, desc, >0) di grup item.
+
+    Returns:
+        "Top N Total & % BOM" (peringkat sama) / "Top N Total & Top M
+        % BOM" / "Top N Total" / "Top N % BOM" / "-".
+    """
     pos_total = 0
-    if current_total is not None and not (isinstance(current_total, float) and np.isnan(current_total)) and isinstance(top_total_list, list):
+    if (total is not None
+            and not (isinstance(total, float) and np.isnan(total))
+            and isinstance(top_totals, (list, tuple))):
         try:
-            idx = top_total_list.index(current_total)
-            pos_total = idx + 1
+            pos_total = list(top_totals).index(total) + 1
         except ValueError:
             pos_total = 0
 
     pos_bom = 0
-    if current_bom_ratio is not None and not (isinstance(current_bom_ratio, float) and np.isnan(current_bom_ratio)) and current_bom_ratio > 0 and isinstance(top_bom_list, list):
+    if (rill_pct is not None
+            and not (isinstance(rill_pct, float) and np.isnan(rill_pct))
+            and rill_pct > 0
+            and isinstance(top_boms, (list, tuple))):
         try:
-            idx = top_bom_list.index(current_bom_ratio)
-            pos_bom = idx + 1
+            pos_bom = list(top_boms).index(rill_pct) + 1
         except ValueError:
             pos_bom = 0
 
@@ -411,3 +429,14 @@ def _compute_ranking(row: pd.Series) -> str:
     if is_top_bom:
         return f"Top {pos_bom} % BOM"
     return "-"
+
+
+def _compute_ranking(row: pd.Series) -> str:
+    """Setara RankingWaste logic di M code (row-level).
+    Top 3 dalam group (JENIS, NAMA BARANG) berdasarkan TOTAL & % BOM.
+    v2.20.0: label dibangun oleh ranking_waste_label (sumber tunggal —
+    lapis grup tampilan memakai logika yang sama persis).
+    """
+    return ranking_waste_label(
+        row.get("TOTAL"), row.get("Rill % to BOM"),
+        row.get("TopTotal"), row.get("TopBOM"))

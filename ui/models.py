@@ -132,6 +132,33 @@ _HL_AMBER_BG = QColor("#fef3c7")
 # dari angka (mis. '-12,0%') otomatis ikut: sumber nilainya float < 0.
 _NEG_FG = QColor("#dc2626")
 
+# v2.20.0 — HEATMAP sel (permintaan user: "kolom % to bom diberi warna
+# semacam heat map ... diabsolutekan dulu ... tampilkan nilai asli"):
+# background sel diwarna dari |nilai| (nilai campur +/-), ramp
+# hijau-pucat → kuning → oranye → merah; TEKS tetap nilai asli apa
+# adanya (DisplayRole tak tersentuh). Semua stop sengaja MUDA supaya
+# teks hitam default tetap kontras (tanpa ForegroundRole khusus).
+# Skala = p99 |nilai| kolom (robust — satu outlier ekstrem tak
+# memucatkan seluruh kolom; nilai ≥ p99 → merah penuh).
+_HEAT_STOPS: tuple[tuple[float, tuple[int, int, int]], ...] = (
+    (0.00, (214, 236, 216)),   # hijau pucat — |nilai| ≈ 0
+    (0.35, (252, 246, 189)),   # kuning pucat
+    (0.70, (249, 203, 122)),   # oranye — menengah-tinggi
+    (1.00, (238, 112, 99)),    # merah — |nilai| ≥ p99 kolom
+)
+
+
+def _heat_color(t: float) -> QColor:
+    """Warna heatmap untuk intensitas t ∈ [0,1] — interpolasi linear
+    antar stop _HEAT_STOPS (t di-clamp; t<0 → 0, t>1 → 1)."""
+    t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else float(t))
+    for (t0, c0), (t1, c1) in zip(_HEAT_STOPS, _HEAT_STOPS[1:]):
+        if t <= t1:
+            f = 0.0 if t1 <= t0 else (t - t0) / (t1 - t0)
+            return QColor(*(int(round(a + (b - a) * f))
+                            for a, b in zip(c0, c1)))
+    return QColor(*_HEAT_STOPS[-1][1])
+
 # ============================================================
 # v2.9.0 — KAMUS ISTILAH (tooltip judul kolom, semua tabel & detail)
 # ============================================================
@@ -481,6 +508,10 @@ class PandasTableModel(QAbstractTableModel):
         # set_separator_column; data()/flags()/record()/sort() separator-aware.
         self._sep_col: str | None = None
         self._sep_group_keys: tuple[str, ...] = ("JENIS", "NAMA BARANG")
+        # v2.20.0 — heatmap kolom (opt-in, default MATI — view lain tak
+        # terdampak): background sel dari |nilai|, skala p99 kolom.
+        self._heat_col: str | None = None
+        self._heat_scale: float = 0.0
 
     def _rebuild_snapshot(self) -> None:
         """Bangun ulang snapshot numpy dari _df (setelah set/reset/sort)."""
@@ -536,6 +567,7 @@ class PandasTableModel(QAbstractTableModel):
         self._companion_idx = {}  # v2.19.0: posisi companion ikut bergeser
         self._rebuild_snapshot()
         self.endResetModel()
+        self._recompute_heat_scale()  # v2.20.0: nilai kolom berganti
 
     @property
     def dataframe(self) -> pd.DataFrame:
@@ -629,6 +661,38 @@ class PandasTableModel(QAbstractTableModel):
         (set_header_map), data sel, sort, record — tak tersentuh.
         None/{} = kembali ke kamus global."""
         self._tooltip_map = dict(mapping or {})
+
+    def set_heat_column(self, name: str | None) -> None:
+        """v2.20.0 — pasang kolom HEATMAP background (None = matikan).
+
+        Background sel kolom ``name`` diwarna dari |nilai|
+        (nilai campur +/- — permintaan user: "diabsolutekan dulu")
+        dengan skala p99 |nilai| kolom; TEKS sel TETAP nilai asli
+        (DisplayRole/ForegroundRole tak tersentuh — minus tetap merah
+        global). Non-numerik (mis. 'Cek') → tanpa warna. Menimpa tint
+        baris status utk kolom ini saja. Opt-in: hanya tab Anomali
+        ('% to BOM') yang memasang; tabel lain tak terdampak."""
+        self._heat_col = name
+        self._recompute_heat_scale()
+
+    def _recompute_heat_scale(self) -> None:
+        """Skala heatmap = p99 |nilai numerik| kolom heat (v2.20.0).
+
+        p99 (bukan max): satu outlier ekstrem (mis. % to BOM 77× karena
+        BOM kecil) tak memucatkan seluruh kolom — 99% nilai tetap
+        memakai rentang warna penuh. Kolom kosong/non-numerik → 0
+        (heatmap mati otomatis)."""
+        self._heat_scale = 0.0
+        if (self._heat_col is None or self._df is None
+                or self._heat_col not in self._df.columns):
+            return
+        try:
+            s = pd.to_numeric(self._df[self._heat_col],
+                              errors="coerce").dropna().abs()
+            if len(s):
+                self._heat_scale = float(s.quantile(0.99))
+        except Exception:  # noqa: BLE001 — kolom eksotis → heatmap mati
+            self._heat_scale = 0.0
 
     def notify_column_changed(self, name: str) -> None:
         """dataChanged SATU kolom penuh (nilai berubah in-place).
@@ -798,6 +862,17 @@ class PandasTableModel(QAbstractTableModel):
                         return _HL_RED_BG
                     if (fp, col_name) in self._hl_amber:
                         return _HL_AMBER_BG
+            # v2.20.0 — heatmap kolom (mis. '% to BOM' tab Anomali):
+            # background dari |nilai| (campur +/- → absolut dulu —
+            # permintaan user), skala p99 kolom, menimpa tint baris
+            # status utk KOLOM INI saja. Teks tetap nilai asli.
+            if (self._heat_col is not None and col_name == self._heat_col
+                    and self._heat_scale > 0
+                    and isinstance(value, (int, float, np.integer,
+                                           np.floating))
+                    and not isinstance(value, bool)):
+                t = abs(float(value)) / self._heat_scale
+                return _heat_color(min(t, 1.0))
             return self._row_tint(row)
         if role == Qt.ForegroundRole:
             # Prioritas 1 — penanda hari mencurigakan (merah + tebal).

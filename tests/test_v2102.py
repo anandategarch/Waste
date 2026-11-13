@@ -732,7 +732,7 @@ class TestConfigV2102:
 
     def test_versi_naik(self):
         from ui.shared import APP_VERSION
-        assert APP_VERSION == "2.18.7"  # v2.15.0: sekali jalan (pin dinaikkan)
+        assert APP_VERSION == "2.20.0"  # v2.15.0: sekali jalan (pin dinaikkan)
 
 
 # ============================================================

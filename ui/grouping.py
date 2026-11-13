@@ -264,6 +264,45 @@ def group_anomali_display(
         out["% to BOM"] = [(r if r == r else "Cek") for r in ratio]
     # else: nilai baris representatif sudah dibawa rep_cols (fallback).
 
+    # ---------- 6b) RANGKING WASTE grup (v2.20.0) ----------
+    # Permintaan user (M code 'TambahRangkingFast'): analisa peringkat
+    # waste — Top 3 Total & Top 3 % BOM per item LINTAS CABANG. Lapis
+    # GRUP: TopTotal/TopBOM dihitung dari TOTAL grup & % to BOM grup
+    # (tabel Anomali = satu baris per item×cabang — total cabang = sum
+    # anggotanya), MENIMPA nilai baris representatif (_REP_COLS membawa
+    # ranking anggota ber-TOTAL baris; grup multi-anggota berbeda).
+    # Label = sumber tunggal waste_anomaly.signals.ranking_waste_label
+    # (pencocokan nilai persis List.PositionOf M — duplikat berbagi
+    # peringkat). Defensif: error apapun → kolom rep lama dipakai.
+    if len(out) and {"JENIS", "NAMA BARANG"} <= set(out.columns):
+        try:
+            from waste_anomaly.signals import ranking_waste_label
+            tot_all = (pd.to_numeric(out["TOTAL"], errors="coerce")
+                       if "TOTAL" in out.columns else None)
+            pct_all = (pd.to_numeric(out["% to BOM"], errors="coerce")
+                       if "% to BOM" in out.columns else None)
+            labels = pd.Series("-", index=out.index, dtype=object)
+            for _key, sub in out.groupby(
+                    ["JENIS", "NAMA BARANG"], sort=False, dropna=False):
+                tv = [] if tot_all is None else sorted(
+                    (v for v in tot_all.loc[sub.index].tolist() if v == v),
+                    reverse=True)[:3]
+                bv = [] if pct_all is None else sorted(
+                    (v for v in pct_all.loc[sub.index].tolist()
+                     if v == v and v > 0),
+                    reverse=True)[:3]
+                tot_sub = (tot_all.loc[sub.index].tolist()
+                           if tot_all is not None
+                           else [None] * len(sub))
+                pct_sub = (pct_all.loc[sub.index].tolist()
+                           if pct_all is not None
+                           else [None] * len(sub))
+                for idx, t, p in zip(sub.index, tot_sub, pct_sub):
+                    labels.at[idx] = ranking_waste_label(t, p, tv, bv)
+            out["RANGKING WASTE"] = labels.to_numpy()
+        except Exception:  # noqa: BLE001 — ranking opsional, defensif
+            pass
+
     # ---------- 7) PROFIL grup (dari hari aktif terjumlah) ----------
     if "Count Hari" in out.columns:
         cnt = pd.to_numeric(out["Count Hari"], errors="coerce").fillna(0)
@@ -324,10 +363,13 @@ def group_anomali_display(
         out = out.merge(t, on=keys, how="left", sort=False)
 
     # ---------- 10) urutan kolom: sampel user dulu, pendamping belakang --
+    # v2.20.0: 'RANGKING WASTE' di kanan PROFIL (kolom paling kanan tabel
+    # Anomali — permintaan user).
     front = [c for c in (
         keys + [SRC_GAB_COL, "TOTAL", "% to BOM",
                 LASTMONTH_COMBINED_COL, SELISIH_COL, "PERUBAHAN",
-                "ANOMALY STATUS", "PROFIL", "ANOMALY SCORE"]
+                "ANOMALY STATUS", "PROFIL", "RANGKING WASTE",
+                "ANOMALY SCORE"]
     ) if c in out.columns]
     _internal = {FPS_COL, SRC_ROWS_COL}
     rest = [c for c in out.columns
